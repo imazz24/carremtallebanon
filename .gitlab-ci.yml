@@ -58,27 +58,66 @@ test:
 
 
 # ----------------------------------------------------------
-# DEPLOY — manual, main-only, paramiko + docker compose.
+# DEPLOY — runner-host self-deploy (no SSH, no CI variables).
 # ----------------------------------------------------------
-# Required CI variables (Settings → CI/CD → Variables):
-#   CARRENTAL_HOST          deploy server IP/hostname
-#   CARRENTAL_USER          SSH user on that host
-#   CARRENTAL_PASS          SSH password (mark masked + protected)
-#   CARRENTAL_REMOTE_DIR    optional, defaults to /home/$USER/carrental
+# This deploys the app to the SAME machine the GitLab Runner runs on
+# by invoking `docker compose up -d --build --force-recreate` in the
+# job's checkout directory. The runner already has docker available
+# (same host whavester deploys against) so no network round-trip or
+# remote credentials are needed.
 #
-# The target host must have `docker` and `docker compose v2`
-# installed and the SSH user able to run them.
+# The compose project is persisted under a stable name + path so the
+# app survives between pipelines:
+#   - DEPLOY_HOST_DIR is a path on the runner host *outside* the
+#     per-pipeline build dir (which GitLab wipes after every job).
+#     We rsync into it, then `docker compose up -d --build` there so
+#     named volumes (carrental_pg) keep their data across deploys.
+#
+# To switch to a real remote SSH/SFTP deploy later, revert this job
+# to the paramiko script — see scripts/ci_deploy.py (still in the
+# repo) and the deploy block in commit a17f760.
 deploy:
   stage: deploy
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
       when: manual
     - when: never
+  variables:
+    # The runner home is /home/gitlab-runner — confirmed from the
+    # failing job log (`/home/gitlab-runner/builds/...`). The deploy
+    # dir lives next to it so it survives `git clean -fdx` and the
+    # per-pipeline build-dir wipe.
+    DEPLOY_HOST_DIR: "/home/gitlab-runner/carrental-prod"
   script:
-    - python3 -m venv .deploy-venv
-    - . .deploy-venv/bin/activate
-    - pip install --quiet paramiko==3.5.0
-    - python scripts/ci_deploy.py
+    # 1. Stage the working tree into the persistent deploy dir.
+    #    rsync is in coreutils on virtually every Linux distro; falls
+    #    back to `cp -a` if it isn't.
+    - mkdir -p "$DEPLOY_HOST_DIR"
+    - |
+      if command -v rsync >/dev/null 2>&1; then
+        rsync -a --delete \
+          --exclude='.git' \
+          --exclude='.venv' \
+          --exclude='.deploy-venv' \
+          --exclude='backend/.venv' \
+          --exclude='backend/__pycache__' \
+          --exclude='backend/uploads' \
+          --exclude='.cache' \
+          ./ "$DEPLOY_HOST_DIR/"
+      else
+        cp -a ./. "$DEPLOY_HOST_DIR/"
+      fi
+    # 2. Build + (re)start the stack. --force-recreate is the
+    #    load-bearing flag: without it, compose skips recreating
+    #    containers whose config hash didn't change, even when the
+    #    image was rebuilt from new source. Symptom: deploy says OK
+    #    but the running container still serves old code.
+    - cd "$DEPLOY_HOST_DIR"
+    - docker compose build --pull=false
+    - docker compose up -d --force-recreate
+    # 3. Visibility: what's running, last few lines of app logs.
+    - docker compose ps
+    - docker compose logs --tail=30 app || true
   environment:
     name: production
-    url: http://$CARRENTAL_HOST:5000
+    url: http://localhost:5000
