@@ -10,6 +10,12 @@
 #   deploy  → Manual rsync + remote restart over SSH. Runs only on
 #             pushes to `main`; needs CI variables (see notes
 #             below) to know where to deploy.
+#
+# Docker images are pulled from the internal mirror
+# `registry.rnd.com/library/*` because the runner network can't
+# reach Docker Hub directly. The runner authenticates to that
+# mirror using a `DOCKER_AUTH_CONFIG` CI variable — see the README
+# section at the bottom of this file for how to set it.
 # =====================================================
 
 include:
@@ -38,7 +44,7 @@ stages:
 # ----------------------------------------------------------
 lint:python:
   stage: lint
-  image: python:3.12-slim
+  image: registry.rnd.com/library/python:3.12-slim
   <<: *pip-cache
   before_script:
     - pip install --quiet ruff==0.6.9
@@ -52,7 +58,7 @@ lint:python:
 
 lint:js:
   stage: lint
-  image: node:20-alpine
+  image: registry.rnd.com/library/node:20-alpine
   script:
     # node --check parses each file and fails on syntax errors. It's
     # the lightest possible JS lint — no rule set, just "does this
@@ -72,7 +78,7 @@ lint:js:
 # ----------------------------------------------------------
 test:smoke:
   stage: test
-  image: python:3.12-slim
+  image: registry.rnd.com/library/python:3.12-slim
   <<: *pip-cache
   before_script:
     # psycopg2-binary needs no system packages; the rest are pure
@@ -111,7 +117,7 @@ test:smoke:
 #
 deploy:server:
   stage: deploy
-  image: alpine:3.20
+  image: registry.rnd.com/library/alpine:3.20
   rules:
     # Only run on the main branch (not on MRs, tags, etc.).
     # `when: manual` requires a click on the GitLab Pipelines page
