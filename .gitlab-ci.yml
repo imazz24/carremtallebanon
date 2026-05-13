@@ -58,42 +58,47 @@ test:
 
 
 # ----------------------------------------------------------
-# DEPLOY — runner-host self-deploy (no SSH, no CI variables).
+# DEPLOY — runner-host gunicorn (no Docker, no SSH).
 # ----------------------------------------------------------
-# This deploys the app to the SAME machine the GitLab Runner runs on
-# by invoking `docker compose up -d --build --force-recreate` in the
-# job's checkout directory. The runner already has docker available
-# (same host whavester deploys against) so no network round-trip or
-# remote credentials are needed.
+# The runner host has Python but neither docker nor docker compose,
+# so we just run gunicorn daemonized on the same host. The app
+# connects to whatever Postgres the runner can reach, configured
+# via a one-time .env file at $DEPLOY_HOST_DIR/backend/.env.
 #
-# The compose project is persisted under a stable name + path so the
-# app survives between pipelines:
-#   - DEPLOY_HOST_DIR is a path on the runner host *outside* the
-#     per-pipeline build dir (which GitLab wipes after every job).
-#     We rsync into it, then `docker compose up -d --build` there so
-#     named volumes (carrental_pg) keep their data across deploys.
+# Required one-time setup on the runner host (do this once,
+# manually — the deploy job never touches your .env):
 #
-# To switch to a real remote SSH/SFTP deploy later, revert this job
-# to the paramiko script — see scripts/ci_deploy.py (still in the
-# repo) and the deploy block in commit a17f760.
+#   mkdir -p /home/gitlab-runner/carrental-prod/backend
+#   cat > /home/gitlab-runner/carrental-prod/backend/.env <<'EOF'
+#   DB_HOST=localhost
+#   DB_PORT=5432
+#   DB_NAME=carrental
+#   DB_USER=postgres
+#   DB_PASSWORD=admin
+#   FLASK_PORT=5000
+#   EOF
+#
+# The Postgres instance the app talks to has to already exist on
+# whatever DB_HOST points at. The CI doesn't provision it.
+#
+# Want a real remote deploy later? Bring back the paramiko version
+# from commit a17f760 — scripts/ci_deploy.py is still in the repo.
 deploy:
   stage: deploy
   rules:
-    # Auto-deploy on every successful main pipeline. Switch back to
-    # `when: manual` if you want a play-button gate before deploys.
     - if: '$CI_COMMIT_BRANCH == "main"'
       when: on_success
     - when: never
   variables:
-    # The runner home is /home/gitlab-runner — confirmed from the
-    # failing job log (`/home/gitlab-runner/builds/...`). The deploy
-    # dir lives next to it so it survives `git clean -fdx` and the
-    # per-pipeline build-dir wipe.
+    # Persistent home for the app, outside the per-pipeline build dir.
     DEPLOY_HOST_DIR: "/home/gitlab-runner/carrental-prod"
+    PIDFILE:         "/home/gitlab-runner/carrental-prod/gunicorn.pid"
+    LOGFILE:         "/home/gitlab-runner/carrental-prod/gunicorn.log"
+    BIND_ADDR:       "0.0.0.0:5000"
   script:
     # 1. Stage the working tree into the persistent deploy dir.
-    #    rsync is in coreutils on virtually every Linux distro; falls
-    #    back to `cp -a` if it isn't.
+    #    Crucially EXCLUDE backend/.env so the operator-managed
+    #    file with real DB credentials persists across deploys.
     - mkdir -p "$DEPLOY_HOST_DIR"
     - |
       if command -v rsync >/dev/null 2>&1; then
@@ -104,22 +109,74 @@ deploy:
           --exclude='backend/.venv' \
           --exclude='backend/__pycache__' \
           --exclude='backend/uploads' \
+          --exclude='backend/.env' \
           --exclude='.cache' \
+          --exclude='gunicorn.pid' \
+          --exclude='gunicorn.log' \
           ./ "$DEPLOY_HOST_DIR/"
       else
         cp -a ./. "$DEPLOY_HOST_DIR/"
       fi
-    # 2. Build + (re)start the stack. --force-recreate is the
-    #    load-bearing flag: without it, compose skips recreating
-    #    containers whose config hash didn't change, even when the
-    #    image was rebuilt from new source. Symptom: deploy says OK
-    #    but the running container still serves old code.
+    # 2. Sanity check: warn loudly if backend/.env is missing —
+    #    the app will boot but every DB call will fail until it's
+    #    there.
+    - |
+      if [ ! -f "$DEPLOY_HOST_DIR/backend/.env" ]; then
+        echo "WARNING: $DEPLOY_HOST_DIR/backend/.env is missing."
+        echo "         The app will start but DB queries will fail."
+        echo "         Create it once with your real DB credentials"
+        echo "         (see the comment block at the top of this job)."
+      fi
+    # 3. (Re)build the venv and install requirements + gunicorn.
     - cd "$DEPLOY_HOST_DIR"
-    - docker compose build --pull=false
-    - docker compose up -d --force-recreate
-    # 3. Visibility: what's running, last few lines of app logs.
-    - docker compose ps
-    - docker compose logs --tail=30 app || true
+    - test -d .venv || python3 -m venv .venv
+    - . .venv/bin/activate
+    - pip install --quiet -U pip wheel
+    - pip install --quiet -r backend/requirements.txt gunicorn==23.0.0
+    # 4. Stop any previous gunicorn cleanly via its pid file.
+    - |
+      if [ -f "$PIDFILE" ]; then
+        oldpid=$(cat "$PIDFILE" || true)
+        if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
+          echo "stopping old gunicorn (pid $oldpid)"
+          kill "$oldpid" || true
+          for i in 1 2 3 4 5; do
+            if kill -0 "$oldpid" 2>/dev/null; then sleep 1; else break; fi
+          done
+          kill -9 "$oldpid" 2>/dev/null || true
+        fi
+        rm -f "$PIDFILE"
+      fi
+    # 5. Start the new gunicorn daemonized so it survives the CI
+    #    job exit. --daemon double-forks, escaping the runner's
+    #    process group; the pid file lets us stop it next deploy.
+    - cd "$DEPLOY_HOST_DIR/backend"
+    - |
+      "$DEPLOY_HOST_DIR/.venv/bin/gunicorn" \
+        --bind "$BIND_ADDR" \
+        --workers 2 \
+        --timeout 60 \
+        --daemon \
+        --pid "$PIDFILE" \
+        --access-logfile "$LOGFILE" \
+        --error-logfile "$LOGFILE" \
+        app:app
+    # 6. Verify it actually came up.
+    - sleep 2
+    - |
+      if [ ! -f "$PIDFILE" ]; then
+        echo "FAIL: gunicorn pidfile missing after start"
+        tail -30 "$LOGFILE" 2>/dev/null || true
+        exit 1
+      fi
+      newpid=$(cat "$PIDFILE")
+      if ! kill -0 "$newpid" 2>/dev/null; then
+        echo "FAIL: gunicorn pid $newpid not alive"
+        tail -30 "$LOGFILE" 2>/dev/null || true
+        exit 1
+      fi
+      echo "gunicorn running, pid=$newpid, bind=$BIND_ADDR"
+    - tail -30 "$LOGFILE" 2>/dev/null || true
   environment:
     name: production
     url: http://localhost:5000

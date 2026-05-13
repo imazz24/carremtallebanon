@@ -24,9 +24,13 @@ services:
     container_name: carrental-postgres
     restart: unless-stopped
     environment:
+      # Defaults match backend/.env so a fresh `docker compose up` works
+      # against the same credentials the local Flask dev server already
+      # uses. Override in production by editing this file or by adding a
+      # compose-root .env with DB_USER / DB_PASSWORD variables.
       POSTGRES_DB:       carrental
-      POSTGRES_USER:     carrental
-      POSTGRES_PASSWORD: carrental
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: admin
     volumes:
       - carrental_pg:/var/lib/postgresql/data
       # Mount schema.sql AND every migration into initdb.d. Postgres
@@ -39,7 +43,7 @@ services:
       - ./backend/schema.sql:/docker-entrypoint-initdb.d/00_schema.sql:ro
       - ./backend/migrations:/migrations:ro
     healthcheck:
-      test:     ["CMD-SHELL", "pg_isready -U carrental -d carrental"]
+      test:     ["CMD-SHELL", "pg_isready -U postgres -d carrental"]
       interval: 5s
       timeout:  5s
       retries:  10
@@ -64,8 +68,8 @@ services:
       DB_HOST:     postgres
       DB_PORT:     "5432"
       DB_NAME:     carrental
-      DB_USER:     carrental
-      DB_PASSWORD: carrental
+      DB_USER:     postgres
+      DB_PASSWORD: admin
       FLASK_PORT:  "5000"
       TZ:          Asia/Beirut
 
