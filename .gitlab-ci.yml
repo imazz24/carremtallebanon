@@ -79,8 +79,10 @@ test:
 deploy:
   stage: deploy
   rules:
+    # Auto-deploy on every successful main pipeline. Switch back to
+    # `when: manual` if you want a play-button gate before deploys.
     - if: '$CI_COMMIT_BRANCH == "main"'
-      when: manual
+      when: on_success
     - when: never
   variables:
     # The runner home is /home/gitlab-runner — confirmed from the
