@@ -1,0 +1,1214 @@
+/* =====================================================
+   Car Rental — Professional Theme
+   Light, modern, accessible. EN/AR with RTL support.
+===================================================== */
+
+:root{
+  --bg:        #f5f7fb;
+  --surface:   #ffffff;
+  --surface-2: #f0f3fa;
+  --ink:       #0f172a;
+  --ink-soft:  #475569;
+  --muted:     #94a3b8;
+  --line:      #e2e8f0;
+  --primary:   #1d4ed8;
+  --primary-dk:#1e3a8a;
+  --accent:    #f59e0b;
+  --success:   #16a34a;
+  --danger:    #dc2626;
+  --shadow:    0 6px 24px rgba(15,23,42,.06);
+  --shadow-lg: 0 18px 48px rgba(15,23,42,.10);
+  --radius:    14px;
+  --radius-sm: 8px;
+
+  --font-en: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  --font-ar: 'Cairo', 'Inter', system-ui, sans-serif;
+}
+
+*,*::before,*::after{ box-sizing:border-box; }
+
+html, body{ margin:0; padding:0; }
+body{
+  font-family: var(--font-en);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+html[dir="rtl"] body{ font-family: var(--font-ar); }
+
+a{ color: inherit; text-decoration: none; }
+button{ font-family: inherit; cursor: pointer; }
+img{ max-width:100%; }
+
+.container{
+  width: min(1180px, 100% - 2rem);
+  margin-inline: auto;
+}
+
+/* =================== HEADER =================== */
+.site-header{
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 50;
+  backdrop-filter: blur(8px);
+}
+.header-inner{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding: .9rem 0;
+}
+.brand{ display:flex; align-items:center; gap:.6rem; font-weight:700; font-size:1.05rem; }
+.brand-mark{
+  width:34px; height:34px; border-radius:10px;
+  background: linear-gradient(135deg,var(--primary),var(--primary-dk));
+  color:#fff; display:grid; place-items:center; font-weight:700;
+  letter-spacing:.5px;
+}
+.main-nav{ display:flex; gap:1.4rem; flex-wrap:wrap; }
+.main-nav a{
+  color: var(--ink-soft); font-weight:500; font-size:.95rem;
+  padding:.4rem 0; position: relative;
+  transition: color .15s;
+}
+.main-nav a:hover{ color: var(--primary); }
+.main-nav a::after{
+  content:""; position:absolute; left:0; right:0; bottom:-2px;
+  height:2px; background: var(--primary); transform: scaleX(0);
+  transform-origin: left; transition: transform .2s;
+}
+html[dir="rtl"] .main-nav a::after{ transform-origin: right; }
+.main-nav a:hover::after{ transform: scaleX(1); }
+
+.lang-switch{
+  display:flex; gap:.25rem; padding:.25rem;
+  background: var(--surface-2); border-radius: 999px;
+}
+.lang-btn{
+  border:0; background: transparent; padding:.4rem .9rem;
+  border-radius:999px; font-size:.85rem; font-weight:600;
+  color: var(--ink-soft); transition: all .15s;
+}
+.lang-btn.active{ background: var(--primary); color:#fff; box-shadow: var(--shadow); }
+
+/* =================== HERO =================== */
+.hero{
+  background:
+    radial-gradient(80% 120% at 100% 0%, rgba(245,158,11,.18) 0%, transparent 60%),
+    radial-gradient(60% 100% at 0% 100%, rgba(29,78,216,.18) 0%, transparent 60%),
+    linear-gradient(160deg, #0b1d3a 0%, #1e3a8a 60%, #1d4ed8 100%);
+  color:#fff;
+  padding: 5rem 0 4.5rem;
+  position: relative; overflow: hidden;
+}
+.hero::after{
+  content:""; position:absolute; inset:0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='60' height='60' viewBox='0 0 60 60'><path fill='none' stroke='rgba(255,255,255,0.05)' stroke-width='1' d='M0 30 H60 M30 0 V60'/></svg>");
+  opacity:.5; pointer-events:none;
+}
+.hero-inner{ position: relative; z-index: 1; max-width: 720px; }
+.hero h1{
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  margin: 0 0 .8rem;
+  font-weight: 700; letter-spacing: -.02em;
+}
+.hero p{ font-size:1.1rem; color: rgba(255,255,255,.85); margin: 0 0 1.8rem; }
+.hero-actions{ display:flex; gap:.8rem; flex-wrap:wrap; }
+
+/* =================== BUTTONS =================== */
+.btn{
+  display:inline-flex; align-items:center; justify-content:center;
+  padding: .7rem 1.3rem; border-radius: 10px;
+  font-weight: 600; font-size: .95rem;
+  border: 1px solid transparent; cursor: pointer;
+  transition: transform .1s, box-shadow .15s, background .15s;
+}
+.btn:active{ transform: translateY(1px); }
+.btn-primary{
+  background: var(--primary); color:#fff;
+  box-shadow: 0 6px 18px rgba(29,78,216,.35);
+}
+.btn-primary:hover{ background: var(--primary-dk); }
+.btn-ghost{
+  background: rgba(255,255,255,.10); color:#fff;
+  border-color: rgba(255,255,255,.30);
+}
+.btn-ghost:hover{ background: rgba(255,255,255,.18); }
+
+/* =================== MAIN / CARDS =================== */
+.main{ padding: 3rem 0 4rem; display: grid; gap: 2rem; }
+.card{
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.6rem 1.6rem 1.8rem;
+  box-shadow: var(--shadow);
+}
+.card.highlight{
+  border-color: rgba(29,78,216,.25);
+  box-shadow: var(--shadow-lg);
+  background: linear-gradient(180deg, #fff, #fafcff);
+}
+.card-head{ margin-bottom: 1.1rem; }
+.card-head h2{
+  margin:0 0 .25rem; font-size:1.4rem; font-weight:700;
+  color: var(--ink); letter-spacing: -.01em;
+}
+.card-head p{ margin: 0; color: var(--ink-soft); font-size: .95rem; }
+
+/* =================== FORMS =================== */
+.grid-form{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: .9rem; align-items: start;
+  margin-bottom: 1.4rem;
+}
+.grid-form[hidden]{ display: none; }
+.field{ display:flex; flex-direction:column; gap:.35rem; }
+.field label{
+  font-size: .8rem; font-weight: 600;
+  color: var(--ink-soft); text-transform: uppercase; letter-spacing:.04em;
+}
+.field input,
+.field select{
+  border: 1px solid var(--line); background:#fff;
+  border-radius: 10px; padding: .65rem .8rem;
+  font: inherit; color: var(--ink);
+  transition: border-color .15s, box-shadow .15s;
+}
+.field input:focus,
+.field select:focus{
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 4px rgba(29,78,216,.12);
+}
+.field-check label{
+  display:flex; align-items:center; gap:.5rem;
+  text-transform: none; letter-spacing: 0;
+  color: var(--ink); font-weight:500;
+}
+.field-check input[type="checkbox"]{
+  width:18px; height:18px; accent-color: var(--primary);
+}
+.grid-form .btn{ height: 44px; }
+
+/* =================== TABLES =================== */
+.table-wrap{
+  border: 1px solid var(--line); border-radius: 12px;
+  overflow: auto; background:#fff;
+}
+table{ width:100%; border-collapse: collapse; min-width: 640px; }
+thead th{
+  position: sticky; top: 0;
+  background: var(--surface-2); color: var(--ink-soft);
+  text-align: start;
+  font-size: .78rem; text-transform: uppercase; letter-spacing: .05em;
+  font-weight: 600; padding: .8rem 1rem; border-bottom: 1px solid var(--line);
+}
+tbody td{
+  padding: .8rem 1rem;
+  border-bottom: 1px solid var(--line);
+  font-size: .92rem; color: var(--ink);
+}
+tbody tr:last-child td{ border-bottom: 0; }
+tbody tr:hover{ background: #f8fafc; }
+.empty-row td{ text-align:center; color: var(--muted); padding: 1.4rem; }
+
+.badge{
+  display:inline-block; padding:.18rem .55rem; border-radius:999px;
+  font-size:.75rem; font-weight:600;
+}
+.badge.yes{ background: rgba(22,163,74,.12); color: var(--success); }
+.badge.no { background: rgba(148,163,184,.18); color: var(--ink-soft); }
+
+/* =================== RENT PREVIEW =================== */
+.preview{
+  margin-top: 1.6rem;
+  border: 1px dashed rgba(29,78,216,.4);
+  border-radius: 12px;
+  padding: 1.1rem 1.2rem;
+  background: linear-gradient(180deg, #f7faff, #fff);
+}
+.preview h3{
+  margin: 0 0 .8rem; font-size: 1.05rem;
+  color: var(--primary-dk);
+}
+.preview h4{
+  margin: 0 0 .4rem; font-size: .8rem;
+  color: var(--ink-soft); text-transform: uppercase; letter-spacing:.05em;
+}
+.preview-grid{
+  display: grid; gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.mini-table{ min-width:0; }
+.mini-table td{ padding: .35rem .5rem; font-size:.88rem; border:0; }
+.mini-table td:first-child{ color: var(--ink-soft); width: 40%; }
+
+/* =================== FOOTER =================== */
+.site-footer{
+  background: #0b1d3a; color: rgba(255,255,255,.75);
+  padding: 1.4rem 0; margin-top: 2rem;
+  text-align: center; font-size: .9rem;
+}
+
+/* =================== MAP LOCATION STATUS =================== */
+.map-status-field{ grid-column: span 2; }
+.map-loc-status{
+  display: flex; align-items: center; gap: .55rem;
+  padding: .65rem .85rem;
+  border-radius: 10px;
+  border: 1px dashed var(--line);
+  background: var(--surface-2);
+  color: var(--ink-soft);
+  font-size: .92rem;
+  min-height: 44px;
+}
+.map-loc-status code{
+  color: var(--primary-dk); font-weight: 600;
+  font-size: .9rem;
+}
+.map-loc-status .map-loc-label{ color: var(--ink); font-weight: 600; }
+.map-loc-status.filled{
+  background: rgba(22,163,74,.08);
+  border: 1px solid rgba(22,163,74,.35);
+  color: var(--ink);
+}
+.map-loc-status .dot{
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 4px rgba(22,163,74,.15);
+}
+.map-loc-status.empty .dot{ display: none; }
+
+/* =================== TABLE ACTIONS =================== */
+.row-actions{
+  display: inline-flex; gap: .35rem; align-items: center;
+}
+.row-btn{
+  font: inherit;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink-soft);
+  padding: .35rem .65rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: .82rem;
+  font-weight: 600;
+  transition: all .12s;
+}
+.row-btn:hover{ background: var(--surface-2); color: var(--ink); }
+.row-btn.edit:hover  { color: var(--primary); border-color: var(--primary); }
+.row-btn.delete:hover{ color: var(--danger);  border-color: var(--danger); }
+.row-btn.pdf:hover   { color: var(--primary-dk); border-color: var(--primary-dk); }
+
+.card-head-row{
+  display: flex; align-items: end; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap;
+}
+
+/* =================== EDIT MODAL =================== */
+.edit-card{
+  width: min(720px, 100%);
+  max-height: 90vh;
+}
+.edit-form{ display: flex; flex-direction: column; min-height: 0; }
+#edit-fields{
+  padding: 1.1rem 1.2rem;
+  overflow: auto;
+  flex: 1 1 auto;
+}
+
+/* =================== DETAIL MODAL =================== */
+.detail-card{ width: min(640px, 100%); }
+.detail-body{
+  padding: 1.1rem 1.4rem;
+  overflow: auto;
+  max-height: 70vh;
+}
+.detail-grid{
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: .55rem .9rem;
+  font-size: .94rem;
+}
+.detail-grid dt{
+  color: var(--ink-soft);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: .75rem;
+  letter-spacing: .04em;
+  align-self: center;
+}
+.detail-grid dd{
+  margin: 0;
+  color: var(--ink);
+}
+.detail-grid dd code{ color: var(--primary-dk); font-weight: 600; }
+.detail-grid .full{ grid-column: 1 / -1; height: .25rem; }
+html[dir="rtl"] .detail-grid{ direction: rtl; }
+
+/* =================== MODAL + MAP =================== */
+.modal{
+  position: fixed; inset: 0; z-index: 300;
+  display: grid; place-items: center;
+  padding: 1rem;
+  background: rgba(15,23,42,.55);
+  backdrop-filter: blur(2px);
+}
+.modal[hidden]{ display: none; }
+.modal-card{
+  width: min(820px, 100%);
+  max-height: 90vh;
+  background: #fff;
+  border-radius: 16px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0,0,0,.35);
+}
+.modal-head{
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .9rem 1.2rem;
+  border-bottom: 1px solid var(--line);
+}
+.modal-head h3{ margin: 0; font-size: 1.05rem; color: var(--ink); }
+.modal-close{
+  background: none; border: 0; cursor: pointer;
+  font-size: 1.6rem; line-height: 1; color: var(--ink-soft);
+  padding: 0 .25rem;
+}
+.modal-close:hover{ color: var(--danger); }
+
+.map-host-wrap{
+  position: relative;
+  width: 100%;
+  flex: 1 1 auto;        /* take whatever space header+footer leave */
+  min-height: 320px;
+}
+.leaflet-host{
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+}
+.leaflet-host .leaflet-container{
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 320px;
+}
+
+/* Floating hint that fades out once a pin is placed */
+.map-hint{
+  position: absolute;
+  top: 12px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15,23,42,.85);
+  color: #fff;
+  padding: .55rem 1rem;
+  border-radius: 999px;
+  font-size: .88rem;
+  font-weight: 500;
+  box-shadow: 0 6px 20px rgba(0,0,0,.25);
+  pointer-events: none;
+  z-index: 401;       /* above leaflet panes */
+  transition: opacity .25s;
+}
+.map-host-wrap.has-pin .map-hint{ opacity: 0; }
+
+/* Disabled state for the Add button until a pin is placed */
+.btn[disabled]{
+  opacity: .55;
+  cursor: not-allowed;
+  filter: grayscale(.2);
+}
+
+.modal-foot{
+  flex: 0 0 auto;        /* always pinned at bottom of modal */
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap;
+  padding: .9rem 1.2rem;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+/* When a pin is placed, draw attention to the Add button */
+.map-host-wrap.has-pin ~ .modal-foot #map-confirm,
+.modal-foot #map-confirm:not([disabled]){
+  animation: pulse-glow 1.4s ease-out 1;
+}
+@keyframes pulse-glow{
+  0%   { box-shadow: 0 0 0 0 rgba(29,78,216,.55); }
+  100% { box-shadow: 0 0 0 16px rgba(29,78,216,0); }
+}
+.modal-coords{
+  font-size: .9rem; color: var(--ink-soft);
+}
+.modal-coords code{
+  margin-inline-start: .4rem;
+  color: var(--primary-dk); font-weight: 600;
+  font-size: .95rem;
+}
+.modal-actions{ display: flex; gap: .5rem; }
+
+/* When the map modal is open, lock the page scroll */
+body.modal-open{ overflow: hidden; }
+
+/* RTL: keep map controls LTR (Leaflet expects LTR positioning) */
+html[dir="rtl"] .leaflet-host{ direction: ltr; }
+
+/* =================== TOAST =================== */
+.toast{
+  position: fixed; bottom: 1.5rem; left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink); color:#fff;
+  padding: .8rem 1.2rem; border-radius: 10px;
+  font-size: .92rem; box-shadow: var(--shadow-lg);
+  z-index: 500; opacity: 0; transition: opacity .25s;
+}
+.toast.show{ opacity: 1; }
+.toast.error{ background: var(--danger); }
+.toast.success{ background: var(--success); }
+
+/* =================== LOGIN =================== */
+.login-overlay{
+  position: fixed; inset: 0; z-index: 200;
+  background:
+    radial-gradient(60% 100% at 0% 0%, rgba(245,158,11,.18) 0%, transparent 60%),
+    radial-gradient(80% 120% at 100% 100%, rgba(29,78,216,.25) 0%, transparent 60%),
+    linear-gradient(160deg, #0b1d3a 0%, #1e3a8a 60%, #1d4ed8 100%);
+  display: grid; place-items: center;
+  padding: 1.5rem;
+}
+.login-card{
+  width: min(420px, 100%);
+  background: #fff;
+  border-radius: 18px;
+  padding: 2rem 1.8rem 1.8rem;
+  box-shadow: 0 24px 60px rgba(0,0,0,.35);
+  display: flex; flex-direction: column; gap: .9rem;
+}
+.login-brand{
+  display:flex; align-items:center; gap:.6rem;
+  font-weight:700; color: var(--ink);
+}
+.login-card h2{
+  margin: .2rem 0 .1rem; font-size: 1.5rem;
+  color: var(--ink); letter-spacing: -.01em;
+}
+.login-card > p{
+  margin: 0 0 .5rem; color: var(--ink-soft); font-size: .92rem;
+}
+.login-btn{ width: 100%; margin-top: .5rem; height: 46px; }
+.login-error{
+  margin: .5rem 0 0; color: var(--danger);
+  font-size: .9rem; text-align: center;
+}
+
+.header-actions{ display:flex; align-items:center; gap:.6rem; }
+.btn-logout{
+  border:1px solid var(--line); background:#fff; color: var(--ink-soft);
+  border-radius: 999px; padding: .45rem .9rem;
+  font-size: .85rem; font-weight: 600; cursor: pointer;
+  transition: all .15s;
+}
+.btn-logout:hover{ color: var(--danger); border-color: var(--danger); }
+
+/* ----- header user profile (logo + company name) ----- */
+.user-profile{
+  display: flex; align-items: center; gap: .55rem;
+  padding: .25rem .8rem .25rem .25rem;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  border-radius: 999px;
+  max-width: 240px;
+}
+.user-profile-logo{
+  width: 32px; height: 32px; border-radius: 50%;
+  object-fit: cover; background: #fff;
+  border: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+.user-profile-fallback{
+  width: 32px; height: 32px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--primary), var(--primary-dk));
+  color: #fff; font-weight: 700; font-size: .9rem;
+  flex: 0 0 auto;
+}
+.user-profile-name{
+  font-weight: 600; font-size: .9rem; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 160px;
+}
+@media (max-width: 720px){
+  .user-profile-name{ display: none; }
+  .user-profile{ padding: .25rem; }
+}
+
+/* ----- logo picker (forms + edit modal) ----- */
+.logo-field{ grid-column: 1 / -1; }
+.logo-picker{
+  display: flex; align-items: center; gap: .8rem;
+  flex-wrap: wrap;
+}
+.logo-preview{
+  width: 64px; height: 64px; border-radius: 12px;
+  object-fit: cover; background: #fff;
+  border: 1px solid var(--line);
+  display: block;
+}
+.logo-preview-empty{
+  display: grid; place-items: center;
+  color: var(--muted); font-size: 1.6rem; font-weight: 300;
+  background: var(--surface-2);
+}
+.logo-picker-btn{ padding: .55rem .9rem; }
+.logo-clear-btn{ padding: .55rem .9rem; }
+
+/* =====================================================
+   ROLE-BASED VISIBILITY
+   - body.role-admin   : admin signed in (read-only on data, register on)
+   - body.role-company : company user signed in (last-month report only)
+===================================================== */
+
+/* Role-scoped visibility — these rules use a body:not() prefix to win
+   over later rules in the file (e.g. `.report-toolbar { display: flex }`)
+   without resorting to !important. When the matching role IS active,
+   no rule hides the element so its natural display takes over. */
+body:not(.role-admin)   .admin-only-show   { display: none !important; }
+body:not(.role-company) .company-only-show { display: none !important; }
+
+/* --- ADMIN: hide all add forms + edit/delete on managed tables ----- */
+body.role-admin #form-company,
+body.role-admin #form-car,
+body.role-admin #form-client,
+body.role-admin #rent,
+body.role-admin #upload,
+body.role-admin #tbl-companies th:last-child,
+body.role-admin #tbl-companies td:last-child,
+body.role-admin #tbl-cars th:last-child,
+body.role-admin #tbl-cars td:last-child,
+body.role-admin #tbl-clients th:last-child,
+body.role-admin #tbl-clients td:last-child {
+  display: none !important;
+}
+body.role-admin .main-nav a[href="#rent"],
+body.role-admin .main-nav a[href="#upload"]{
+  display: none !important;
+}
+/* When role-admin is active no `display: none` rule applies, so each
+   element falls back to its natural display (block for div/p/section,
+   inline for span, table-row for tr, etc.). */
+
+/* --- COMPANY: only the report is visible, last-month read-only ----- */
+body.role-company #home,
+body.role-company #register,
+body.role-company #companies,
+body.role-company #cars,
+body.role-company #clients,
+body.role-company #rent,
+body.role-company #upload{
+  display: none !important;
+}
+/* Hide every default admin nav link for the company role; only the
+   .company-only-nav links are visible to them. */
+body.role-company .main-nav > a:not(.company-only-nav){ display: none !important; }
+body.role-company .company-only-nav{ display: inline-block; }
+body.role-company .company-only-card{ display: block; }
+
+/* Default: hide company-only items for everyone unless role-company is set */
+.company-only-nav { display: none; }
+.company-only-card { display: none; }
+
+body.role-company #btn-export-pdf { display: none !important; }
+
+/* card-head with a button to its right (used by branches header) */
+.branches-head{ margin-top: 1.6rem; }
+
+/* Visual divider between the single-add form and the bulk-CSV section. */
+.addcar-divider{
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1.6rem 0 1.2rem;
+}
+
+/* VIN auto-decode hint — a tiny ✓ pinned inside the input's right edge.
+   Absolutely positioned so showing/hiding it never shifts the input,
+   the datalist dropdown, or the surrounding form rows. */
+.vin-input-wrap{ position: relative; }
+.vin-input-wrap > input{
+  width: 100%;
+  padding-right: 2.2rem;
+}
+.vin-hint{
+  position: absolute;
+  top: 50%;
+  right: .7rem;
+  transform: translateY(-50%);
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  font-size: 1rem;
+  line-height: 1;
+  font-weight: 700;
+  pointer-events: none;
+}
+.vin-hint.vin-hint-ok{ color: var(--success); }
+.vin-hint.vin-hint-soft{ color: var(--ink-soft); }
+
+/* Per-field validation error sitting just under the input/select. */
+.field-error{
+  margin-top: .3rem; font-size: .82rem; color: var(--danger);
+  font-weight: 500;
+}
+.field-error[hidden]{ display: none; }
+.field:has(.field-error:not([hidden])) input,
+.field:has(.field-error:not([hidden])) select,
+.field:has(.field-error:not([hidden])) .ss-trigger{
+  border-color: var(--danger);
+}
+
+/* Add Car / Add Client: keep neutral input borders even when a field-error
+   is shown. The inline text-error below the field still communicates the
+   problem, but the red ring around each control felt heavy on these big
+   multi-field forms. */
+#form-add-car .field:has(.field-error:not([hidden])) input,
+#form-add-car .field:has(.field-error:not([hidden])) select,
+#form-add-car .field:has(.field-error:not([hidden])) .ss-trigger,
+#form-add-client .field:has(.field-error:not([hidden])) input,
+#form-add-client .field:has(.field-error:not([hidden])) select,
+#form-add-client .field:has(.field-error:not([hidden])) .ss-trigger{
+  border-color: var(--line);
+}
+
+/* The rejection banner is hidden by default; only shown on a 400 response. */
+.upload-rejected-banner{ display: none; }
+.upload-results.rejected .upload-rejected-banner{
+  display: block;
+  background: rgba(220,38,38,.08);
+  color: var(--danger);
+  border: 1px solid rgba(220,38,38,.25);
+  border-radius: 10px;
+  padding: .7rem .9rem;
+  margin: .25rem 0 .9rem;
+  font-weight: 500;
+}
+
+/* Inline success banner shown after saving company info. */
+.company-info-status{
+  background: rgba(22,163,74,.08);
+  color: var(--success);
+  border: 1px solid rgba(22,163,74,.25);
+  border-radius: 10px;
+  padding: .65rem .9rem;
+  font-size: .95rem;
+  margin: 0 0 1rem;
+}
+
+/* Inline branch form inside the Company Info tab. Sits between the
+   "+ Add Branch" header and the branches table when toggled open. */
+.branch-inline-form{
+  position: relative;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1.1rem 1.2rem;
+  margin: 0 0 1.2rem;
+}
+.branch-close-btn{
+  position: absolute;
+  top: .5rem; right: .6rem;
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: inherit;
+  font-size: 1.1rem; line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.branch-close-btn:hover{ background: var(--surface-1, #f3f4f6); }
+
+/* Multi-phone widget: a stack of input rows, each with a small "remove" X. */
+.phones-field{ grid-column: 1 / -1; }
+.phone-list{
+  display: flex; flex-direction: column; gap: .45rem;
+  margin-bottom: .55rem;
+}
+.phone-row{
+  display: flex; align-items: center; gap: .5rem;
+  flex-wrap: wrap;
+  max-width: 560px;          /* keeps full-width cells from looking stretched */
+}
+.phone-row > .phone-input{ min-width: 160px; }
+.phone-row .phone-code-select{
+  /* Hidden behind SearchSelect once enhanced — no native styling needed. */
+}
+.phone-row .ss-wrapper{ flex: 0 0 auto; min-width: 180px; max-width: 220px; }
+.phone-row .ss-trigger{ padding: .55rem .8rem; }
+.phone-row .phone-input{
+  flex: 1; min-width: 0;
+  border: 1px solid var(--line); background: #fff;
+  border-radius: 10px; padding: .65rem .8rem;
+  font: inherit; color: var(--ink);
+  transition: border-color .15s, box-shadow .15s;
+}
+.phone-row .phone-input:focus{
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 4px rgba(29,78,216,.12);
+}
+.phone-row .phone-remove{
+  width: 32px; height: 32px;
+  border: 1px solid var(--line); background: #fff;
+  border-radius: 8px; cursor: pointer;
+  font-size: 1.05rem; line-height: 1; color: var(--ink-soft);
+  transition: all .15s;
+}
+.phone-row .phone-remove:hover{
+  color: var(--danger); border-color: var(--danger);
+}
+.phone-add-btn{ align-self: flex-start; padding: .45rem .8rem; }
+
+/* report toolbar */
+.report-toolbar{
+  display: flex; align-items: end; gap: 1rem;
+  margin-bottom: 1rem;
+}
+.report-search-field{ flex: 1 1 240px; min-width: 200px; max-width: 360px; }
+.report-search-field input,
+.report-date-field input{
+  border: 1px solid var(--line); background: #fff;
+  border-radius: 10px; padding: .65rem .8rem;
+  font: inherit; color: var(--ink);
+  width: 100%;
+}
+.report-search-field input:focus,
+.report-date-field input:focus{
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 4px rgba(29,78,216,.12);
+}
+.report-date-field{ flex: 0 0 160px; }
+.report-reset{ height: 44px; align-self: end; }
+.report-toolbar{ flex-wrap: wrap; }
+
+/* per-table search bar (companies / cars / clients) */
+.table-toolbar{
+  display: flex; align-items: end; gap: 1rem;
+  margin: 0 0 1rem;
+  flex-wrap: wrap;
+}
+.table-search-field{ flex: 1 1 280px; min-width: 240px; max-width: 480px; }
+.table-search-field input{
+  border: 1px solid var(--line); background: #fff;
+  border-radius: 10px; padding: .65rem .8rem;
+  font: inherit; color: var(--ink);
+  width: 100%;
+}
+.table-search-field input:focus{
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 4px rgba(29,78,216,.12);
+}
+
+/* Filter clear / reset buttons in the table toolbars */
+.filter-clear-btn{ height: 44px; align-self: end; }
+.report-count{
+  color: var(--ink-soft); font-size: .9rem; align-self: center;
+}
+
+/* ----- register modal (admin-only) ----- */
+.register-card{ max-width: 460px; width: min(460px, 92vw); }
+.register-form{
+  display: flex; flex-direction: column; gap: .9rem;
+  padding: 1.1rem 1.3rem 1.3rem;
+}
+.register-hint{
+  margin: 0 0 .2rem; color: var(--ink-soft); font-size: .92rem;
+}
+.register-result{
+  background: rgba(22,163,74,.08); color: var(--success);
+  border: 1px solid rgba(22,163,74,.25);
+  border-radius: 10px; padding: .55rem .8rem; font-size: .92rem;
+}
+
+/* ===== Create-rental panel (Report tab, company-only) ===== */
+.create-rental-panel{
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1rem 1.1rem 1.2rem;
+  margin-bottom: 1.4rem;
+}
+.create-rental-panel .card-head{ margin-bottom: .8rem; }
+.create-rental-panel .card-head h3{
+  margin: 0 0 .2rem; font-size: 1.05rem; font-weight: 700;
+}
+.create-rental-panel .card-head p{
+  margin: 0; color: var(--ink-soft); font-size: .9rem;
+}
+
+/* ===== Report tab company-branding header (company-only) ===== */
+.report-company-head{
+  display: flex; align-items: center; gap: 1rem;
+  padding: 1rem 1.1rem;
+  background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin-bottom: 1.2rem;
+}
+.report-company-logo{
+  width: 56px; height: 56px; border-radius: 12px;
+  object-fit: cover; background: #fff;
+  border: 1px solid var(--line);
+}
+.report-company-name{
+  margin: 0 0 .15rem; font-size: 1.15rem;
+  color: var(--ink); font-weight: 700;
+}
+.report-company-meta{
+  font-size: .9rem; color: var(--ink-soft);
+  display: flex; gap: .35rem; flex-wrap: wrap; align-items: center;
+}
+.report-company-meta code{ background: var(--surface-2); padding: .15rem .4rem; border-radius: 6px; }
+
+/* ===== Detail modal restructure ===== */
+.detail-company-head{ margin: -.2rem 0 1rem; }
+.detail-company-grid{
+  display: flex; align-items: center; gap: .9rem;
+  padding: .8rem 1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.detail-company-grid .report-company-logo{ width: 44px; height: 44px; border-radius: 10px; }
+.detail-company-grid .report-company-name{ font-size: 1rem; }
+.detail-grid-wrap{ margin-bottom: 1rem; }
+
+.detail-section{
+  border-top: 1px solid var(--line);
+  padding: 1rem 0 0;
+  margin-top: 1rem;
+}
+.detail-section-head{
+  display: flex; align-items: center; justify-content: space-between;
+  gap: .6rem; margin-bottom: .7rem;
+}
+.detail-section-head h4{
+  margin: 0; font-size: .95rem; font-weight: 700;
+  color: var(--ink);
+}
+.detail-section-note{
+  margin: .3rem 0 0; color: var(--ink-soft); font-size: .85rem;
+}
+.detail-upload-btn{ height: 36px; padding: .35rem .8rem; font-size: .85rem; }
+
+/* photo + video grids */
+.detail-photos-grid,
+.detail-videos-grid{
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: .6rem;
+}
+.detail-videos-grid{ grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+
+.media-cell{
+  position: relative; overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #000;
+}
+.media-cell img,
+.media-cell video{
+  display: block; width: 100%; height: 140px; object-fit: cover;
+}
+.media-cell-video video{ height: auto; max-height: 220px; background:#000; }
+.media-remove{
+  position: absolute; top: .35rem; right: .35rem;
+  width: 26px; height: 26px;
+  border: 0; border-radius: 50%;
+  background: rgba(0,0,0,.65); color:#fff;
+  font-size: 1rem; line-height: 1; cursor: pointer;
+  display: grid; place-items: center;
+}
+.media-remove:hover{ background: var(--danger); }
+
+/* Admin is read-only on uploaded media — see, don't delete. */
+body.role-admin .media-remove{ display: none; }
+
+/* Client photograph at the top of the rental detail modal. */
+.client-photo-strip{
+  display: flex; justify-content: center;
+  margin: 0 0 .9rem;
+}
+.client-photo{
+  width: 96px; height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #fff;
+  border: 2px solid var(--line);
+  box-shadow: 0 2px 8px rgba(15,23,42,.08);
+}
+
+/* Small avatar thumbnail in the admin's Clients table. */
+.client-photo-thumb{
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #fff;
+  border: 1px solid var(--line);
+  display: inline-block; vertical-align: middle;
+}
+.client-photo-thumb-empty{
+  display: inline-grid; place-items: center;
+  background: var(--surface-2); color: var(--ink-soft);
+  font-weight: 700; font-size: .85rem;
+}
+
+/* Branch rows nested under their parent company in #tbl-companies */
+#tbl-companies tr.company-branch-row > td{
+  background: var(--surface-2);
+  font-size: .9rem;
+  color: var(--ink-soft);
+  border-top: 1px dashed var(--line);
+}
+#tbl-companies tr.company-branch-row .branch-marker{
+  color: var(--primary);
+  font-weight: 700;
+  margin-inline-end: .35rem;
+}
+#tbl-companies tr.company-branch-row .branch-cell{
+  padding-inline-start: 1.6rem;
+}
+
+/* Color swatch + name in the cars table. */
+.color-swatch{
+  display: inline-block;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  margin-inline-end: .45rem;
+  vertical-align: middle;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.05);
+}
+.color-name{ vertical-align: middle; }
+
+/* ----- companies table thumbnail ----- */
+.company-logo-thumb{
+  width: 40px; height: 40px; border-radius: 10px;
+  object-fit: cover; background: #fff;
+  border: 1px solid var(--line);
+  display: inline-block; vertical-align: middle;
+}
+.company-logo-thumb-empty{
+  display: inline-grid; place-items: center;
+  background: var(--surface-2); color: var(--ink-soft);
+  font-weight: 700;
+}
+
+/* =================== UPLOAD =================== */
+.upload-grid{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: .9rem; align-items: end; margin-bottom: 1rem;
+}
+.upload-actions{
+  display: flex; gap: .6rem; flex-wrap: wrap;
+  grid-column: 1 / -1;
+}
+.upload-actions .btn{ flex: 1 1 200px; height: 44px; }
+.btn-ghost-dark{
+  background: var(--surface-2); color: var(--ink);
+  border: 1px solid var(--line);
+}
+.btn-ghost-dark:hover{ background: #e6ecf6; }
+
+.file-picker{
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+}
+.file-picker-btn{
+  display: inline-flex; align-items: center; gap: .55rem;
+  padding: .6rem 1rem;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  background: var(--surface-2);
+  color: var(--ink-soft);
+  font: inherit;
+  font-weight: 500;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.file-picker-btn:hover{
+  border-color: var(--primary);
+  color: var(--primary);
+  background: #fff;
+}
+.file-picker-icon{ font-size: 1.05rem; }
+
+.upload-file-field{ grid-column: 1 / -1; }
+
+.file-chips{
+  display: flex; flex-wrap: wrap; gap: .45rem;
+  margin-top: .55rem;
+}
+.file-chip{
+  display: inline-flex; align-items: center; gap: .5rem;
+  padding: .35rem .35rem .35rem .8rem;
+  border: 1px solid rgba(29,78,216,.4);
+  border-radius: 999px;
+  background: rgba(29,78,216,.08);
+  color: var(--ink);
+  font-size: .92rem;
+  max-width: 100%;
+}
+.file-chip-icon{ font-size: 1rem; }
+.file-chip-name{
+  font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 280px;
+}
+.file-chip-size{
+  color: var(--ink-soft); font-size: .8rem;
+}
+.file-chip-x{
+  border: 0;
+  background: rgba(220,38,38,.12);
+  color: var(--danger);
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 1rem; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 700;
+  transition: all .12s;
+}
+.file-chip-x:hover{ background: var(--danger); color: #fff; }
+
+.upload-hint{
+  font-size: .9rem; color: var(--ink-soft);
+  background: var(--surface-2);
+  padding: .7rem .9rem; border-radius: 10px;
+  margin-bottom: .8rem;
+}
+.upload-hint code{
+  display: inline-block; margin-inline-start: .4rem;
+  font-size: .85rem; color: var(--primary-dk);
+  word-break: break-word;
+}
+
+.upload-ref{
+  background: #fffbeb; border: 1px solid #fde68a;
+  border-radius: 10px; padding: .7rem .9rem;
+  margin-bottom: 1rem; font-size: .9rem;
+}
+.upload-ref ul{ margin: .4rem 0 0; padding-inline-start: 1.2rem; }
+.upload-ref li{ color: var(--ink); }
+.upload-ref code{ color: var(--primary-dk); font-weight: 600; }
+
+.upload-results{
+  border: 1px solid var(--line); border-radius: 12px;
+  padding: 1rem 1.2rem; background: #fafcff;
+}
+.upload-results h3{ margin: 0 0 .6rem; font-size: 1.05rem; color: var(--ink); }
+.upload-summary{
+  display: flex; align-items: center; gap: .5rem;
+  font-size: .92rem; color: var(--ink-soft);
+  margin-bottom: .6rem;
+}
+.upload-summary .badge{ font-size: .85rem; padding: .25rem .7rem; }
+.upload-errors{
+  margin: .4rem 0 0; padding-inline-start: 1.2rem;
+  max-height: 220px; overflow: auto; font-size: .88rem;
+  color: var(--danger);
+}
+.upload-errors li{ margin-bottom: .2rem; }
+
+/* =================== SEARCHABLE SELECT =================== */
+.ss-wrapper{ position: relative; }
+/* Hide native select but keep it in the DOM so FormData works */
+.ss-native{
+  position: absolute !important;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0);
+  border: 0; opacity: 0; pointer-events: none;
+}
+.ss-trigger{
+  width: 100%;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: .5rem;
+  padding: .65rem .8rem;
+  border: 1px solid var(--line); background: #fff;
+  border-radius: 10px;
+  font: inherit; color: var(--ink);
+  text-align: start;
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+.ss-trigger:focus,
+.ss-wrapper.open .ss-trigger{
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 4px rgba(29,78,216,.12);
+}
+.ss-trigger.placeholder .ss-trigger-label{ color: var(--muted); }
+.ss-trigger-label{
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ss-caret{
+  color: var(--ink-soft); font-size: .9rem;
+  transition: transform .15s;
+}
+.ss-wrapper.open .ss-caret{ transform: rotate(180deg); }
+
+.ss-panel{
+  position: absolute; left: 0; right: 0; top: calc(100% + 6px);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  z-index: 60;
+  display: none;
+  overflow: hidden;
+}
+.ss-wrapper.open .ss-panel{ display: block; }
+
+.ss-search{
+  width: 100%;
+  padding: .65rem .9rem;
+  border: 0; border-bottom: 1px solid var(--line);
+  font: inherit; color: var(--ink);
+  background: var(--surface-2);
+}
+.ss-search:focus{ outline: none; background: #fff; }
+
+.ss-list{ max-height: 240px; overflow: auto; padding: .35rem 0; }
+.ss-item{
+  padding: .55rem .9rem;
+  cursor: pointer;
+  font-size: .94rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ss-item:hover,
+.ss-item.hover{ background: var(--surface-2); }
+.ss-item.active{
+  background: rgba(29,78,216,.08);
+  color: var(--primary-dk); font-weight: 600;
+}
+.ss-empty{
+  padding: .8rem 1rem;
+  color: var(--muted); font-size: .9rem; text-align: center;
+}
+
+/* RTL alignment for the search box & items */
+html[dir="rtl"] .ss-trigger,
+html[dir="rtl"] .ss-search,
+html[dir="rtl"] .ss-item{ text-align: right; }
+
+/* =================== RTL TWEAKS =================== */
+html[dir="rtl"] .main-nav,
+html[dir="rtl"] .lang-switch,
+html[dir="rtl"] .hero-actions{ direction: rtl; }
+html[dir="rtl"] thead th{ text-align: start; }
+
+/* =================== RESPONSIVE =================== */
+@media (max-width: 720px){
+  .main-nav{ display:none; }
+  .hero{ padding: 3.5rem 0; }
+}

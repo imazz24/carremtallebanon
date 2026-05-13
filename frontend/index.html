@@ -1,0 +1,1062 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title data-i18n="app.title">Car Rental | تأجير السيارات</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<!-- ============== LOGIN OVERLAY ============== -->
+<div id="login-overlay" class="login-overlay">
+  <form id="form-login" class="login-card">
+    <div class="login-brand">
+      <span class="brand-mark">CR</span>
+      <span data-i18n="brand">Car Rental</span>
+    </div>
+    <h2 data-i18n="login.title">Sign in</h2>
+    <p data-i18n="login.subtitle">Enter your credentials to access the dashboard.</p>
+
+    <div class="field">
+      <label data-i18n="login.user">Username</label>
+      <input name="username" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label data-i18n="login.pass">Password</label>
+      <input name="password" type="password" autocomplete="current-password" required>
+    </div>
+    <button class="btn btn-primary login-btn" data-i18n="login.action">Sign in</button>
+    <p id="login-error" class="login-error" hidden data-i18n="login.error">
+      Invalid username or password.
+    </p>
+  </form>
+</div>
+
+<!-- ============== HEADER ============== -->
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="#home" id="brand-link">
+      <span class="brand-mark" id="brand-mark">CR</span>
+      <span class="brand-text" id="brand-text" data-i18n="brand">Car Rental</span>
+    </a>
+
+    <nav class="main-nav">
+      <a href="#register" id="nav-register" data-i18n="nav.register" hidden>Register</a>
+      <a href="#companies"  data-i18n="nav.companies">Companies</a>
+      <a href="#cars"       data-i18n="nav.cars">Cars</a>
+      <a href="#clients"    data-i18n="nav.clients">Clients</a>
+      <a href="#rent"       data-i18n="nav.rent">Rent</a>
+      <a href="#upload"     data-i18n="nav.upload">Upload</a>
+      <a href="#report"     data-i18n="nav.report">Report</a>
+
+      <!-- Company-only tabs (shown only for role-company) -->
+      <a href="#company-info"     class="company-only-nav" data-i18n="nav.companyInfo">Company info</a>
+      <a href="#company-cars"     class="company-only-nav" data-i18n="nav.addCar">Add car</a>
+      <a href="#company-clients"  class="company-only-nav" data-i18n="nav.addClient">Add client</a>
+      <a href="#report"           class="company-only-nav" data-i18n="nav.report">Report</a>
+    </nav>
+
+    <div class="header-actions">
+      <div id="user-profile" class="user-profile" hidden>
+        <img id="user-profile-logo" class="user-profile-logo" alt="" hidden>
+        <span id="user-profile-fallback" class="user-profile-fallback"></span>
+        <span id="user-profile-name" class="user-profile-name"></span>
+      </div>
+      <div class="lang-switch">
+        <button id="btn-en" class="lang-btn active">EN</button>
+        <button id="btn-ar" class="lang-btn">عربي</button>
+      </div>
+      <button id="btn-logout" class="btn-logout" data-i18n="login.logout" title="Logout">Logout</button>
+    </div>
+  </div>
+</header>
+
+<!-- ============== HERO ============== -->
+<section id="home" class="hero">
+  <div class="container hero-inner">
+    <h1 data-i18n="hero.title">Drive Premium. Pay Smart.</h1>
+    <p  data-i18n="hero.subtitle">
+      A modern car rental platform connecting clients, companies, and cars.
+    </p>
+    <div class="hero-actions">
+      <a href="#rent"   class="btn btn-primary" data-i18n="hero.rent">Rent a Car</a>
+      <a href="#report" class="btn btn-ghost"   data-i18n="hero.report">View Rentals</a>
+    </div>
+  </div>
+</section>
+
+<main class="container main">
+
+  <!-- The Register flow now lives in a modal — the admin only supplies
+       username + password. See #register-modal at the bottom of the body. -->
+  <section id="register" hidden></section>
+
+  <!-- ============== COMPANY INFO (company-user tab #1) ============== -->
+  <section id="company-info" class="card company-only-card" hidden>
+    <div class="card-head">
+      <h2 data-i18n="companyInfo.title">My Company</h2>
+      <p  data-i18n="companyInfo.subtitle">
+        Manage your company's details and branches. Your company name comes from your username and can't be changed here.
+      </p>
+    </div>
+
+    <div id="company-info-status" class="company-info-status" hidden></div>
+
+    <form id="form-company-info" class="grid-form" novalidate>
+      <div class="field">
+        <label data-i18n="companies.f.name">Company name</label>
+        <input name="companyname" readonly>
+      </div>
+      <div class="field">
+        <label data-i18n="companies.f.cid">Company ID</label>
+        <input name="companyid">
+      </div>
+      <div class="field">
+        <label data-i18n="companyInfo.f.address">Company address</label>
+        <input name="location" placeholder="Beirut, Tripoli, …">
+      </div>
+
+      <div class="field phones-field">
+        <label data-i18n="companies.f.phones">Phone numbers</label>
+        <div id="company-info-phones" class="phone-list"></div>
+        <button type="button" id="company-info-add-phone" class="btn btn-ghost-dark phone-add-btn"
+                data-i18n="companyInfo.addPhone">+ Add phone</button>
+      </div>
+
+      <input type="hidden" name="x" id="company-info-x">
+      <input type="hidden" name="y" id="company-info-y">
+
+      <div class="field map-status-field">
+        <label data-i18n="companyInfo.f.location">Company location (map)</label>
+        <div id="company-info-map-status" class="map-loc-status empty" data-i18n="companies.maploc.empty">
+          No location selected — click "Pick on map".
+        </div>
+      </div>
+
+      <button type="button" id="btn-pick-info-map" class="btn btn-ghost-dark" data-i18n="companies.pick">
+        Pick on map
+      </button>
+      <button type="submit" class="btn btn-primary" data-i18n="action.save">Save changes</button>
+    </form>
+
+    <!-- Branches sub-section -->
+    <div class="card-head card-head-row branches-head">
+      <div>
+        <h3 data-i18n="branches.title">Branches</h3>
+        <p  data-i18n="companyInfo.branches.subtitle">
+          Add another office, or another phone number at the same address — each branch is one entry.
+        </p>
+      </div>
+      <button id="btn-toggle-branch-form" type="button" class="btn btn-primary"
+              data-i18n="companies.addBranch">+ Add Branch</button>
+    </div>
+
+    <!-- Stack of inline branch forms — each click of "+ Add Branch" clones the
+         template below and appends a new form here. Each form has its own X
+         close button and saves independently. -->
+    <div id="branch-forms-list"></div>
+
+    <template id="tpl-branch-form">
+      <form class="grid-form branch-inline-form" novalidate>
+        <button type="button" class="branch-close-btn" aria-label="Close" data-i18n-title="action.cancel" title="Close">&times;</button>
+        <input type="hidden" name="branch_id" data-role="branch-edit-id">
+
+        <div class="field">
+          <label data-i18n="companyInfo.branch.address">Branch address</label>
+          <input name="location" required placeholder="Beirut, Tripoli, …">
+        </div>
+
+        <div class="field phones-field">
+          <label data-i18n="companies.f.phones">Phone numbers</label>
+          <div class="phone-list" data-role="branch-phones"></div>
+          <button type="button" class="btn btn-ghost-dark phone-add-btn"
+                  data-role="branch-add-phone"
+                  data-i18n="companyInfo.addPhone">+ Add phone</button>
+        </div>
+
+        <input type="hidden" name="x" data-role="branch-x">
+        <input type="hidden" name="y" data-role="branch-y">
+
+        <div class="field map-status-field">
+          <label data-i18n="companyInfo.branch.location">Branch location (map)</label>
+          <div class="map-loc-status empty" data-role="branch-map-status" data-i18n="companies.maploc.empty">
+            No location selected — click "Pick on map".
+          </div>
+        </div>
+
+        <button type="button" class="btn btn-ghost-dark" data-role="branch-pick-map" data-i18n="companies.pick">
+          Pick on map
+        </button>
+        <button type="submit" class="btn btn-primary" data-i18n="action.save">Save</button>
+      </form>
+    </template>
+
+    <div id="branch-status" class="company-info-status" hidden></div>
+  </section>
+
+  <!-- ============== ADD CAR (company-user tab #2) ============== -->
+  <section id="company-cars" class="card company-only-card" hidden>
+    <div class="card-head">
+      <h2 data-i18n="addCar.title">Add a Car</h2>
+      <p  data-i18n="addCar.subtitle">Each car you add belongs to your company.</p>
+    </div>
+
+    <div id="add-car-status" class="company-info-status" hidden></div>
+
+    <form id="form-add-car" class="grid-form" novalidate>
+      <div class="field">
+        <label data-i18n="cars.f.vin">VIN</label>
+        <div class="vin-input-wrap">
+          <input name="vin" maxlength="17" required
+                 list="known-vins-list" autocomplete="off"
+                 data-i18n-placeholder="addCar.vin.placeholder"
+                 placeholder="17-character VIN (e.g. 1HGCM82633A004352)">
+          <span id="add-car-vin-hint" class="vin-hint" hidden></span>
+        </div>
+        <datalist id="known-vins-list"></datalist>
+        <div class="field-error" data-error-for="vin"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="cars.f.type">Type</label>
+        <select id="add-car-type" name="type" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="addCar.type.placeholder">— Choose type —</option>
+        </select>
+        <div class="field-error" data-error-for="type"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="cars.f.model">Model</label>
+        <select id="add-car-model" name="model" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="addCar.model.placeholder">— Choose model —</option>
+        </select>
+        <div class="field-error" data-error-for="model"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="cars.f.color">Color</label>
+        <select id="add-car-color" name="color">
+          <option value="" disabled selected hidden data-i18n="addCar.color.placeholder">— Choose color —</option>
+        </select>
+        <div class="field-error" data-error-for="color"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="addCar.icon">Plate icon</label>
+        <select id="add-car-icon" name="plate_icon">
+          <option value="" disabled selected hidden data-i18n="addCar.icon.placeholder">— Choose icon —</option>
+        </select>
+        <div class="field-error" data-error-for="plate_icon"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="cars.f.plate">Plate number</label>
+        <input name="plate_number" required
+               data-i18n-placeholder="addCar.plate.placeholder"
+               placeholder="e.g. 123456">
+        <div class="field-error" data-error-for="plate_number"></div>
+      </div>
+
+      <div class="field field-check">
+        <label>
+          <input type="checkbox" name="has_gps" id="add-car-gps">
+          <span data-i18n="cars.f.gps">Includes GPS</span>
+        </label>
+      </div>
+
+      <button type="submit" class="btn btn-primary" data-i18n="addCar.action">Save car</button>
+      <button type="reset"  class="btn btn-ghost-dark" data-i18n="action.clear">Clear</button>
+    </form>
+
+    <hr class="addcar-divider">
+
+    <div class="card-head">
+      <h3 data-i18n="addCar.bulk.title">Bulk add via CSV</h3>
+      <p  data-i18n="addCar.bulk.subtitle">
+        Upload a CSV with these columns: vin, type, model, icon, plate_number.
+        Each VIN is checked against NHTSA's database — rows whose VIN doesn't
+        match the type/model are rejected. Duplicate VINs are also skipped.
+      </p>
+    </div>
+
+    <div class="upload-grid">
+      <div class="field upload-file-field">
+        <label data-i18n="upload.file">CSV file</label>
+        <div class="file-picker">
+          <input type="file" id="add-car-csv-file" accept=".csv,text/csv" hidden>
+          <label for="add-car-csv-file" class="file-picker-btn">
+            <span class="file-picker-icon">📁</span>
+            <span data-i18n="upload.choose">Choose CSV file…</span>
+          </label>
+        </div>
+        <div id="add-car-csv-chip" class="file-chips" hidden></div>
+      </div>
+
+      <div class="upload-actions">
+        <button type="button" id="btn-add-car-template" class="btn btn-ghost-dark"
+                data-i18n="upload.template">Download template</button>
+        <button type="button" id="btn-add-car-upload" class="btn btn-primary"
+                data-i18n="addCar.bulk.action">Upload &amp; Validate</button>
+      </div>
+    </div>
+
+    <div class="upload-hint">
+      <strong data-i18n="upload.required">Required columns:</strong>
+      <code>vin, type, model, color, icon, plate_number</code>
+    </div>
+
+    <div id="add-car-upload-results" class="upload-results" hidden>
+      <h4 data-i18n="upload.results">Results</h4>
+      <p class="upload-rejected-banner" data-i18n="addCar.bulk.rejected">
+        CSV rejected — fix the listed rows and re-upload. Nothing was saved.
+      </p>
+      <div class="upload-summary">
+        <span class="badge yes" id="add-car-upload-ok">0</span>
+        <span data-i18n="upload.inserted">inserted</span>
+        <span class="badge no" id="add-car-upload-fail">0</span>
+        <span data-i18n="upload.failed">failed</span>
+      </div>
+      <ul id="add-car-upload-errors" class="upload-errors"></ul>
+    </div>
+  </section>
+
+  <!-- ============== ADD CLIENT (company-user tab #3) ============== -->
+  <section id="company-clients" class="card company-only-card" hidden>
+    <div class="card-head">
+      <h2 data-i18n="addClient.title">Add a Client</h2>
+      <p  data-i18n="addClient.subtitle">Each client you add becomes available to rent cars from any company.</p>
+    </div>
+
+    <div id="add-client-status" class="company-info-status" hidden></div>
+
+    <form id="form-add-client" class="grid-form" novalidate>
+      <div class="field">
+        <label data-i18n="clients.f.pid">Personal ID</label>
+        <input name="personid" required>
+        <div class="field-error" data-error-for="personid"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="clients.f.name">Name</label>
+        <input name="name" required>
+        <div class="field-error" data-error-for="name"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="clients.f.father">Father name</label>
+        <input name="fathername" required>
+        <div class="field-error" data-error-for="fathername"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="clients.f.mother">Mother name</label>
+        <input name="mothername" required>
+        <div class="field-error" data-error-for="mothername"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="addClient.nationality">Nationality</label>
+        <select id="add-client-nationality" name="nationality" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="addClient.nationality.placeholder">— Choose nationality —</option>
+        </select>
+        <div class="field-error" data-error-for="nationality"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="clients.f.dob">Date of birth</label>
+        <input type="date" name="dateofbirth" required>
+        <div class="field-error" data-error-for="dateofbirth"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="clients.f.lic">License ID</label>
+        <input name="licenseid" required>
+        <div class="field-error" data-error-for="licenseid"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="clients.f.licstart">License start</label>
+        <input type="date" name="startdatelicense" required>
+        <div class="field-error" data-error-for="startdatelicense"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="clients.f.licend">License end</label>
+        <input type="date" name="enddatelicense" required>
+        <div class="field-error" data-error-for="enddatelicense"></div>
+      </div>
+
+      <div class="field phones-field">
+        <label data-i18n="clients.f.phone">Phone number</label>
+        <div class="phone-row">
+          <select id="add-client-phone-code" class="phone-code-select" data-ss-prefix="3">
+            <!-- Options populated by JS so the dial-code list stays in one place. -->
+          </select>
+          <input type="tel" name="phonenumber" required placeholder="number">
+        </div>
+        <div class="field-error" data-error-for="phonenumber"></div>
+      </div>
+
+      <input type="hidden" name="photo" id="add-client-photo-data">
+      <div class="field logo-field">
+        <label data-i18n="addClient.photo">Client photo</label>
+        <div class="logo-picker">
+          <img id="add-client-photo-preview" class="logo-preview" alt="" hidden>
+          <span id="add-client-photo-fallback" class="logo-preview logo-preview-empty">+</span>
+          <input type="file" id="add-client-photo-file" accept="image/*" hidden>
+          <label for="add-client-photo-file" class="file-picker-btn logo-picker-btn">
+            <span class="file-picker-icon">🖼️</span>
+            <span data-i18n="addClient.photo.choose">Choose photo…</span>
+          </label>
+          <button type="button" id="add-client-photo-clear" class="btn btn-ghost-dark logo-clear-btn"
+                  hidden data-i18n="action.clear">Clear</button>
+        </div>
+        <div class="field-error" data-error-for="photo"></div>
+      </div>
+
+      <button type="submit" class="btn btn-primary" data-i18n="addClient.action">Save client</button>
+      <button type="reset"  class="btn btn-ghost-dark" data-i18n="action.clear">Clear</button>
+    </form>
+  </section>
+
+  <!-- ============== COMPANIES ============== -->
+  <section id="companies" class="card">
+    <div class="card-head">
+      <h2 data-i18n="companies.title">Companies</h2>
+      <p  data-i18n="companies.subtitle">Registered rental companies and their fleets.</p>
+    </div>
+
+    <form id="form-company" class="grid-form">
+      <div class="field">
+        <label data-i18n="companies.f.name">Company name</label>
+        <input name="companyname" required>
+      </div>
+      <div class="field">
+        <label data-i18n="companies.f.loc">Location (city)</label>
+        <input name="location" required placeholder="Beirut, Tripoli, …">
+      </div>
+      <div class="field">
+        <label data-i18n="companies.f.cid">Company ID</label>
+        <input name="companyid" required>
+      </div>
+      <div class="field">
+        <label data-i18n="companies.f.phone">Phone</label>
+        <input name="phonenumber" placeholder="+961-1-…">
+      </div>
+
+      <!-- Coordinates are filled automatically when the user picks on the map -->
+      <input type="hidden" name="x" id="company-x">
+      <input type="hidden" name="y" id="company-y">
+
+      <div class="field map-status-field">
+        <label data-i18n="companies.f.maploc">Map location</label>
+        <div id="map-loc-status" class="map-loc-status empty" data-i18n="companies.maploc.empty">
+          No location selected — click "Pick on map".
+        </div>
+      </div>
+
+      <input type="hidden" name="logo" id="company-logo-data">
+      <div class="field logo-field">
+        <label data-i18n="companies.f.logo">Company logo</label>
+        <div class="logo-picker">
+          <img id="company-logo-preview" class="logo-preview" alt="" hidden>
+          <span id="company-logo-fallback" class="logo-preview logo-preview-empty">+</span>
+          <input type="file" id="company-logo-file" accept="image/*" hidden>
+          <label for="company-logo-file" class="file-picker-btn logo-picker-btn">
+            <span class="file-picker-icon">🖼️</span>
+            <span data-i18n="companies.logo.choose">Choose image…</span>
+          </label>
+          <button type="button" id="company-logo-clear" class="btn btn-ghost-dark logo-clear-btn"
+                  hidden data-i18n="action.clear">Clear</button>
+        </div>
+      </div>
+
+      <button type="button" id="btn-pick-map" class="btn btn-ghost-dark" data-i18n="companies.pick">
+        Pick on map
+      </button>
+      <button type="submit" class="btn btn-primary" data-i18n="action.add">Add</button>
+      <button type="reset"  class="btn btn-ghost-dark" data-i18n="action.clear">Clear</button>
+    </form>
+
+    <div class="table-toolbar">
+      <div class="field table-search-field">
+        <label for="filter-companies-name" data-i18n="filter.byCompany">Filter by company</label>
+        <select id="filter-companies-name" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <button type="button" id="filter-companies-clear" class="btn btn-ghost-dark filter-clear-btn"
+              data-i18n="filter.clear">Clear filter</button>
+      <span id="companies-count" class="report-count"></span>
+    </div>
+
+    <div class="table-wrap">
+      <table id="tbl-companies">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th data-i18n="companies.f.logo">Logo</th>
+            <th data-i18n="companies.f.name">Company name</th>
+            <th data-i18n="companies.f.loc">Location</th>
+            <th data-i18n="companies.f.cid">Company ID</th>
+            <th data-i18n="companies.f.phone">Phone</th>
+            <th data-i18n="companies.f.coords">Coordinates</th>
+            <th data-i18n="actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============== CARS ============== -->
+  <section id="cars" class="card">
+    <div class="card-head">
+      <h2 data-i18n="cars.title">Cars</h2>
+      <p  data-i18n="cars.subtitle">Each car belongs to one company (linked by VIN).</p>
+    </div>
+
+    <form id="form-car" class="grid-form">
+      <div class="field">
+        <label data-i18n="cars.f.company">Company</label>
+        <select name="company_id" required></select>
+      </div>
+      <div class="field">
+        <label data-i18n="cars.f.vin">VIN</label>
+        <input name="vin" maxlength="17" required>
+      </div>
+      <div class="field">
+        <label data-i18n="cars.f.type">Type</label>
+        <input name="type" required>
+      </div>
+      <div class="field">
+        <label data-i18n="cars.f.model">Model</label>
+        <input name="model" required>
+      </div>
+      <div class="field">
+        <label data-i18n="cars.f.color">Color</label>
+        <input name="color" required>
+      </div>
+      <div class="field">
+        <label data-i18n="cars.f.plate">Plate number</label>
+        <input name="platenumber" required>
+      </div>
+      <div class="field field-check">
+        <label>
+          <input type="checkbox" name="has_gps">
+          <span data-i18n="cars.f.gps">Includes GPS</span>
+        </label>
+      </div>
+      <button type="submit" class="btn btn-primary" data-i18n="action.add">Add</button>
+      <button type="reset"  class="btn btn-ghost-dark" data-i18n="action.clear">Clear</button>
+    </form>
+
+    <div class="table-toolbar">
+      <div class="field table-search-field">
+        <label for="filter-cars-company" data-i18n="filter.byCompany">Filter by company</label>
+        <select id="filter-cars-company" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field table-search-field">
+        <label for="filter-cars-vin" data-i18n="filter.byVin">Filter by VIN</label>
+        <select id="filter-cars-vin" data-ss-prefix="3" disabled>
+          <option value="" disabled selected hidden data-i18n="filter.vinHint">Pick a company first…</option>
+        </select>
+      </div>
+      <button type="button" id="filter-cars-clear" class="btn btn-ghost-dark filter-clear-btn"
+              data-i18n="filter.clear">Clear filter</button>
+      <span id="cars-count" class="report-count"></span>
+    </div>
+
+    <div class="table-wrap">
+      <table id="tbl-cars">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th data-i18n="cars.f.company">Company</th>
+            <th data-i18n="cars.f.vin">VIN</th>
+            <th data-i18n="cars.f.type">Type</th>
+            <th data-i18n="cars.f.model">Model</th>
+            <th data-i18n="cars.f.color">Color</th>
+            <th data-i18n="cars.f.plate">Plate</th>
+            <th data-i18n="cars.f.gps">GPS</th>
+            <th data-i18n="actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============== CLIENTS ============== -->
+  <section id="clients" class="card">
+    <div class="card-head">
+      <h2 data-i18n="clients.title">Clients</h2>
+      <p  data-i18n="clients.subtitle">Personal and license information.</p>
+    </div>
+
+    <form id="form-client" class="grid-form">
+      <div class="field"><label data-i18n="clients.f.pid">Person ID</label><input name="personid" required></div>
+      <div class="field"><label data-i18n="clients.f.name">Name</label><input name="name" required></div>
+      <div class="field"><label data-i18n="clients.f.father">Father name</label><input name="fathername" required></div>
+      <div class="field"><label data-i18n="clients.f.mother">Mother name</label><input name="mothername" required></div>
+      <div class="field"><label data-i18n="clients.f.phone">Phone</label><input name="phonenumber" required></div>
+      <div class="field"><label data-i18n="clients.f.dob">Date of birth</label><input type="date" name="dateofbirth" required></div>
+      <div class="field"><label data-i18n="clients.f.lic">License ID</label><input name="licenseid" required></div>
+      <div class="field"><label data-i18n="clients.f.licstart">License start</label><input type="date" name="startdatelicense" required></div>
+      <div class="field"><label data-i18n="clients.f.licend">License end</label><input type="date" name="enddatelicense" required></div>
+      <button type="submit" class="btn btn-primary" data-i18n="action.add">Add</button>
+      <button type="reset"  class="btn btn-ghost-dark" data-i18n="action.clear">Clear</button>
+    </form>
+
+    <div class="table-toolbar">
+      <div class="field table-search-field">
+        <label for="filter-clients-lic" data-i18n="filter.byLicense">Filter by license ID</label>
+        <select id="filter-clients-lic" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field table-search-field">
+        <label for="filter-clients-name" data-i18n="filter.byClient">Filter by client name</label>
+        <select id="filter-clients-name" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <button type="button" id="filter-clients-clear" class="btn btn-ghost-dark filter-clear-btn"
+              data-i18n="filter.clear">Clear filter</button>
+      <span id="clients-count" class="report-count"></span>
+    </div>
+
+    <div class="table-wrap">
+      <table id="tbl-clients">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th data-i18n="addClient.photo">Photo</th>
+            <th data-i18n="clients.f.pid">Person ID</th>
+            <th data-i18n="clients.f.name">Name</th>
+            <th data-i18n="clients.f.father">Father</th>
+            <th data-i18n="clients.f.mother">Mother</th>
+            <th data-i18n="addClient.nationality">Nationality</th>
+            <th data-i18n="clients.f.phone">Phone</th>
+            <th data-i18n="clients.f.lic">License ID</th>
+            <th data-i18n="clients.f.licend">License end</th>
+            <th data-i18n="actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============== RENT A CAR ============== -->
+  <section id="rent" class="card highlight">
+    <div class="card-head">
+      <h2 data-i18n="rent.title">Rent a Car</h2>
+      <p  data-i18n="rent.subtitle">Pick a client, then a company, then one of its cars.</p>
+    </div>
+
+    <form id="form-rent" class="grid-form">
+      <div class="field">
+        <label data-i18n="rent.f.client">Client</label>
+        <select name="client_id" required></select>
+      </div>
+      <div class="field">
+        <label data-i18n="rent.f.company">Company</label>
+        <select name="company_id" required></select>
+      </div>
+      <div class="field">
+        <label data-i18n="rent.f.car">Car</label>
+        <select name="car_vin" required></select>
+      </div>
+      <div class="field">
+        <label data-i18n="rent.f.start">Start date</label>
+        <input type="date" name="start_date" required>
+      </div>
+      <div class="field">
+        <label data-i18n="rent.f.end">End date</label>
+        <input type="date" name="end_date" required>
+      </div>
+      <button type="submit" class="btn btn-primary" data-i18n="rent.action">Confirm Rental</button>
+      <button type="reset"  class="btn btn-ghost-dark" data-i18n="action.clear">Clear</button>
+    </form>
+
+    <!-- Selected summary preview -->
+    <div id="rent-preview" class="preview" hidden>
+      <h3 data-i18n="rent.preview">Selected</h3>
+      <div class="preview-grid">
+        <div>
+          <h4 data-i18n="rent.preview.company">Company</h4>
+          <table class="mini-table" id="prev-company"><tbody></tbody></table>
+        </div>
+        <div>
+          <h4 data-i18n="rent.preview.car">Car</h4>
+          <table class="mini-table" id="prev-car"><tbody></tbody></table>
+        </div>
+        <div>
+          <h4 data-i18n="rent.preview.client">Client</h4>
+          <table class="mini-table" id="prev-client"><tbody></tbody></table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== UPLOAD CSV ============== -->
+  <section id="upload" class="card">
+    <div class="card-head">
+      <h2 data-i18n="upload.title">Bulk Upload (CSV)</h2>
+      <p  data-i18n="upload.subtitle">
+        Pick a target table, download the template, fill in your data, and upload.
+        Each row is validated against the required columns before any record is inserted.
+      </p>
+    </div>
+
+    <div class="upload-grid">
+      <div class="field">
+        <label data-i18n="upload.target">Target table</label>
+        <select id="upload-type">
+          <option value="companies" data-i18n="upload.t.companies">Companies</option>
+          <option value="cars"      data-i18n="upload.t.cars">Cars</option>
+          <option value="clients"   data-i18n="upload.t.clients">Clients</option>
+        </select>
+      </div>
+
+      <div class="field upload-file-field">
+        <label data-i18n="upload.file">CSV files</label>
+        <div class="file-picker">
+          <input type="file" id="upload-file" accept=".csv,text/csv" multiple hidden>
+          <label for="upload-file" id="upload-file-trigger" class="file-picker-btn">
+            <span class="file-picker-icon">📁</span>
+            <span data-i18n="upload.choose">Choose CSV files…</span>
+          </label>
+        </div>
+        <div id="upload-file-chips" class="file-chips" hidden></div>
+      </div>
+
+      <div class="upload-actions">
+        <button id="btn-template" type="button" class="btn btn-ghost-dark" data-i18n="upload.template">
+          Download template
+        </button>
+        <button id="btn-upload" type="button" class="btn btn-primary" data-i18n="upload.action">
+          Validate &amp; Insert
+        </button>
+        <button id="btn-upload-clear" type="button" class="btn btn-ghost-dark" data-i18n="upload.clear">
+          Clear
+        </button>
+      </div>
+    </div>
+
+    <!-- Required columns hint -->
+    <div class="upload-hint">
+      <strong data-i18n="upload.required">Required columns:</strong>
+      <code id="upload-required"></code>
+    </div>
+
+    <!-- Reference panel for cars: list valid company IDs -->
+    <div id="upload-ref" class="upload-ref" hidden>
+      <strong data-i18n="upload.ref.companies">Available company IDs:</strong>
+      <ul id="upload-ref-list"></ul>
+    </div>
+
+    <!-- Results -->
+    <div id="upload-results" class="upload-results" hidden>
+      <h3 data-i18n="upload.results">Results</h3>
+      <div class="upload-summary">
+        <span class="badge yes" id="upload-ok">0</span>
+        <span data-i18n="upload.inserted">inserted</span>
+        <span class="badge no" id="upload-fail">0</span>
+        <span data-i18n="upload.failed">failed</span>
+      </div>
+      <ul id="upload-errors" class="upload-errors"></ul>
+    </div>
+  </section>
+
+  <!-- ============== REPORT ============== -->
+  <section id="report" class="card">
+    <!-- Company-only header: branding + contact, sourced from the
+         logged-in company so the printed report carries its identity. -->
+    <header id="report-company-head" class="report-company-head company-only-show">
+      <img id="report-company-logo" class="report-company-logo" alt="" hidden>
+      <div class="report-company-info">
+        <h2 id="report-company-name" class="report-company-name">—</h2>
+        <div id="report-company-meta" class="report-company-meta"></div>
+      </div>
+    </header>
+
+    <!-- Create-rental panel (company-only). Company is implicit — we use
+         the logged-in user's company_id, so the form just asks for car,
+         client, and dates. -->
+    <section class="create-rental-panel company-only-show">
+      <div class="card-head card-head-row">
+        <div>
+          <h3 data-i18n="rental.create.title">Create rental</h3>
+          <p  data-i18n="rental.create.subtitle">
+            Pick one of your cars and a client, set the dates, and a new rental is added to the report below.
+          </p>
+        </div>
+      </div>
+
+      <div id="create-rental-status" class="company-info-status" hidden></div>
+
+      <form id="form-create-rental" class="grid-form" novalidate>
+        <div class="field">
+          <label data-i18n="rent.f.car">Car</label>
+          <select id="rental-car-select" name="car_vin" data-ss-prefix="3" required>
+            <option value="" disabled selected hidden data-i18n="rental.create.carPh">— Choose a car —</option>
+          </select>
+          <div class="field-error" data-error-for="car_vin"></div>
+        </div>
+        <div class="field">
+          <label data-i18n="rent.f.client">Client</label>
+          <select id="rental-client-select" name="client_id" data-ss-prefix="3" required>
+            <option value="" disabled selected hidden data-i18n="rental.create.clientPh">— Choose a client —</option>
+          </select>
+          <div class="field-error" data-error-for="client_id"></div>
+        </div>
+        <div class="field">
+          <label data-i18n="rent.f.start">Start date</label>
+          <input type="date" name="start_date" required>
+          <div class="field-error" data-error-for="start_date"></div>
+        </div>
+        <div class="field">
+          <label data-i18n="rent.f.end">End date</label>
+          <input type="date" name="end_date" required>
+          <div class="field-error" data-error-for="end_date"></div>
+        </div>
+
+        <button type="submit" class="btn btn-primary" data-i18n="rental.create.action">Create rental</button>
+        <button type="reset"  class="btn btn-ghost-dark" data-i18n="action.clear">Clear</button>
+      </form>
+    </section>
+
+    <div class="card-head card-head-row">
+      <div>
+        <h2 data-i18n="report.title">Rental Report</h2>
+        <p class="admin-only-show" data-i18n="report.subtitle">Every client with their rented cars and company.</p>
+        <p class="company-only-show" data-i18n="report.companySubtitle">
+          Your company's rentals from the last month.
+        </p>
+      </div>
+      <button id="btn-export-pdf" type="button" class="btn btn-primary"
+              data-i18n="report.export">Export PDF</button>
+    </div>
+
+    <div class="report-toolbar admin-only-show">
+      <div class="field report-search-field">
+        <label for="filter-report-company" data-i18n="filter.byCompany">Filter by company</label>
+        <select id="filter-report-company" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field report-search-field">
+        <label for="filter-report-client" data-i18n="filter.byClient">Filter by client name</label>
+        <select id="filter-report-client" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field report-search-field">
+        <label for="filter-report-lic" data-i18n="filter.byLicense">Filter by license ID</label>
+        <select id="filter-report-lic" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field report-date-field">
+        <label for="report-from" data-i18n="report.from">From</label>
+        <input type="date" id="report-from">
+      </div>
+      <div class="field report-date-field">
+        <label for="report-to" data-i18n="report.to">To</label>
+        <input type="date" id="report-to">
+      </div>
+      <button type="button" id="report-reset" class="btn btn-ghost-dark report-reset"
+              data-i18n="report.reset">Reset filters</button>
+      <span id="report-count" class="report-count"></span>
+    </div>
+
+    <div class="table-wrap">
+      <table id="tbl-report">
+        <thead>
+          <tr>
+            <th data-i18n="report.client">Client</th>
+            <th data-i18n="report.father">Father</th>
+            <th data-i18n="report.phone">Phone</th>
+            <th data-i18n="report.license">License</th>
+            <th data-i18n="report.company">Company</th>
+            <th data-i18n="report.cphone">Company phone</th>
+            <th data-i18n="report.location">Location</th>
+            <th data-i18n="report.car">Car</th>
+            <th data-i18n="report.plate">Plate</th>
+            <th data-i18n="report.gps">GPS</th>
+            <th data-i18n="report.start">Start</th>
+            <th data-i18n="report.end">End</th>
+            <th data-i18n="actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <span data-i18n="footer.copy">© 2026 Car Rental — All rights reserved.</span>
+  </div>
+</footer>
+
+<!-- Toast notifications -->
+<div id="toast" class="toast" hidden></div>
+
+<!-- ============== EDIT MODAL ============== -->
+<div id="edit-modal" class="modal" hidden>
+  <div class="modal-card edit-card">
+    <header class="modal-head">
+      <h3 id="edit-title" data-i18n="edit.title">Edit record</h3>
+      <button id="edit-close" class="modal-close" aria-label="Close">&times;</button>
+    </header>
+    <form id="edit-form" class="edit-form" novalidate>
+      <div id="edit-fields" class="grid-form"></div>
+      <footer class="modal-foot">
+        <button id="edit-cancel" type="button" class="btn btn-ghost-dark" data-i18n="action.cancel">Cancel</button>
+        <button class="btn btn-primary" data-i18n="action.save">Save changes</button>
+      </footer>
+    </form>
+  </div>
+</div>
+
+<!-- ============== ROW DETAIL + PDF MODAL ============== -->
+<div id="detail-modal" class="modal" hidden>
+  <div class="modal-card detail-card">
+    <header class="modal-head">
+      <h3 data-i18n="detail.title">Rental detail</h3>
+      <button id="detail-close" class="modal-close" aria-label="Close">&times;</button>
+    </header>
+
+    <div class="detail-body">
+      <!-- Company header (only relevant when role=company; harmless for admin) -->
+      <div id="detail-company" class="detail-company-head company-only-show"></div>
+
+      <!-- Tabular client + car + dates info (rendered by Detail.open). -->
+      <div id="detail-body" class="detail-grid-wrap"></div>
+
+      <!-- Photos section: visible to admin AND company users; only the
+           upload control is company-only. -->
+      <section class="detail-section">
+        <div class="detail-section-head">
+          <h4 data-i18n="detail.photos">Car photos</h4>
+          <label class="btn btn-ghost-dark file-picker-btn detail-upload-btn company-only-show">
+            <input type="file" id="detail-upload-photo" accept="image/*" hidden multiple>
+            <span class="file-picker-icon">📷</span>
+            <span data-i18n="detail.uploadPhoto">Upload photo</span>
+          </label>
+        </div>
+        <div id="detail-photos-grid" class="detail-photos-grid"></div>
+      </section>
+
+      <!-- Video section -->
+      <section class="detail-section">
+        <div class="detail-section-head">
+          <h4 data-i18n="detail.videos">Inspection videos</h4>
+          <label class="btn btn-ghost-dark file-picker-btn detail-upload-btn company-only-show">
+            <input type="file" id="detail-upload-video" accept="video/*" hidden>
+            <span class="file-picker-icon">🎬</span>
+            <span data-i18n="detail.uploadVideo">Upload video</span>
+          </label>
+        </div>
+        <div id="detail-videos-grid" class="detail-videos-grid"></div>
+      </section>
+
+      <!-- Co-renter stub (company-only — admin doesn't add renters) -->
+      <section class="detail-section company-only-show">
+        <div class="detail-section-head">
+          <h4 data-i18n="detail.coRenters">Additional renters</h4>
+          <button type="button" id="detail-add-client" class="btn btn-ghost-dark"
+                  data-i18n="detail.addRenter">+ Add renter</button>
+        </div>
+        <p class="detail-section-note" data-i18n="detail.addRenter.coming">
+          Multiple renters per rental — coming soon.
+        </p>
+      </section>
+    </div>
+
+    <footer class="modal-foot">
+      <button id="detail-cancel" type="button" class="btn btn-ghost-dark" data-i18n="action.close">Close</button>
+      <button id="detail-pdf"    type="button" class="btn btn-primary"    data-i18n="detail.pdf">Download PDF</button>
+    </footer>
+  </div>
+</div>
+
+
+<!-- ============== REGISTER MODAL (admin only) ============== -->
+<div id="register-modal" class="modal" hidden>
+  <div class="modal-card register-card">
+    <header class="modal-head">
+      <h3 data-i18n="register.title">Register a Company</h3>
+      <button id="register-close" class="modal-close" aria-label="Close">&times;</button>
+    </header>
+    <form id="form-register" class="register-form" novalidate>
+      <p class="register-hint" data-i18n="register.subtitle">
+        The company name becomes the login username (lowercased, spaces → underscores).
+      </p>
+
+      <div class="field">
+        <label data-i18n="register.f.name">Username (company name)</label>
+        <input name="companyname" autocomplete="off" required>
+      </div>
+      <div class="field">
+        <label data-i18n="register.f.password">Password</label>
+        <input name="password" type="password" autocomplete="new-password" required minlength="4">
+      </div>
+
+      <div id="register-result" class="register-result" hidden></div>
+
+      <footer class="modal-foot">
+        <button type="button" id="register-cancel" class="btn btn-ghost-dark" data-i18n="action.cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary" data-i18n="register.action">Create account</button>
+      </footer>
+    </form>
+  </div>
+</div>
+
+<!-- ============== MAP MODAL ============== -->
+<div id="map-modal" class="modal" hidden>
+  <div class="modal-card">
+    <header class="modal-head">
+      <h3 data-i18n="map.title">Pick a location in Lebanon</h3>
+      <button id="map-close" class="modal-close" aria-label="Close">&times;</button>
+    </header>
+
+    <div class="map-host-wrap">
+      <div id="leaflet-map" class="leaflet-host"></div>
+      <div id="map-hint" class="map-hint" data-i18n="map.hint">
+        Click anywhere on the map to drop a pin.
+      </div>
+    </div>
+
+    <footer class="modal-foot">
+      <div class="modal-coords">
+        <span data-i18n="map.coords">Selected coordinates:</span>
+        <code id="map-coords">—</code>
+      </div>
+      <div class="modal-actions">
+        <button id="map-cancel"  class="btn btn-ghost-dark" data-i18n="map.cancel">Cancel</button>
+        <button id="map-confirm" class="btn btn-primary" disabled data-i18n="map.confirm">
+          Add coordinates
+        </button>
+      </div>
+    </footer>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="js/i18n.js"></script>
+<script src="js/searchselect.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
