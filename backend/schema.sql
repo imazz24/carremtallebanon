@@ -53,6 +53,18 @@ CREATE TABLE IF NOT EXISTS clients (
 );
 CREATE INDEX IF NOT EXISTS idx_clients_company ON clients(company_id);
 
+-- A single real person (personid + licenseid) may rent from many
+-- companies. This junction is the source of truth for "which
+-- companies see this client". clients.company_id above is kept only
+-- as the originator label and is no longer used for filtering.
+CREATE TABLE IF NOT EXISTS client_companies (
+    client_id  INTEGER NOT NULL REFERENCES clients(id)   ON DELETE CASCADE,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    PRIMARY KEY (client_id, company_id)
+);
+CREATE INDEX IF NOT EXISTS idx_client_companies_company
+    ON client_companies (company_id);
+
 -- ---- 4) RENTALS (link table) -------------------------
 -- A rental ties a client to a car (and through the car, to a company).
 CREATE TABLE IF NOT EXISTS rentals (

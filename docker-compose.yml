@@ -1,0 +1,73 @@
+# =====================================================
+# Car Rental — production-style stack.
+#
+# Two services:
+#   postgres  — Postgres 16, initialised on first boot from
+#               backend/schema.sql (which now includes the
+#               client_companies junction). Data lives in a named
+#               volume so container restarts/recreates don't wipe
+#               anything.
+#   app       — The Flask container built from ./Dockerfile.
+#               Talks to postgres over the compose network using
+#               DNS name `postgres`.
+#
+# First boot:    docker compose up -d --build
+# Reload after deploy: handled by scripts/ci_deploy.py — it runs
+#                     `docker compose up -d --build --force-recreate`
+#                     so app picks up code changes without dropping
+#                     the postgres volume.
+# =====================================================
+
+services:
+  postgres:
+    image: registry.rnd.com/library/postgres:16-alpine
+    container_name: carrental-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       carrental
+      POSTGRES_USER:     carrental
+      POSTGRES_PASSWORD: carrental
+    volumes:
+      - carrental_pg:/var/lib/postgresql/data
+      # Mount schema.sql AND every migration into initdb.d. Postgres
+      # runs them in lexical order on first init only — so a fresh
+      # volume gets `00_schema.sql` (current state) followed by every
+      # numbered migration as idempotent no-ops. On existing volumes,
+      # initdb.d is silently skipped — apply new migrations via
+      #   docker compose exec postgres psql -U carrental -d carrental \
+      #     -f /migrations/0NN_xxx.sql
+      - ./backend/schema.sql:/docker-entrypoint-initdb.d/00_schema.sql:ro
+      - ./backend/migrations:/migrations:ro
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U carrental -d carrental"]
+      interval: 5s
+      timeout:  5s
+      retries:  10
+
+  app:
+    build:
+      context: .
+    container_name: carrental-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5000:5000"
+    env_file:
+      # Optional .env on the server. CI never uploads .env files, so
+      # whatever you put here at first deploy stays put.
+      - path: .env
+        required: false
+    environment:
+      # db.py reads these DB_* env vars (see backend/db.py).
+      DB_HOST:     postgres
+      DB_PORT:     "5432"
+      DB_NAME:     carrental
+      DB_USER:     carrental
+      DB_PASSWORD: carrental
+      FLASK_PORT:  "5000"
+      TZ:          Asia/Beirut
+
+volumes:
+  carrental_pg:

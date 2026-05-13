@@ -1,0 +1,36 @@
+.git/
+.gitlab-ci.yml
+.gitignore
+.dockerignore
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local virtualenvs
+backend/.venv/
+.venv/
+venv/
+
+# Local-only state (never copy into the image)
+backend/.env
+.env
+.env.local
+backend/uploads/
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.log
+
+# Memory / scratch files
+memory/
+_known_vins_block.txt

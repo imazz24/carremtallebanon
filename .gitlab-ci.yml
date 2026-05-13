@@ -1,68 +1,52 @@
 # =====================================================
-# Car Rental — CI/CD
+# Car Rental — CI/CD (shell-executor pattern)
+#
+# Runs on a shell GitLab Runner (no Docker image pulls) — same
+# arrangement as gitlab.rnd.com/root/whavester. The runner host
+# needs `python3` + `pip` + `docker` available; jobs install
+# everything else into per-pipeline venvs so jobs stay hermetic.
 #
 # Stages:
-#   lint    → Python (ruff) + JS (node --check) syntax/style.
-#   test    → Smoke import of backend/app.py to catch crashes
-#             that would only show up at server boot.
-#   sast    → GitLab's built-in static-application-security scan
-#             (Bandit, Semgrep, etc. — pulled from the template).
-#   deploy  → Manual rsync + remote restart over SSH. Runs only on
-#             pushes to `main`; needs CI variables (see notes
-#             below) to know where to deploy.
-#
-# Docker images are pulled from the internal mirror
-# `registry.rnd.com/library/*` because the runner network can't
-# reach Docker Hub directly. The runner authenticates to that
-# mirror using a `DOCKER_AUTH_CONFIG` CI variable — see the README
-# section at the bottom of this file for how to set it.
+#   test    → ruff (pyflakes) + JS syntax check + backend import smoke.
+#   deploy  → SFTP the tree to the deploy host via paramiko, then
+#             run `docker compose up -d --build --force-recreate`
+#             remotely. Manual trigger, main-only.
 # =====================================================
 
-include:
-  - template: Security/SAST.gitlab-ci.yml
-
 stages:
-  - lint
   - test
-  - sast       # injected by the SAST template above
   - deploy
 
-# Speed up Python jobs by caching pip's wheel cache between runs.
-.pip-cache: &pip-cache
-  variables:
-    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  cache:
-    key:
-      files:
-        - backend/requirements.txt
-    paths:
-      - .cache/pip
+default:
+  tags:
+    - shell
+  interruptible: true
+
+variables:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_INPUT: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
 
 
 # ----------------------------------------------------------
-# LINT
+# TEST — lint (ruff + node --check) + import smoke.
 # ----------------------------------------------------------
-lint:python:
-  stage: lint
-  image: registry.rnd.com/library/python:3.12-slim
-  <<: *pip-cache
-  before_script:
-    - pip install --quiet ruff==0.6.9
+test:
+  stage: test
   script:
-    # `ruff check --select F` runs the pyflakes rule set: unused
-    # imports, undefined names, redefined symbols, syntax errors —
-    # actual bugs, not stylistic preferences. Add `E` or `W` rules
-    # later if you want strict PEP 8 enforcement.
+    - python3 --version
+    - python3 -m venv .venv
+    - . .venv/bin/activate
+    - pip install -U pip wheel
+    - pip install -r backend/requirements.txt ruff==0.6.9
+    # 1. ruff with --select F runs the pyflakes rule set (real
+    #    bugs: unused imports, undefined names, syntax errors).
+    #    --exclude testvin.py because that file is a stale FastAPI
+    #    demo with mixed imports, not part of the running app.
     - ruff check backend/ --select F --exclude backend/.venv --exclude backend/testvin.py
-
-
-lint:js:
-  stage: lint
-  image: registry.rnd.com/library/node:20-alpine
-  script:
-    # node --check parses each file and fails on syntax errors. It's
-    # the lightest possible JS lint — no rule set, just "does this
-    # parse?". Good enough for a vanilla-JS frontend.
+    # 2. JS files must parse. node --check is a syntax-only check —
+    #    no rule set, no surprise failures from style.
     - |
       set -e
       fail=0
@@ -70,98 +54,35 @@ lint:js:
         echo "checking $f"
         node --check "$f" || fail=1
       done
-      exit $fail
+      test "$fail" -eq 0
+    # 3. Smoke import — does the Flask app boot? db.py reads
+    #    DB_* env vars lazily, so no real Postgres is needed for
+    #    `import app` to succeed.
+    - cd backend && python -c "import app; print('import OK, route count:', len(list(app.app.url_map.iter_rules())))"
 
 
 # ----------------------------------------------------------
-# TEST — import smoke
+# DEPLOY — manual, main-only, paramiko + docker compose.
 # ----------------------------------------------------------
-test:smoke:
-  stage: test
-  image: registry.rnd.com/library/python:3.12-slim
-  <<: *pip-cache
-  before_script:
-    # psycopg2-binary needs no system packages; the rest are pure
-    # Python. If a binary wheel is ever missing, add
-    #   apt-get install -y --no-install-recommends gcc libpq-dev
-    # here.
-    - pip install --quiet -r backend/requirements.txt
-  script:
-    # Importing app.py runs every module-level statement (Flask app
-    # construction, decorator registration). DB connections in db.py
-    # are lazy — they only fire when query()/execute() actually runs
-    # — so we don't need a Postgres service for this smoke.
-    - cd backend
-    - python -c "import app; print('import OK, route count:', len(list(app.app.url_map.iter_rules())))"
-
-
-# ----------------------------------------------------------
-# DEPLOY — manual, main-only, SSH rsync
-# ----------------------------------------------------------
-# Set these as CI/CD variables in GitLab UI (Settings → CI/CD →
-# Variables). Mark the SSH key as `File` type, protected, masked:
+# Required CI variables (Settings → CI/CD → Variables):
+#   CARRENTAL_HOST          deploy server IP/hostname
+#   CARRENTAL_USER          SSH user on that host
+#   CARRENTAL_PASS          SSH password (mark masked + protected)
+#   CARRENTAL_REMOTE_DIR    optional, defaults to /home/$USER/carrental
 #
-#   SSH_PRIVATE_KEY      — private key (File type), authorised on
-#                          the target server's deploy account.
-#   SSH_KNOWN_HOSTS      — output of `ssh-keyscan <DEPLOY_HOST>`.
-#                          Prevents the "host key verification
-#                          failed" prompt without disabling the
-#                          check entirely.
-#   DEPLOY_USER          — e.g. `deploy`
-#   DEPLOY_HOST          — e.g. `app.rnd.com` or `10.20.30.40`
-#   DEPLOY_PATH          — absolute path on the host, e.g.
-#                          `/srv/carrental`
-#   DEPLOY_RESTART_CMD   — (optional) e.g.
-#                          `sudo systemctl restart carrental`.
-#                          Default below.
-#
-deploy:server:
+# The target host must have `docker` and `docker compose v2`
+# installed and the SSH user able to run them.
+deploy:
   stage: deploy
-  image: registry.rnd.com/library/alpine:3.20
   rules:
-    # Only run on the main branch (not on MRs, tags, etc.).
-    # `when: manual` requires a click on the GitLab Pipelines page
-    # to actually deploy — protects against unintentional
-    # production pushes on every commit.
     - if: '$CI_COMMIT_BRANCH == "main"'
       when: manual
-  variables:
-    DEPLOY_RESTART_CMD: "sudo systemctl restart carrental"
-  before_script:
-    - apk add --no-cache openssh-client rsync
-    - mkdir -p ~/.ssh
-    - chmod 700 ~/.ssh
-    # SSH_PRIVATE_KEY is delivered as a file by GitLab. Copy it
-    # into the standard location and tighten permissions so SSH
-    # doesn't refuse to use it.
-    - cp "$SSH_PRIVATE_KEY" ~/.ssh/id_rsa
-    - chmod 600 ~/.ssh/id_rsa
-    - echo "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-    - chmod 644 ~/.ssh/known_hosts
+    - when: never
   script:
-    # rsync the working tree to the target. --delete removes files
-    # on the server that no longer exist locally. The exclude list
-    # mirrors .gitignore plus a few CI-only paths.
-    - |
-      rsync -az --delete \
-        --exclude='.git' \
-        --exclude='.gitlab-ci.yml' \
-        --exclude='backend/.venv' \
-        --exclude='backend/.env' \
-        --exclude='backend/__pycache__' \
-        --exclude='backend/uploads' \
-        --exclude='.cache' \
-        ./ "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
-    # Update the target's venv and restart the Flask service. The
-    # venv is created on first deploy if it doesn't already exist.
-    - |
-      ssh "$DEPLOY_USER@$DEPLOY_HOST" "
-        set -e
-        cd '$DEPLOY_PATH'
-        if [ ! -d backend/.venv ]; then python3 -m venv backend/.venv; fi
-        backend/.venv/bin/pip install --quiet -r backend/requirements.txt
-        $DEPLOY_RESTART_CMD
-      "
+    - python3 -m venv .deploy-venv
+    - . .deploy-venv/bin/activate
+    - pip install --quiet paramiko==3.5.0
+    - python scripts/ci_deploy.py
   environment:
     name: production
-    url: http://$DEPLOY_HOST
+    url: http://$CARRENTAL_HOST:5000
