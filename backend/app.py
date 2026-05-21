@@ -1001,32 +1001,39 @@ def _user_can_touch_client(client_id: int) -> bool:
 @app.put("/api/clients/<int:client_id>")
 def update_client(client_id):
     data = request.get_json(force=True)
-    miss = _required(
-        data, "personid", "fathername", "mothername",
-        "licenseid", "startdatelicense", "enddatelicense",
-    )
+    # personid / father / mother / dates are conditional now — see create_client.
+    miss = _required(data, "licenseid")
     if miss:
         return jsonify({"error": f"Missing: {miss}"}), 400
     if not _user_can_touch_client(client_id):
         return jsonify({"error": "Not authorized"}), 403
+    id_type  = _norm_id_type(data.get("id_type"))
+    personid = _none_if_blank(data.get("personid"))
+    if id_type in ("passport", "national_id") and not personid:
+        return jsonify({"error": "personid required for passport / national ID"}), 400
     row = execute(
         """UPDATE clients
               SET personid = %s, name = %s, fathername = %s, mothername = %s,
                   nationality = %s,
                   phonenumber = %s, dateofbirth = %s, licenseid = %s,
                   startdatelicense = %s, enddatelicense = %s,
-                  photo = COALESCE(%s, photo)
+                  photo = COALESCE(%s, photo),
+                  id_type = COALESCE(%s, id_type)
             WHERE id = %s AND is_active = TRUE
         RETURNING *""",
         (
-            data["personid"],
+            personid,
             _none_if_blank(data.get("name")),
-            data["fathername"], data["mothername"],
+            _none_if_blank(data.get("fathername")),
+            _none_if_blank(data.get("mothername")),
             _none_if_blank(data.get("nationality")),
             _none_if_blank(data.get("phonenumber")),
             _none_if_blank(data.get("dateofbirth")),
-            data["licenseid"], data["startdatelicense"], data["enddatelicense"],
+            data["licenseid"],
+            _none_if_blank(data.get("startdatelicense")),
+            _none_if_blank(data.get("enddatelicense")),
             _none_if_blank(data.get("photo")),
+            id_type,
             client_id,
         ),
         returning=True,
@@ -1073,15 +1080,30 @@ def soft_delete_client(client_id):
     return ("", 204)
 
 
+_ID_TYPES = {"passport", "national_id", "license"}
+
+
+def _norm_id_type(v):
+    s = (v or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return s if s in _ID_TYPES else None
+
+
 @app.post("/api/clients")
 def create_client():
     data = request.get_json(force=True)
-    miss = _required(
-        data, "personid", "fathername", "mothername",
-        "licenseid", "startdatelicense", "enddatelicense",
-    )
+    # Only the licenseid is required for every client now. personid,
+    # father / mother, DOB, and the licence start/end dates are all
+    # conditional and may be left blank for license-only clients.
+    miss = _required(data, "licenseid")
     if miss:
         return jsonify({"error": f"Missing: {miss}"}), 400
+
+    id_type  = _norm_id_type(data.get("id_type"))
+    personid = _none_if_blank(data.get("personid"))
+    if id_type in ("passport", "national_id") and not personid:
+        return jsonify({"error": "personid required for passport / national ID"}), 400
+
+    licenseid = data["licenseid"]
 
     u = _current_user()
     if u and u.get("role") == "company":
@@ -1089,18 +1111,21 @@ def create_client():
     else:
         company_id = data.get("company_id")
 
-    personid  = data["personid"]
-    licenseid = data["licenseid"]
-
     # A client is identified by (personid, licenseid) — a real person's
     # national + driving licence. If both already match an existing row
     # we treat this POST as "this company now also rents to that
     # client" and just link the junction; the form data the user typed
     # is ignored in favour of the canonical record.
-    existing = query(
-        "SELECT * FROM clients WHERE personid = %s AND licenseid = %s LIMIT 1",
-        (personid, licenseid), one=True,
-    )
+    if personid:
+        existing = query(
+            "SELECT * FROM clients WHERE personid = %s AND licenseid = %s LIMIT 1",
+            (personid, licenseid), one=True,
+        )
+    else:
+        existing = query(
+            "SELECT * FROM clients WHERE personid IS NULL AND licenseid = %s LIMIT 1",
+            (licenseid,), one=True,
+        )
     if existing:
         if not existing.get("is_active"):
             execute(
@@ -1119,10 +1144,16 @@ def create_client():
     # If only ONE of personid/licenseid is already in use, the
     # submission contradicts an existing client — reject with a clear
     # error rather than mangling the existing row.
-    partial = query(
-        "SELECT id FROM clients WHERE personid = %s OR licenseid = %s LIMIT 1",
-        (personid, licenseid), one=True,
-    )
+    if personid:
+        partial = query(
+            "SELECT id FROM clients WHERE personid = %s OR licenseid = %s LIMIT 1",
+            (personid, licenseid), one=True,
+        )
+    else:
+        partial = query(
+            "SELECT id FROM clients WHERE licenseid = %s LIMIT 1",
+            (licenseid,), one=True,
+        )
     if partial:
         return jsonify({
             "error": "personid or licenseid is already used by a different client",
@@ -1132,19 +1163,22 @@ def create_client():
         """INSERT INTO clients
              (personid, name, fathername, mothername, nationality,
               phonenumber, dateofbirth, licenseid,
-              startdatelicense, enddatelicense, company_id, photo)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+              startdatelicense, enddatelicense, company_id, photo, id_type)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
         (
             personid,
             _none_if_blank(data.get("name")),
-            data["fathername"], data["mothername"],
+            _none_if_blank(data.get("fathername")),
+            _none_if_blank(data.get("mothername")),
             _none_if_blank(data.get("nationality")),
             _none_if_blank(data.get("phonenumber")),
             _none_if_blank(data.get("dateofbirth")),
-            licenseid, data["startdatelicense"],
-            data["enddatelicense"],
+            licenseid,
+            _none_if_blank(data.get("startdatelicense")),
+            _none_if_blank(data.get("enddatelicense")),
             int(company_id) if company_id else None,
             _none_if_blank(data.get("photo")),
+            id_type,
         ),
         returning=True,
     )

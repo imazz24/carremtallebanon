@@ -164,6 +164,7 @@ html[dir="rtl"] .main-nav a::after{ transform-origin: right; }
 }
 .grid-form[hidden]{ display: none; }
 .field{ display:flex; flex-direction:column; gap:.35rem; }
+.field[hidden]{ display: none !important; }
 .field label{
   font-size: .8rem; font-weight: 600;
   color: var(--ink-soft); text-transform: uppercase; letter-spacing:.04em;
@@ -558,6 +559,11 @@ html[dir="rtl"] .leaflet-host{ direction: ltr; }
   display: grid; place-items: center;
   color: var(--muted); font-size: 1.6rem; font-weight: 300;
   background: var(--surface-2);
+}
+.logo-preview-doc{
+  font-size: .85rem; font-weight: 600;
+  color: var(--text); text-align: center;
+  line-height: 1.1;
 }
 .logo-picker-btn{ padding: .55rem .9rem; }
 .logo-clear-btn{ padding: .55rem .9rem; }

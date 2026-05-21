@@ -336,26 +336,37 @@
 
     <form id="form-add-client" class="grid-form" novalidate>
       <div class="field">
-        <label data-i18n="clients.f.pid">Personal ID</label>
-        <input name="personid" required>
+        <label data-i18n="addClient.idType">Document type</label>
+        <select id="add-client-id-type" name="id_type" required>
+          <option value="" disabled selected hidden data-i18n="addClient.idType.placeholder">— Choose document type —</option>
+          <option value="passport"    data-i18n="addClient.idType.passport">Passport</option>
+          <option value="national_id" data-i18n="addClient.idType.national">National ID</option>
+          <option value="license"     data-i18n="addClient.idType.license">License only</option>
+        </select>
+        <div class="field-error" data-error-for="id_type"></div>
+      </div>
+
+      <div class="field" data-show-for-id-type="passport national_id license">
+        <label id="add-client-pid-label" data-i18n="clients.f.pid">Personal ID</label>
+        <input name="personid">
         <div class="field-error" data-error-for="personid"></div>
       </div>
 
       <div class="field">
-        <label data-i18n="clients.f.name">Name</label>
+        <label data-i18n="clients.f.name">Full name</label>
         <input name="name" required>
         <div class="field-error" data-error-for="name"></div>
       </div>
 
       <div class="field">
         <label data-i18n="clients.f.father">Father name</label>
-        <input name="fathername" required>
+        <input name="fathername">
         <div class="field-error" data-error-for="fathername"></div>
       </div>
 
       <div class="field">
         <label data-i18n="clients.f.mother">Mother name</label>
-        <input name="mothername" required>
+        <input name="mothername">
         <div class="field-error" data-error-for="mothername"></div>
       </div>
 
@@ -367,27 +378,27 @@
         <div class="field-error" data-error-for="nationality"></div>
       </div>
 
-      <div class="field">
+      <div class="field" data-hide-for-id-type="license">
         <label data-i18n="clients.f.dob">Date of birth</label>
-        <input type="date" name="dateofbirth" required>
+        <input type="date" name="dateofbirth">
         <div class="field-error" data-error-for="dateofbirth"></div>
       </div>
 
-      <div class="field">
+      <div class="field" data-hide-for-id-type="license">
         <label data-i18n="clients.f.lic">License ID</label>
-        <input name="licenseid" required>
+        <input name="licenseid">
         <div class="field-error" data-error-for="licenseid"></div>
       </div>
 
       <div class="field">
         <label data-i18n="clients.f.licstart">License start</label>
-        <input type="date" name="startdatelicense" required>
+        <input type="date" name="startdatelicense">
         <div class="field-error" data-error-for="startdatelicense"></div>
       </div>
 
       <div class="field">
         <label data-i18n="clients.f.licend">License end</label>
-        <input type="date" name="enddatelicense" required>
+        <input type="date" name="enddatelicense">
         <div class="field-error" data-error-for="enddatelicense"></div>
       </div>
 
@@ -404,14 +415,14 @@
 
       <input type="hidden" name="photo" id="add-client-photo-data">
       <div class="field logo-field">
-        <label data-i18n="addClient.photo">Client photo</label>
+        <label data-i18n="addClient.photoOrDoc">Client photo / document</label>
         <div class="logo-picker">
           <img id="add-client-photo-preview" class="logo-preview" alt="" hidden>
           <span id="add-client-photo-fallback" class="logo-preview logo-preview-empty">+</span>
-          <input type="file" id="add-client-photo-file" accept="image/*" hidden>
+          <input type="file" id="add-client-photo-file" accept="image/*,application/pdf" hidden>
           <label for="add-client-photo-file" class="file-picker-btn logo-picker-btn">
             <span class="file-picker-icon">🖼️</span>
-            <span data-i18n="addClient.photo.choose">Choose photo…</span>
+            <span data-i18n="addClient.photoOrDoc.choose">Choose photo / document…</span>
           </label>
           <button type="button" id="add-client-photo-clear" class="btn btn-ghost-dark logo-clear-btn"
                   hidden data-i18n="action.clear">Clear</button>
@@ -603,7 +614,7 @@
 
     <form id="form-client" class="grid-form">
       <div class="field"><label data-i18n="clients.f.pid">Person ID</label><input name="personid" required></div>
-      <div class="field"><label data-i18n="clients.f.name">Name</label><input name="name" required></div>
+      <div class="field"><label data-i18n="clients.f.name">Full name</label><input name="name" required></div>
       <div class="field"><label data-i18n="clients.f.father">Father name</label><input name="fathername" required></div>
       <div class="field"><label data-i18n="clients.f.mother">Mother name</label><input name="mothername" required></div>
       <div class="field"><label data-i18n="clients.f.phone">Phone</label><input name="phonenumber" required></div>
@@ -640,7 +651,7 @@
             <th>#</th>
             <th data-i18n="addClient.photo">Photo</th>
             <th data-i18n="clients.f.pid">Person ID</th>
-            <th data-i18n="clients.f.name">Name</th>
+            <th data-i18n="clients.f.name">Full name</th>
             <th data-i18n="clients.f.father">Father</th>
             <th data-i18n="clients.f.mother">Mother</th>
             <th data-i18n="addClient.nationality">Nationality</th>

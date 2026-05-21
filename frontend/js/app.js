@@ -1716,14 +1716,77 @@ function setupAddClientForm(){
     if (codeSel._ss) codeSel._ss.sync();
   }
 
-  // Wire the photo picker (same widget the company logo uses).
-  LogoPicker.bind({
-    fileSel:     "#add-client-photo-file",
+  const photoOpts = {
     previewSel:  "#add-client-photo-preview",
     fallbackSel: "#add-client-photo-fallback",
     clearSel:    "#add-client-photo-clear",
     dataSel:     "#add-client-photo-data",
+  };
+
+  // Wire the photo/document picker. LogoPicker handles images cleanly;
+  // for PDFs the <img> can't render so we swap in a "📄 PDF" indicator
+  // on the fallback span while keeping the data URL in the hidden field.
+  LogoPicker.bind({ fileSel: "#add-client-photo-file", ...photoOpts });
+  $("#add-client-photo-file").addEventListener("change", () => {
+    const f = $("#add-client-photo-file").files[0];
+    if (!f || !/^application\/pdf/i.test(f.type)) return;
+    const img = $("#add-client-photo-preview");
+    const fb  = $("#add-client-photo-fallback");
+    img.hidden = true; img.removeAttribute("src");
+    fb.hidden = false;
+    fb.textContent = "📄 PDF";
+    fb.classList.add("logo-preview-doc");
   });
+  $("#add-client-photo-clear").addEventListener("click", () => {
+    const fb = $("#add-client-photo-fallback");
+    fb.textContent = "+";
+    fb.classList.remove("logo-preview-doc");
+  });
+
+  // -------- ID-type dropdown: shows/hides personid + father/mother. --------
+  const idTypeSel = $("#add-client-id-type");
+  const pidLabel  = $("#add-client-pid-label");
+  function applyIdTypeVisibility(){
+    const idt = (idTypeSel?.value || "").trim();
+    const nat = ($("#add-client-nationality")?.value || "").trim();
+    // The personid input is reused for every id_type — the label
+    // describes what number the user is actually typing. In License-only
+    // mode the licenseid field is hidden and we route this value into
+    // licenseid at submit time (see saveClient).
+    if (pidLabel){
+      const key = idt === "passport"    ? "addClient.pid.passport"
+                : idt === "national_id" ? "addClient.pid.national"
+                : idt === "license"     ? "addClient.pid.license"
+                : "clients.f.pid";
+      pidLabel.setAttribute("data-i18n", key);
+      pidLabel.textContent = t(key);
+    }
+    const visit = (el, hidden) => {
+      el.hidden = hidden;
+      if (hidden){
+        // Don't carry stale values from a now-hidden field into the submit.
+        el.querySelectorAll("input").forEach(i => { i.value = ""; });
+        el.querySelectorAll("[data-error-for]").forEach(slot => {
+          slot.textContent = ""; slot.hidden = true;
+        });
+      }
+    };
+    form.querySelectorAll("[data-show-for-id-type]").forEach(el => {
+      const allowed   = el.dataset.showForIdType.split(/\s+/).filter(Boolean);
+      const natWanted = (el.dataset.showForNationality || "").trim();
+      const okType = allowed.includes(idt);
+      const okNat  = !natWanted || natWanted === nat;
+      visit(el, !(okType && okNat));
+    });
+    form.querySelectorAll("[data-hide-for-id-type]").forEach(el => {
+      const blocked = el.dataset.hideForIdType.split(/\s+/).filter(Boolean);
+      visit(el, blocked.includes(idt));
+    });
+  }
+  if (idTypeSel) idTypeSel.addEventListener("change", applyIdTypeVisibility);
+  const natSelLive = $("#add-client-nationality");
+  if (natSelLive) natSelLive.addEventListener("change", applyIdTypeVisibility);
+  applyIdTypeVisibility();
 
   // Full reset: native form reset clears <input>s, but the enhanced
   // SearchSelect triggers, the inline error slots, and the success
@@ -1734,15 +1797,14 @@ function setupAddClientForm(){
       if (nat){ nat.value = ""; if (nat._ss) nat._ss.sync(); }
       const code = $("#add-client-phone-code");
       if (code){ code.value = "961"; if (code._ss) code._ss.sync(); }
-      LogoPicker.reset({
-        previewSel:  "#add-client-photo-preview",
-        fallbackSel: "#add-client-photo-fallback",
-        clearSel:    "#add-client-photo-clear",
-        dataSel:     "#add-client-photo-data",
-      });
+      if (idTypeSel){ idTypeSel.value = ""; if (idTypeSel._ss) idTypeSel._ss.sync(); }
+      LogoPicker.reset(photoOpts);
+      const fb = $("#add-client-photo-fallback");
+      if (fb){ fb.textContent = "+"; fb.classList.remove("logo-preview-doc"); }
       clearAllFieldErrors(form);
       hideAddClientStatus();
       lastPidLookup = "";
+      applyIdTypeVisibility();
     }, 0);
   });
 
@@ -1771,6 +1833,13 @@ function setupAddClientForm(){
     setVal("startdatelicense", c.startdatelicense || "");
     setVal("enddatelicense",   c.enddatelicense   || "");
 
+    // Restore the canonical record's id_type, falling back to passport
+    // for legacy rows that predate this column.
+    if (idTypeSel){
+      idTypeSel.value = (c.id_type || (c.personid ? "passport" : "license"));
+      if (idTypeSel._ss) idTypeSel._ss.sync();
+    }
+
     const natSel = $("#add-client-nationality");
     if (natSel){ natSel.value = c.nationality || ""; if (natSel._ss) natSel._ss.sync(); }
 
@@ -1779,16 +1848,24 @@ function setupAddClientForm(){
     if (phoneCodeSel){ phoneCodeSel.value = dial; if (phoneCodeSel._ss) phoneCodeSel._ss.sync(); }
     setVal("phonenumber", num);
 
-    const photoOpts = {
-      previewSel:  "#add-client-photo-preview",
-      fallbackSel: "#add-client-photo-fallback",
-      clearSel:    "#add-client-photo-clear",
-      dataSel:     "#add-client-photo-data",
-    };
-    if (c.photo) LogoPicker.setPreview(photoOpts, c.photo);
-    else         LogoPicker.reset(photoOpts);
+    if (c.photo){
+      LogoPicker.setPreview(photoOpts, c.photo);
+      const fb = $("#add-client-photo-fallback");
+      if (/^data:application\/pdf/i.test(c.photo)){
+        const img = $("#add-client-photo-preview");
+        img.hidden = true; img.removeAttribute("src");
+        if (fb){ fb.hidden = false; fb.textContent = "📄 PDF"; fb.classList.add("logo-preview-doc"); }
+      } else if (fb){
+        fb.textContent = "+"; fb.classList.remove("logo-preview-doc");
+      }
+    } else {
+      LogoPicker.reset(photoOpts);
+      const fb = $("#add-client-photo-fallback");
+      if (fb){ fb.textContent = "+"; fb.classList.remove("logo-preview-doc"); }
+    }
 
     clearAllFieldErrors(form);
+    applyIdTypeVisibility();
   }
 
   const pidInput = form.querySelector('input[name="personid"]');
@@ -1827,6 +1904,7 @@ function setupAddClientForm(){
     const dialCode = ($("#add-client-phone-code")?.value || "961").trim();
     const localNum = (fd.get("phonenumber") || "").toString().trim();
     const body = {
+      id_type:          (fd.get("id_type")         || "").toString().trim(),
       personid:         (fd.get("personid")        || "").toString().trim(),
       name:             (fd.get("name")            || "").toString().trim(),
       fathername:       (fd.get("fathername")      || "").toString().trim(),
@@ -1840,6 +1918,15 @@ function setupAddClientForm(){
       enddatelicense:   (fd.get("enddatelicense")   || "").toString().trim(),
       photo:            (fd.get("photo")            || "").toString() || null,
     };
+
+    // License-only mode hides the licenseid input — the user types the
+    // license number into the visible personid field. Route it into
+    // licenseid before sending and blank out personid so the backend
+    // stores NULL for it (matching the "no other ID" semantics).
+    if (body.id_type === "license"){
+      body.licenseid = body.personid;
+      body.personid  = "";
+    }
 
     try {
       const r = await fetch(API.url("/api/clients"), {
@@ -1861,7 +1948,7 @@ function setupAddClientForm(){
       if (natSel){ natSel.value = ""; if (natSel._ss) natSel._ss.sync(); }
       const codeSel2 = $("#add-client-phone-code");
       if (codeSel2){ codeSel2.value = "961"; if (codeSel2._ss) codeSel2._ss.sync(); }
-      showAddClientStatus(t("addClient.saved").replace("{pid}", body.personid));
+      showAddClientStatus(t("addClient.saved").replace("{pid}", body.personid || body.licenseid));
       toast(t("toast.added"), "success");
       // Keep the admin's clients list and both client pickers in sync.
       await refreshClients();
@@ -1881,11 +1968,29 @@ function setupAddClientForm(){
       return;
     }
 
-    if (!validateRequiredFields(form, [
-      "personid", "name", "fathername", "mothername", "nationality",
-      "dateofbirth", "licenseid", "startdatelicense", "enddatelicense",
-      "phonenumber",
-    ])){
+    // Required fields depend on the selected id_type:
+    //   passport      → personid + DOB + license dates (+father/mother if Lebanese)
+    //   national_id   → personid + DOB + license dates
+    //   license       → just licenseid + the always-required basics
+    const idt = ($("#add-client-id-type")?.value || "").trim();
+    const nat = ($("#add-client-nationality")?.value || "").trim();
+    if (!idt){
+      setFieldError(form, "id_type", t("field.required"));
+      toast(t("toast.fillAll"), "error");
+      return;
+    }
+    const required = ["name", "nationality", "phonenumber",
+                      "startdatelicense", "enddatelicense"];
+    if (idt !== "license") required.push("dateofbirth", "licenseid");
+    // personid is the visible input for every id_type — license mode
+    // hides licenseid and reuses personid as the license number (we
+    // route it through to body.licenseid in saveClient).
+    required.push("personid");
+    // Lebanese clients always need father + mother on record (it's part
+    // of the official identity in Lebanon). For every other nationality
+    // the fields stay visible but optional.
+    if (nat === "Lebanese") required.push("fathername", "mothername");
+    if (!validateRequiredFields(form, required)){
       toast(t("toast.fillAll"), "error");
       return;
     }
@@ -2710,10 +2815,10 @@ const ENTITY = {
     titleKey: "clients.title",
     endpoint: "/api/clients",
     fields: [
-      { name: "personid",         labelKey: "clients.f.pid",      required: true },
+      { name: "personid",         labelKey: "clients.f.pid" },
       { name: "name",             labelKey: "clients.f.name" },
-      { name: "fathername",       labelKey: "clients.f.father",   required: true },
-      { name: "mothername",       labelKey: "clients.f.mother",   required: true },
+      { name: "fathername",       labelKey: "clients.f.father" },
+      { name: "mothername",       labelKey: "clients.f.mother" },
       { name: "nationality",      labelKey: "addClient.nationality" },
       { name: "phonenumber",      labelKey: "clients.f.phone" },
       { name: "dateofbirth",      labelKey: "clients.f.dob",      type: "date" },

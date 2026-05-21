@@ -38,18 +38,19 @@ CREATE TABLE IF NOT EXISTS cars (
 -- ---- 3) CLIENTS --------------------------------------
 CREATE TABLE IF NOT EXISTS clients (
     id                  SERIAL PRIMARY KEY,
-    personid            VARCHAR(40)  NOT NULL UNIQUE,
-    name                VARCHAR(100),                 -- optional now
-    fathername          VARCHAR(100) NOT NULL,
-    mothername          VARCHAR(100) NOT NULL,
+    personid            VARCHAR(40)  UNIQUE,          -- passport / national-ID #; null for license-only clients
+    name                VARCHAR(100),                 -- optional
+    fathername          VARCHAR(100),                 -- optional (Lebanese-passport convention only)
+    mothername          VARCHAR(100),                 -- optional (Lebanese-passport convention only)
     nationality         VARCHAR(60),
-    phonenumber         VARCHAR(30),                  -- optional now
-    dateofbirth         DATE,                         -- optional now
+    phonenumber         VARCHAR(30),                  -- optional
+    dateofbirth         DATE,                         -- optional
     licenseid           VARCHAR(40)  NOT NULL UNIQUE,
-    startdatelicense    DATE         NOT NULL,
-    enddatelicense      DATE         NOT NULL,
+    startdatelicense    DATE,                         -- optional (license-only clients can skip)
+    enddatelicense      DATE,                         -- optional (license-only clients can skip)
     company_id          INTEGER      REFERENCES companies(id) ON DELETE SET NULL,
-    photo               TEXT          -- base64 data URL of the client's photo
+    photo               TEXT,                         -- base64 data URL of the client's photo OR id document
+    id_type             VARCHAR(20)                   -- 'passport' | 'national_id' | 'license'
 );
 CREATE INDEX IF NOT EXISTS idx_clients_company ON clients(company_id);
 
