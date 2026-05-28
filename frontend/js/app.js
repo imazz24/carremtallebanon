@@ -77,6 +77,96 @@ function emptyRow(table, cols){
   tb.innerHTML = `<tr class="empty-row"><td colspan="${cols}">${escape(t("table.empty"))}</td></tr>`;
 }
 
+/* ============== PAGINATION ============== */
+const Pager = (() => {
+  const _state = {};
+
+  function _get(key){
+    if (!_state[key]) _state[key] = { page: 1, size: 10 };
+    return _state[key];
+  }
+
+  function reset(key){ const s = _get(key); s.page = 1; }
+
+  function slice(key, rows){
+    const s = _get(key);
+    const total = Math.ceil(rows.length / s.size) || 1;
+    if (s.page > total) s.page = total;
+    const start = (s.page - 1) * s.size;
+    return { rows: rows.slice(start, start + s.size), page: s.page, total, allCount: rows.length, size: s.size };
+  }
+
+  function render(key, topSel, bottomSel, info, onPageChange){
+    const topEl = $(topSel);
+    const btmEl = $(bottomSel);
+    const hide = info.allCount <= 10;
+
+    // Top: page-size selector + total count
+    if (topEl){
+      if (hide){ topEl.innerHTML = ""; topEl.hidden = true; }
+      else {
+        topEl.hidden = false;
+        topEl.innerHTML = `
+          <div class="pager-top">
+            <div class="pager-size">
+              <span class="pager-size-label">${escape(t("pager.show"))}</span>
+              <select class="pager-size-select">
+                <option value="10" ${info.size === 10 ? "selected" : ""}>10</option>
+                <option value="25" ${info.size === 25 ? "selected" : ""}>25</option>
+              </select>
+              <span class="pager-size-label">${escape(t("pager.perPage"))}</span>
+            </div>
+            <div class="pager-info">${info.allCount} ${info.allCount === 1 ? t("report.result") : t("report.results")}</div>
+          </div>`;
+        const sizeSel = topEl.querySelector(".pager-size-select");
+        if (sizeSel){
+          sizeSel.addEventListener("change", () => {
+            const s = _get(key);
+            s.size = Number(sizeSel.value);
+            s.page = 1;
+            onPageChange();
+          });
+        }
+      }
+    }
+
+    // Bottom: page navigation
+    if (btmEl){
+      if (hide || info.total <= 1){ btmEl.innerHTML = ""; btmEl.hidden = true; }
+      else {
+        btmEl.hidden = false;
+        const pages = [];
+        const maxVisible = 5;
+        let startP = Math.max(1, info.page - Math.floor(maxVisible / 2));
+        let endP = Math.min(info.total, startP + maxVisible - 1);
+        if (endP - startP < maxVisible - 1) startP = Math.max(1, endP - maxVisible + 1);
+        for (let i = startP; i <= endP; i++) pages.push(i);
+
+        const prevDis = info.page <= 1 ? "disabled" : "";
+        const nextDis = info.page >= info.total ? "disabled" : "";
+        btmEl.innerHTML = `
+          <div class="pager-bottom">
+            <div class="pager-nav">
+              <button class="pager-btn" data-page="${info.page - 1}" ${prevDis}>‹</button>
+              ${pages.map(p => `<button class="pager-btn ${p === info.page ? "active" : ""}" data-page="${p}">${p}</button>`).join("")}
+              <button class="pager-btn" data-page="${info.page + 1}" ${nextDis}>›</button>
+            </div>
+            <span class="pager-pos">${escape(t("pager.page"))} ${info.page} / ${info.total}</span>
+          </div>`;
+        btmEl.querySelectorAll(".pager-btn:not([disabled])").forEach(btn => {
+          btn.addEventListener("click", () => {
+            const s = _get(key);
+            s.page = Number(btn.dataset.page);
+            onPageChange();
+          });
+        });
+      }
+    }
+  }
+
+  return { reset, slice, render };
+})();
+
 function showModal(sel){
   const m = $(sel);
   if (!m) return;
@@ -217,12 +307,15 @@ function getCompaniesRows(){
 function renderCompanies(){
   const tbl = $("#tbl-companies");
   const rows = getCompaniesRows();
-  const countEl = $("#companies-count");
-  if (countEl) countEl.textContent = `${rows.length} ${rows.length === 1 ? t("report.result") : t("report.results")}`;
-  if (!rows.length) return emptyRow(tbl, 8);
+  if (!rows.length){
+    const pt = $("#pager-top-companies"); if (pt) pt.hidden = true;
+    const pb = $("#pager-companies"); if (pb) pb.hidden = true;
+    return emptyRow(tbl, 9);
+  }
 
+  const info = Pager.slice("companies", rows);
   const html = [];
-  rows.forEach((c, i) => {
+  info.rows.forEach((c, i) => {
     const hasCoords = c.x != null && c.y != null;
     const coords = hasCoords
       ? `<a href="#" class="company-coord-link" data-x="${c.x}" data-y="${c.y}" data-name="${escape(c.companyname)}">
@@ -235,11 +328,13 @@ function renderCompanies(){
       : `<span class="company-logo-thumb company-logo-thumb-empty">${escape((c.companyname||"?").charAt(0).toUpperCase())}</span>`;
 
     // Main company row
+    const owner = c.owner_name ? escape(c.owner_name) : `<span class="badge no">—</span>`;
     html.push(`
       <tr class="company-main-row">
-        <td>${i + 1}</td>
+        <td>${(info.page - 1) * info.size + i + 1}</td>
         <td>${logo}</td>
         <td>${escape(c.companyname)}</td>
+        <td>${owner}</td>
         <td>${escape(c.location)}</td>
         <td>${escape(c.companyid)}</td>
         <td>${phone}</td>
@@ -258,6 +353,7 @@ function renderCompanies(){
           <td></td>
           <td></td>
           <td class="branch-cell"><span class="branch-marker">↳</span> ${escape(t("companies.branchOf"))} <strong>${escape(c.companyname)}</strong></td>
+          <td></td>
           <td>${escape(b.location)}</td>
           <td>${escape(c.companyid)}</td>
           <td>${formatPhonesCell(b.phonenumber)}</td>
@@ -279,6 +375,7 @@ function renderCompanies(){
     });
   });
   bindRowActions(tbl);
+  Pager.render("companies", "#pager-top-companies", "#pager-companies", info, renderCompanies);
 }
 
 /* ============== CARS ============== */
@@ -299,12 +396,16 @@ function getCarsRows(){
 function renderCars(){
   const tbl = $("#tbl-cars");
   const rows = getCarsRows();
-  const countEl = $("#cars-count");
-  if (countEl) countEl.textContent = `${rows.length} ${rows.length === 1 ? t("report.result") : t("report.results")}`;
-  if (!rows.length) return emptyRow(tbl, 9);
-  tbl.tBodies[0].innerHTML = rows.map((c,i) => `
+  if (!rows.length){
+    const pt = $("#pager-top-cars"); if (pt) pt.hidden = true;
+    const pb = $("#pager-cars"); if (pb) pb.hidden = true;
+    return emptyRow(tbl, 9);
+  }
+
+  const info = Pager.slice("cars", rows);
+  tbl.tBodies[0].innerHTML = info.rows.map((c,i) => `
     <tr>
-      <td>${i+1}</td>
+      <td>${(info.page - 1) * info.size + i + 1}</td>
       <td>${escape(c.companyname)}</td>
       <td><code>${escape(c.vin)}</code></td>
       <td>${escape(c.type)}</td>
@@ -315,6 +416,7 @@ function renderCars(){
       <td>${rowActionsHtml("cars", c.id)}</td>
     </tr>`).join("");
   bindRowActions(tbl);
+  Pager.render("cars", "#pager-top-cars", "#pager-cars", info, renderCars);
 }
 
 /* ============== BRANCHES (admin: shown as sub-rows in #tbl-companies) ===== */
@@ -348,20 +450,25 @@ function getClientsRows(){
 function renderClients(){
   const tbl = $("#tbl-clients");
   const rows = getClientsRows();
-  const countEl = $("#clients-count");
-  if (countEl) countEl.textContent = `${rows.length} ${rows.length === 1 ? t("report.result") : t("report.results")}`;
-  if (!rows.length) return emptyRow(tbl, 11);
+  if (!rows.length){
+    const pt = $("#pager-top-clients"); if (pt) pt.hidden = true;
+    const pb = $("#pager-clients"); if (pb) pb.hidden = true;
+    return emptyRow(tbl, 12);
+  }
+
+  const info = Pager.slice("clients", rows);
   const dash = `<span class="badge no">—</span>`;
   const cell = (v) => v ? escape(v) : dash;
   const photo = (p, name) => p
     ? `<img src="${escape(p)}" alt="${escape(name||"")}" class="client-photo-thumb">`
     : `<span class="client-photo-thumb client-photo-thumb-empty">${escape((name||"?").charAt(0).toUpperCase())}</span>`;
-  tbl.tBodies[0].innerHTML = rows.map((c,i) => `
+  tbl.tBodies[0].innerHTML = info.rows.map((c,i) => `
     <tr>
-      <td>${i+1}</td>
-      <td>${photo(c.photo, c.name)}</td>
+      <td>${(info.page - 1) * info.size + i + 1}</td>
+      <td>${photo(c.photo, c.firstname || c.name)}</td>
       <td>${cell(c.personid)}</td>
-      <td>${cell(c.name)}</td>
+      <td>${cell(c.firstname)}</td>
+      <td>${cell(c.lastname)}</td>
       <td>${cell(c.fathername)}</td>
       <td>${cell(c.mothername)}</td>
       <td>${cell(c.nationality)}</td>
@@ -371,6 +478,7 @@ function renderClients(){
       <td>${rowActionsHtml("clients", c.id)}</td>
     </tr>`).join("");
   bindRowActions(tbl);
+  Pager.render("clients", "#pager-top-clients", "#pager-clients", info, renderClients);
 }
 
 /* ============== REPORT ============== */
@@ -415,15 +523,19 @@ function getReportRows(){
 function renderReport(){
   const tbl = $("#tbl-report");
   const rows = getReportRows();
-  const countEl = $("#report-count");
-  if (countEl) countEl.textContent = `${rows.length} ${rows.length === 1 ? t("report.result") : t("report.results")}`;
-  if (!rows.length) return emptyRow(tbl, 13);
-  tbl.tBodies[0].innerHTML = rows.map((r, i) => {
+  if (!rows.length){
+    const pt = $("#pager-top-report"); if (pt) pt.hidden = true;
+    const pb = $("#pager-report"); if (pb) pb.hidden = true;
+    return emptyRow(tbl, 13);
+  }
+
+  const info = Pager.slice("report", rows);
+  tbl.tBodies[0].innerHTML = info.rows.map((r, i) => {
     const cphone = r.company_phone
       ? `<a href="tel:${escape(r.company_phone)}">${escape(r.company_phone)}</a>`
       : `<span class="badge no">—</span>`;
     return `
-    <tr data-row="${i}" class="report-row">
+    <tr data-row="${(info.page - 1) * info.size + i}" class="report-row">
       <td><strong>${escape(r.client_name)}</strong></td>
       <td>${escape(r.client_father)}</td>
       <td>${escape(r.client_phone)}</td>
@@ -438,7 +550,7 @@ function renderReport(){
       <td>${escape(r.end_date)}</td>
       <td>
         <div class="row-actions">
-          <button type="button" class="row-btn pdf" data-detail="${i}">${escape(t("action.open"))}</button>
+          <button type="button" class="row-btn pdf" data-detail="${(info.page - 1) * info.size + i}">${escape(t("action.open"))}</button>
         </div>
       </td>
     </tr>`;
@@ -451,6 +563,7 @@ function renderReport(){
       Detail.open(rows[idx]);
     });
   });
+  Pager.render("report", "#pager-top-report", "#pager-report", info, renderReport);
 }
 
 /* ============== RENT FLOW ============== */
@@ -759,6 +872,7 @@ function setupRegisterForm(){
     const body = {
       companyname: (fd.get("companyname") || "").toString().trim(),
       password:    (fd.get("password")    || "").toString(),
+      owner_name:  (fd.get("owner_name")  || "").toString().trim(),
     };
     if (!body.companyname || !body.password){
       toast(t("toast.error"), "error");
@@ -1082,6 +1196,7 @@ function setupCompanyInfo(){
       companyname: fd.get("companyname"),
       companyid:   fd.get("companyid"),
       location:    fd.get("location"),
+      owner_name:  fd.get("owner_name") || null,
       phonenumber: phones || null,
       x: fd.get("x") === "" ? null : Number(fd.get("x")),
       y: fd.get("y") === "" ? null : Number(fd.get("y")),
@@ -1391,6 +1506,50 @@ function setupAddCarForm(){
   }
   loadKnownVins();
 
+  // VIN split mode: prefix (11 chars, locked) + serial (6 chars, editable)
+  const vinFullMode  = $("#vin-full-mode");
+  const vinSplitMode = $("#vin-split-mode");
+  const vinPrefixBadge = $("#vin-prefix-badge");
+  const vinSerialInput = $("#vin-serial-input");
+  const vinEditFullBtn = $("#vin-edit-full-btn");
+  let _vinPrefix = "";
+
+  function enterSplitMode(vin){
+    _vinPrefix = vin.substring(0, 11).toUpperCase();
+    if (vinPrefixBadge) vinPrefixBadge.textContent = _vinPrefix;
+    if (vinSerialInput) vinSerialInput.value = "";
+    if (vinFullMode)  vinFullMode.hidden = true;
+    if (vinSplitMode) vinSplitMode.hidden = false;
+    setTimeout(() => vinSerialInput?.focus(), 50);
+  }
+
+  function exitSplitMode(){
+    const serial = (vinSerialInput?.value || "").toUpperCase();
+    const fullVin = _vinPrefix + serial;
+    const vinInput2 = form.querySelector('input[name="vin"]');
+    if (vinInput2) vinInput2.value = fullVin;
+    _vinPrefix = "";
+    if (vinFullMode)  vinFullMode.hidden = false;
+    if (vinSplitMode) vinSplitMode.hidden = true;
+    lastVinSeen = "";
+    setTimeout(() => vinInput2?.focus(), 50);
+  }
+
+  function getSplitVin(){
+    if (!vinSplitMode?.hidden && _vinPrefix){
+      return (_vinPrefix + (vinSerialInput?.value || "")).toUpperCase();
+    }
+    return null;
+  }
+
+  if (vinEditFullBtn) vinEditFullBtn.addEventListener("click", exitSplitMode);
+
+  if (vinSerialInput){
+    vinSerialInput.addEventListener("input", () => {
+      vinSerialInput.value = vinSerialInput.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    });
+  }
+
   function autoFillFromKnown(known){
     const typeSel  = $("#add-car-type");
     const modelSel = $("#add-car-model");
@@ -1398,12 +1557,9 @@ function setupAddCarForm(){
     if (typeSel)  { typeSel.value  = known.type;  if (typeSel._ss)  typeSel._ss.sync();  }
     if (modelSel) { modelSel.value = known.model; if (modelSel._ss) modelSel._ss.sync(); }
     if (colorSel) { colorSel.value = known.color; if (colorSel._ss) colorSel._ss.sync(); }
+    enterSplitMode(known.vin);
   }
 
-  // Live VIN decode: when the user finishes typing (or picks from the
-  // datalist) we first try the curated registry. If it's a hit, type/
-  // model/color are filled instantly. Otherwise we fall back to the
-  // structural check + NHTSA cross-decode.
   const vinInput  = form.querySelector('input[name="vin"]');
   const vinHint   = $("#add-car-vin-hint");
   let lastVinSeen = "";
@@ -1450,14 +1606,18 @@ function setupAddCarForm(){
   // already claimed this VIN.
   async function findCarByVinAnywhere(vin){
     try {
-      const r = await fetch(API.url("/api/cars"));
-      if (!r.ok) return null;
-      const list = await r.json();
-      return list.find(c => String(c.vin || "").toUpperCase().trim() === vin) || null;
+      const r = await fetch(API.url(`/api/check-vin?vin=${encodeURIComponent(vin)}`), {
+        headers: authHeaders(),
+      });
+      if (r.status === 204 || !r.ok) return null;
+      return await r.json();
     } catch (e){ return null; }
   }
 
   async function decodeCurrentVin(){
+    // In split mode, the prefix is already validated — skip live decode
+    if (!vinSplitMode?.hidden && _vinPrefix) return;
+
     const vin = (vinInput.value || "").trim().toUpperCase();
     if (vin === lastVinSeen) return;
     lastVinSeen = vin;
@@ -1465,11 +1625,17 @@ function setupAddCarForm(){
 
     if (!vin){ setVinHint(null, ""); return; }
 
-    // 0. Has this VIN been registered before? Split by company:
-    //    - Same company → auto-fill so the user sees they added it.
-    //    - Another company → warn and clear the VIN; the unique
-    //      constraint would reject the save anyway, but bailing out
-    //      early avoids the user filling in the rest of the form.
+    // Known registry → enter split mode so the user types their own
+    // serial number. Check this FIRST — even if another company already
+    // has this exact VIN, the user will change the last 6 digits.
+    const known = knownVinsByVin[vin];
+    if (known){
+      autoFillFromKnown(known);
+      setVinHint("ok", "");
+      return;
+    }
+
+    // Has this exact VIN been registered before?
     const u = AUTH.user();
     const existing = await findCarByVinAnywhere(vin);
     if (existing){
@@ -1489,13 +1655,6 @@ function setupAddCarForm(){
       }
       return;
     }
-
-    // 1. Pre-known registry → auto-fill type/model/color immediately.
-    //    But we still ask the backend (vininfo + NHTSA) so the user can
-    //    SEE the validation pass — picking a registry entry doesn't
-    //    bypass any check.
-    const known = knownVinsByVin[vin];
-    if (known) autoFillFromKnown(known);
 
     if (vin.length !== 17){
       setVinHint(known ? "ok" : null,
@@ -1577,6 +1736,10 @@ function setupAddCarForm(){
       if (vinHint){ vinHint.hidden = true; vinHint.textContent = ""; }
       clearAllFieldErrors(form);
       lastVinSeen = "";
+      _vinPrefix = "";
+      if (vinFullMode)  vinFullMode.hidden = false;
+      if (vinSplitMode) vinSplitMode.hidden = true;
+      if (vinSerialInput) vinSerialInput.value = "";
     }, 0);
   });
 
@@ -1603,7 +1766,13 @@ function setupAddCarForm(){
     }
 
     const fd       = new FormData(form);
-    const vin      = (fd.get("vin")          || "").toString().trim().toUpperCase();
+    const vin      = (getSplitVin() || (fd.get("vin") || "").toString().trim()).toUpperCase();
+
+    if (vin.length !== 17){
+      setFieldError(form, "vin", t("addCar.vinLength"));
+      toast(t("addCar.vinLength"), "error");
+      return;
+    }
     const type     = (fd.get("type")         || "").toString().trim();
     const model    = (fd.get("model")        || "").toString().trim();
     const color    = (fd.get("color")        || "").toString().trim();
@@ -1703,6 +1872,100 @@ const NATIONALITIES = [
   "Zambian", "Zimbabwean",
 ];
 
+/* ============== DOCUMENT VALIDATOR ============== */
+const DocValidator = (() => {
+  const ANALYSIS_SIZE = 300;
+
+  function loadImage(file){
+    return new Promise((res, rej) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload  = () => { URL.revokeObjectURL(url); res(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("Cannot load image")); };
+      img.src = url;
+    });
+  }
+
+  function analyze(img){
+    const canvas = document.createElement("canvas");
+    const scale  = Math.min(1, ANALYSIS_SIZE / Math.max(img.width, img.height));
+    const w = Math.round(img.width  * scale);
+    const h = Math.round(img.height * scale);
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, w, h);
+    const data = ctx.getImageData(0, 0, w, h).data;
+    const total = w * h;
+
+    let sumBright = 0, highContrast = 0, lightPixels = 0;
+    for (let i = 0; i < data.length; i += 4){
+      const gray = data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114;
+      sumBright += gray;
+      if (gray > 200) lightPixels++;
+    }
+    const avgBright = sumBright / total;
+    const lightRatio = lightPixels / total;
+
+    // Edge detection — count pixels with strong horizontal gradient
+    let edgeCount = 0;
+    for (let y = 0; y < h; y++){
+      for (let x = 1; x < w - 1; x++){
+        const idx = (y * w + x) * 4;
+        const left  = data[idx - 4] * 0.299 + data[idx - 3] * 0.587 + data[idx - 2] * 0.114;
+        const right = data[idx + 4] * 0.299 + data[idx + 5] * 0.587 + data[idx + 6] * 0.114;
+        if (Math.abs(right - left) > 40) edgeCount++;
+      }
+    }
+    const edgeRatio = edgeCount / total;
+
+    // Aspect ratio — standard ID cards ~1.586, passports ~1.42
+    const aspect = Math.max(img.width, img.height) / Math.min(img.width, img.height);
+    const goodAspect = aspect >= 1.2 && aspect <= 2.0;
+
+    // Score: documents have light backgrounds, lots of edges (text), reasonable aspect
+    let score = 0;
+    if (lightRatio > 0.25) score += 30;
+    if (lightRatio > 0.40) score += 10;
+    if (edgeRatio > 0.06)  score += 25;
+    if (edgeRatio > 0.10)  score += 10;
+    if (goodAspect)        score += 15;
+    if (avgBright > 140)   score += 10;
+
+    return { score, lightRatio, edgeRatio, aspect, avgBright };
+  }
+
+  async function validate(file){
+    if (!file) return { ok: false, reason: "no_file" };
+
+    if (/^application\/pdf/i.test(file.type)){
+      return { ok: true, reason: "pdf" };
+    }
+
+    if (!/^image\//i.test(file.type)){
+      return { ok: false, reason: "not_image" };
+    }
+
+    try {
+      const img = await loadImage(file);
+
+      if (img.width < 200 || img.height < 200){
+        return { ok: false, reason: "too_small" };
+      }
+
+      const r = analyze(img);
+
+      if (r.score >= 50){
+        return { ok: true, reason: "document", score: r.score };
+      }
+      return { ok: false, reason: "not_document", score: r.score, detail: r };
+    } catch (e){
+      return { ok: false, reason: "error" };
+    }
+  }
+
+  return { validate };
+})();
+
 function setupAddClientForm(){
   const form = $("#form-add-client");
   if (!form) return;
@@ -1723,24 +1986,52 @@ function setupAddClientForm(){
     dataSel:     "#add-client-photo-data",
   };
 
-  // Wire the photo/document picker. LogoPicker handles images cleanly;
-  // for PDFs the <img> can't render so we swap in a "📄 PDF" indicator
-  // on the fallback span while keeping the data URL in the hidden field.
   LogoPicker.bind({ fileSel: "#add-client-photo-file", ...photoOpts });
-  $("#add-client-photo-file").addEventListener("change", () => {
-    const f = $("#add-client-photo-file").files[0];
-    if (!f || !/^application\/pdf/i.test(f.type)) return;
-    const img = $("#add-client-photo-preview");
-    const fb  = $("#add-client-photo-fallback");
-    img.hidden = true; img.removeAttribute("src");
-    fb.hidden = false;
-    fb.textContent = "📄 PDF";
-    fb.classList.add("logo-preview-doc");
+
+  const fileInput = $("#add-client-photo-file");
+  const docError  = form.querySelector('[data-error-for="photo"]');
+
+  fileInput.addEventListener("change", async () => {
+    const f = fileInput.files[0];
+    if (!f) return;
+
+    if (docError) { docError.textContent = ""; docError.hidden = true; }
+
+    // PDF handling
+    if (/^application\/pdf/i.test(f.type)){
+      const img = $("#add-client-photo-preview");
+      const fb  = $("#add-client-photo-fallback");
+      img.hidden = true; img.removeAttribute("src");
+      fb.hidden = false;
+      fb.textContent = "📄 PDF";
+      fb.classList.add("logo-preview-doc");
+      return;
+    }
+
+    // Validate the image looks like a document
+    const result = await DocValidator.validate(f);
+    if (!result.ok){
+      let msg = t("docValidator.notDocument");
+      if (result.reason === "too_small") msg = t("docValidator.tooSmall");
+      if (result.reason === "not_image") msg = t("docValidator.notImage");
+
+      if (docError) { docError.textContent = msg; docError.hidden = false; }
+      toast(msg, "error");
+
+      // Clear the upload
+      LogoPicker.reset(photoOpts);
+      const fb = $("#add-client-photo-fallback");
+      if (fb){ fb.textContent = "+"; fb.classList.remove("logo-preview-doc"); }
+      fileInput.value = "";
+      return;
+    }
   });
+
   $("#add-client-photo-clear").addEventListener("click", () => {
     const fb = $("#add-client-photo-fallback");
     fb.textContent = "+";
     fb.classList.remove("logo-preview-doc");
+    if (docError) { docError.textContent = ""; docError.hidden = true; }
   });
 
   // -------- ID-type dropdown: shows/hides personid + father/mother. --------
@@ -1754,12 +2045,23 @@ function setupAddClientForm(){
     // mode the licenseid field is hidden and we route this value into
     // licenseid at submit time (see saveClient).
     if (pidLabel){
-      const key = idt === "passport"    ? "addClient.pid.passport"
-                : idt === "national_id" ? "addClient.pid.national"
-                : idt === "license"     ? "addClient.pid.license"
+      const key = idt === "passport"              ? "addClient.pid.passport"
+                : idt === "national_id"           ? "addClient.pid.national"
+                : idt === "license"               ? "addClient.pid.license"
+                : idt === "international_license" ? "addClient.pid.international"
                 : "clients.f.pid";
       pidLabel.setAttribute("data-i18n", key);
       pidLabel.textContent = t(key);
+    }
+    const uploadLabel = $("#add-client-upload-label");
+    if (uploadLabel){
+      const ulKey = idt === "passport"              ? "addClient.upload.passport"
+                  : idt === "national_id"           ? "addClient.upload.national"
+                  : idt === "license"               ? "addClient.upload.license"
+                  : idt === "international_license" ? "addClient.upload.international"
+                  : "addClient.photoOrDoc";
+      uploadLabel.setAttribute("data-i18n", ulKey);
+      uploadLabel.textContent = t(ulKey);
     }
     const visit = (el, hidden) => {
       el.hidden = hidden;
@@ -1825,7 +2127,8 @@ function setupAddClientForm(){
       const el = form.querySelector(`[name="${name}"]`);
       if (el) el.value = val == null ? "" : String(val);
     };
-    setVal("name",             c.name             || "");
+    setVal("firstname",        c.firstname        || (c.name || "").split(" ")[0] || "");
+    setVal("lastname",         c.lastname         || (c.name || "").split(" ").slice(1).join(" ") || "");
     setVal("fathername",       c.fathername       || "");
     setVal("mothername",       c.mothername       || "");
     setVal("dateofbirth",      c.dateofbirth      || "");
@@ -1903,14 +2206,17 @@ function setupAddClientForm(){
     const fd = new FormData(form);
     const dialCode = ($("#add-client-phone-code")?.value || "961").trim();
     const localNum = (fd.get("phonenumber") || "").toString().trim();
+    const firstname = (fd.get("firstname") || "").toString().trim();
+    const lastname  = (fd.get("lastname")  || "").toString().trim();
     const body = {
       id_type:          (fd.get("id_type")         || "").toString().trim(),
       personid:         (fd.get("personid")        || "").toString().trim(),
-      name:             (fd.get("name")            || "").toString().trim(),
+      firstname,
+      lastname,
+      name:             [firstname, lastname].filter(Boolean).join(" "),
       fathername:       (fd.get("fathername")      || "").toString().trim(),
       mothername:       (fd.get("mothername")      || "").toString().trim(),
       nationality:      (fd.get("nationality")     || "").toString().trim(),
-      // Country code from dropdown + local number → "+CCC NUMBER".
       phonenumber:      localNum ? `+${dialCode} ${localNum}` : "",
       dateofbirth:      (fd.get("dateofbirth")      || "").toString().trim(),
       licenseid:        (fd.get("licenseid")        || "").toString().trim(),
@@ -1919,11 +2225,7 @@ function setupAddClientForm(){
       photo:            (fd.get("photo")            || "").toString() || null,
     };
 
-    // License-only mode hides the licenseid input — the user types the
-    // license number into the visible personid field. Route it into
-    // licenseid before sending and blank out personid so the backend
-    // stores NULL for it (matching the "no other ID" semantics).
-    if (body.id_type === "license"){
+    if (body.id_type === "license" || body.id_type === "international_license"){
       body.licenseid = body.personid;
       body.personid  = "";
     }
@@ -1979,7 +2281,7 @@ function setupAddClientForm(){
       toast(t("toast.fillAll"), "error");
       return;
     }
-    const required = ["name", "nationality", "phonenumber",
+    const required = ["firstname", "lastname", "nationality", "phonenumber",
                       "startdatelicense", "enddatelicense"];
     if (idt !== "license") required.push("dateofbirth", "licenseid");
     // personid is the visible input for every id_type — license mode
@@ -1989,7 +2291,7 @@ function setupAddClientForm(){
     // Lebanese clients always need father + mother on record (it's part
     // of the official identity in Lebanon). For every other nationality
     // the fields stay visible but optional.
-    if (nat === "Lebanese") required.push("fathername", "mothername");
+    // Father/mother names are always optional — kept for Lebanese convention but not enforced.
     if (!validateRequiredFields(form, required)){
       toast(t("toast.fillAll"), "error");
       return;
@@ -2134,8 +2436,12 @@ function setupCreateRentalForm(){
     }
     if (firstError){ toast(t("toast.error"), "error"); return; }
 
+    const today = new Date().toISOString().slice(0, 10);
+    const isToday = body.start_date === today;
+    const endpoint = isToday ? "/api/rentals" : "/api/reservations";
+
     try {
-      const r = await fetch(API.url("/api/rentals"), {
+      const r = await fetch(API.url(endpoint), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify(body),
@@ -2144,15 +2450,19 @@ function setupCreateRentalForm(){
       if (!r.ok){
         const msg = data.error || t("toast.error");
         if (/car/i.test(msg))  setFieldError(form, "car_vin", msg);
-        else if (/date/i.test(msg)) setFieldError(form, "end_date", msg);
+        else if (/date/i.test(msg) || /reservation/i.test(msg)) setFieldError(form, "end_date", msg);
         toast(msg, "error");
         return;
       }
       form.reset();
-      showCreateRentalStatus(t("rental.create.saved"));
+      if (isToday){
+        showCreateRentalStatus(t("rental.create.saved"));
+      } else {
+        showCreateRentalStatus(t("rental.create.reserved"));
+      }
       toast(t("toast.added"), "success");
-      // Pull fresh report rows so the new rental appears immediately.
       await refreshReport();
+      await Reservations.refresh();
     } catch (err){
       toast(err.message || t("toast.error"), "error");
     }
@@ -2293,45 +2603,50 @@ function rebuildCarsVinDropdown(){
 
 function setupReportSearch(){
   // ---------- Companies toolbar ----------
-  $("#filter-companies-name")?.addEventListener("change", renderCompanies);
+  $("#filter-companies-name")?.addEventListener("change", () => { Pager.reset("companies"); renderCompanies(); });
   $("#filter-companies-clear")?.addEventListener("click", () => {
     clearFilterSelect($("#filter-companies-name"));
+    Pager.reset("companies");
     renderCompanies();
   });
 
   // ---------- Cars toolbar (with cascading VIN) ----------
   $("#filter-cars-company")?.addEventListener("change", () => {
     rebuildCarsVinDropdown();
+    Pager.reset("cars");
     renderCars();
   });
-  $("#filter-cars-vin")?.addEventListener("change", renderCars);
+  $("#filter-cars-vin")?.addEventListener("change", () => { Pager.reset("cars"); renderCars(); });
   $("#filter-cars-clear")?.addEventListener("click", () => {
     clearFilterSelect($("#filter-cars-company"));
     rebuildCarsVinDropdown();
+    Pager.reset("cars");
     renderCars();
   });
 
   // ---------- Clients toolbar ----------
-  $("#filter-clients-lic")?.addEventListener("change", renderClients);
-  $("#filter-clients-name")?.addEventListener("change", renderClients);
+  $("#filter-clients-lic")?.addEventListener("change", () => { Pager.reset("clients"); renderClients(); });
+  $("#filter-clients-name")?.addEventListener("change", () => { Pager.reset("clients"); renderClients(); });
   $("#filter-clients-clear")?.addEventListener("click", () => {
     clearFilterSelect($("#filter-clients-lic"));
     clearFilterSelect($("#filter-clients-name"));
+    Pager.reset("clients");
     renderClients();
   });
 
   // ---------- Report toolbar ----------
-  $("#filter-report-company")?.addEventListener("change", renderReport);
-  $("#filter-report-client")?.addEventListener("change", renderReport);
-  $("#filter-report-lic")?.addEventListener("change", renderReport);
-  $("#report-from")?.addEventListener("change", renderReport);
-  $("#report-to")?.addEventListener("change", renderReport);
+  $("#filter-report-company")?.addEventListener("change", () => { Pager.reset("report"); renderReport(); });
+  $("#filter-report-client")?.addEventListener("change", () => { Pager.reset("report"); renderReport(); });
+  $("#filter-report-lic")?.addEventListener("change", () => { Pager.reset("report"); renderReport(); });
+  $("#report-from")?.addEventListener("change", () => { Pager.reset("report"); renderReport(); });
+  $("#report-to")?.addEventListener("change", () => { Pager.reset("report"); renderReport(); });
   $("#report-reset")?.addEventListener("click", () => {
     clearFilterSelect($("#filter-report-company"));
     clearFilterSelect($("#filter-report-client"));
     clearFilterSelect($("#filter-report-lic"));
     const f = $("#report-from"); if (f) f.value = "";
     const t2 = $("#report-to");  if (t2) t2.value = "";
+    Pager.reset("report");
     renderReport();
   });
 }
@@ -2429,6 +2744,204 @@ function refreshHeaderFromCompanies(){
   renderReportCompanyHead();
 }
 
+function updateStatsDashboard(){
+  const el = (id, val) => { const e = $(`#${id}`); if (e) e.textContent = val; };
+  el("stat-companies", state.companies.length);
+  el("stat-cars",      state.cars.length);
+  el("stat-clients",   state.clients.length);
+  el("stat-rentals",   state.report.length);
+
+  const dateEl = $("#dash-date");
+  if (dateEl){
+    const now = new Date();
+    dateEl.textContent = now.toLocaleDateString(undefined, {
+      weekday: "long", year: "numeric", month: "long", day: "numeric"
+    });
+  }
+}
+
+/* ---- Dashboard feed helpers ---- */
+const DASH_PAGE_SIZE = 20;
+
+function _matchSearch(text, query){
+  if (!query) return true;
+  return text.toLowerCase().includes(query.toLowerCase());
+}
+
+function _searchText(c){
+  return `${c.companyname} ${c.phonenumber||""} ${c.location||""} ${c.owner_name||""} ${c.username||""}`;
+}
+
+function _activityItemHtml(c){
+  const phone = c.phonenumber
+    ? c.phonenumber.split(",").map(p => p.trim()).filter(Boolean)
+        .map(p => `<a href="tel:${escape(p)}">${escape(p)}</a>`).join(" · ")
+    : `<span style="color:var(--muted)">—</span>`;
+  const dotCls = c.active_24h ? "active" : "idle";
+  const chips = [];
+  if (c.rentals_24h > 0)
+    chips.push(`<span class="dash-activity-chip rentals">${c.rentals_24h} ${escape(t("dash.chip.rentals"))}</span>`);
+  if (c.reservations_24h > 0)
+    chips.push(`<span class="dash-activity-chip reservations">${c.reservations_24h} ${escape(t("dash.chip.reservations"))}</span>`);
+  if (!c.active_24h)
+    chips.push(`<span class="dash-activity-chip none">${escape(t("dash.chip.idle"))}</span>`);
+  return `<div class="dash-activity-item">
+    <span class="dash-activity-dot ${dotCls}"></span>
+    <div class="dash-activity-info">
+      <span class="dash-activity-name">${escape(c.companyname)}</span>
+      <span class="dash-activity-meta">📞 ${phone}${c.location ? ` · 📍 ${escape(c.location)}` : ""}${c.owner_name ? ` · ${escape(c.owner_name)}` : ""}</span>
+    </div>
+    <div class="dash-activity-stats">${chips.join("")}</div>
+  </div>`;
+}
+
+function _inactiveItemHtml(c){
+  const phone = c.phonenumber
+    ? c.phonenumber.split(",").map(p => p.trim()).filter(Boolean)
+        .map(p => `<a href="tel:${escape(p)}">${escape(p)}</a>`).join(" · ")
+    : `<span style="color:var(--muted)">—</span>`;
+  const owner = c.owner_name ? escape(c.owner_name) : "";
+  const ownerBit = owner ? ` · ${owner}` : "";
+  const days = c.days_inactive >= 1
+    ? `${c.days_inactive} ${t("alert.inactive.days")}`
+    : `${c.hours_inactive}h`;
+  return `<div class="alert-card">
+    <div class="alert-card-info">
+      <span class="alert-card-name">${escape(c.companyname)}${ownerBit}</span>
+      <span class="alert-card-meta">
+        📞 ${phone}
+        ${c.location ? ` · 📍 ${escape(c.location)}` : ""}
+        · 👤 ${escape(c.username)}
+      </span>
+    </div>
+    <span class="alert-card-badge">${escape(days)} ${t("alert.inactive.ago")}</span>
+  </div>`;
+}
+
+function _loadMoreBar(shown, total){
+  if (shown >= total) return "";
+  return `<div class="dash-load-more">
+    <button type="button" class="dash-load-more-btn">
+      ${escape(t("dash.loadMore"))} <span class="dash-load-more-count">(${shown} / ${total})</span>
+    </button>
+  </div>`;
+}
+
+/* Populate a dashboard company <select> with all registered company names.
+   Keeps the "— All companies —" placeholder and re-syncs SearchSelect. */
+function _populateDashCompanySelect(selectEl, companies){
+  if (!selectEl) return;
+  const cur = selectEl.value;
+  const placeholder = selectEl.querySelector('option[disabled][hidden]')?.outerHTML || "";
+  const names = Array.from(new Set(companies.map(c => c.companyname).filter(Boolean)))
+    .sort((a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: "base" }));
+  selectEl.innerHTML = placeholder
+    + `<option value="">${escape(t("dash.search.allCompanies"))}</option>`
+    + names.map(n => `<option value="${escape(n)}">${escape(n)}</option>`).join("");
+  if (cur && names.includes(cur)) selectEl.value = cur;
+  if (selectEl._ss) selectEl._ss.sync();
+}
+
+/* ---- Dashboard: activity feed ---- */
+let _dashActivityData = [];
+let _dashActivityShown = DASH_PAGE_SIZE;
+
+function renderDashActivity(){
+  const list = $("#dash-activity-list");
+  const countBadge = $("#dash-active-count");
+  if (!list) return;
+  const selected = ($("#dash-activity-search")?.value || "").trim();
+  const filtered = selected
+    ? _dashActivityData.filter(c => c.companyname === selected)
+    : _dashActivityData;
+  const activeCount = filtered.filter(c => c.active_24h).length;
+  if (countBadge) countBadge.textContent = `${activeCount} / ${filtered.length}`;
+
+  if (!filtered.length){
+    list.innerHTML = `<p class="dash-empty">${escape(selected ? t("dash.search.none") : t("dash.activity.empty"))}</p>`;
+    return;
+  }
+  const page = filtered.slice(0, _dashActivityShown);
+  list.innerHTML = page.map(_activityItemHtml).join("")
+    + _loadMoreBar(_dashActivityShown, filtered.length);
+
+  const moreBtn = list.querySelector(".dash-load-more-btn");
+  if (moreBtn) moreBtn.addEventListener("click", () => {
+    _dashActivityShown += DASH_PAGE_SIZE;
+    renderDashActivity();
+  });
+}
+
+async function loadDashboardActivity(){
+  const u = AUTH.user();
+  if (!u || u.role !== "admin") return;
+  try {
+    const r = await fetch(API.url("/api/dashboard-activity"), { headers: authHeaders() });
+    if (!r.ok) return;
+    _dashActivityData = await r.json();
+  } catch (e){ _dashActivityData = []; }
+  _dashActivityShown = DASH_PAGE_SIZE;
+  // The dropdown lists every registered company (both active + inactive).
+  _populateDashCompanySelect($("#dash-activity-search"), _dashActivityData);
+  _populateDashCompanySelect($("#dash-inactive-search"), _dashActivityData);
+  renderDashActivity();
+  const searchEl = $("#dash-activity-search");
+  if (searchEl && !searchEl._wired){
+    searchEl._wired = true;
+    searchEl.addEventListener("change", () => { _dashActivityShown = DASH_PAGE_SIZE; renderDashActivity(); });
+  }
+}
+
+/* ---- Dashboard: inactive alerts ---- */
+let _dashInactiveData = [];
+let _dashInactiveShown = DASH_PAGE_SIZE;
+
+function renderInactiveAlerts(){
+  const box  = $("#inactive-alert-box");
+  const list = $("#inactive-alert-list");
+  const cnt  = $("#inactive-alert-count");
+  if (!box || !list) return;
+  if (!_dashInactiveData.length){ box.hidden = true; return; }
+  box.hidden = false;
+
+  const selected = ($("#dash-inactive-search")?.value || "").trim();
+  const filtered = selected
+    ? _dashInactiveData.filter(c => c.companyname === selected)
+    : _dashInactiveData;
+  if (cnt) cnt.textContent = filtered.length;
+
+  if (!filtered.length){
+    list.innerHTML = `<p class="dash-empty" style="padding:.8rem 1rem">${escape(t("dash.search.none"))}</p>`;
+    return;
+  }
+  const page = filtered.slice(0, _dashInactiveShown);
+  list.innerHTML = page.map(_inactiveItemHtml).join("")
+    + _loadMoreBar(_dashInactiveShown, filtered.length);
+
+  const moreBtn = list.querySelector(".dash-load-more-btn");
+  if (moreBtn) moreBtn.addEventListener("click", () => {
+    _dashInactiveShown += DASH_PAGE_SIZE;
+    renderInactiveAlerts();
+  });
+}
+
+async function loadInactiveAlerts(){
+  const u = AUTH.user();
+  if (!u || u.role !== "admin") return;
+  try {
+    const r = await fetch(API.url("/api/inactive-companies"), { headers: authHeaders() });
+    if (!r.ok) return;
+    _dashInactiveData = await r.json();
+  } catch (e){ _dashInactiveData = []; }
+  _dashInactiveShown = DASH_PAGE_SIZE;
+  renderInactiveAlerts();
+  const searchEl = $("#dash-inactive-search");
+  if (searchEl && !searchEl._wired){
+    searchEl._wired = true;
+    searchEl.addEventListener("change", () => { _dashInactiveShown = DASH_PAGE_SIZE; renderInactiveAlerts(); });
+  }
+}
+
 function showApp(){
   $("#login-overlay").style.display = "none";
   document.body.style.overflow = "";
@@ -2471,6 +2984,44 @@ function showLogin(){
 }
 
 /* ----- role-based UI gate ----- */
+/* ============== ADMIN SIDEBAR PANEL TOGGLE ============== */
+const AdminSidebar = (() => {
+  const PANELS = ["dashboard", "companies", "cars", "clients", "admin-reservations", "report", "support"];
+  let _current = "dashboard";
+
+  function show(panel){
+    if (panel === "register-modal"){
+      showModal("#register-modal");
+      return;
+    }
+    _current = panel;
+    PANELS.forEach(p => {
+      if (p === "dashboard"){
+        const sd = $("#stats-dashboard");
+        const ia = $("#inactive-alerts");
+        if (sd) sd.style.display = panel === "dashboard" ? "" : "none";
+        if (ia) ia.style.display = panel === "dashboard" ? "" : "none";
+      } else {
+        const el = $(`#${p}`);
+        if (!el) return;
+        el.classList.toggle("admin-panel-active", p === panel);
+      }
+    });
+    $$(".sidebar-btn").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.panel === panel);
+    });
+  }
+
+  function setup(){
+    $$(".sidebar-btn").forEach(btn => {
+      btn.addEventListener("click", () => show(btn.dataset.panel));
+    });
+    show("dashboard");
+  }
+
+  return { setup, show };
+})();
+
 function applyRoleUI(){
   const user = AUTH.user();
   document.body.classList.remove("role-admin", "role-company");
@@ -2478,30 +3029,127 @@ function applyRoleUI(){
 
   document.body.classList.add(`role-${user.role}`);
 
-  // Register nav link is hidden by default in HTML; reveal for admin only.
-  const navReg  = $("#nav-register");
-  const isAdmin = user.role === "admin";
-  if (navReg) navReg.hidden = !isAdmin;
+  if (user.role === "admin"){
+    AdminSidebar.setup();
+    const collapseBtn = $("#sidebar-collapse-btn");
+    if (collapseBtn){
+      collapseBtn.addEventListener("click", () => {
+        const sidebar = $("#admin-sidebar");
+        if (sidebar) sidebar.classList.toggle("collapsed");
+        document.body.classList.toggle("sidebar-collapsed");
+      });
+    }
+    $$(".dash-toggle-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const panel = $(`#${btn.dataset.panel}`);
+        if (panel) panel.classList.toggle("collapsed");
+      });
+    });
+  }
 
-  // Companies user can only land on #report — bounce them there.
-  if (user.role === "company" && location.hash !== "#report"){
-    location.hash = "#report";
+  if (user.role === "company"){
+    const COMPANY_PANELS = ["report", "reservations", "company-info", "company-cars", "company-clients", "support"];
+    let _compCurrent = "report";
+
+    function showCompanyPanel(panel){
+      _compCurrent = panel;
+      COMPANY_PANELS.forEach(p => {
+        const el = $(`#${p}`);
+        if (el) el.classList.toggle("company-panel-active", p === panel);
+      });
+      $$("#company-sidebar .sidebar-btn").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.cpanel === panel);
+      });
+    }
+
+    $$("#company-sidebar .sidebar-btn").forEach(btn => {
+      btn.addEventListener("click", () => showCompanyPanel(btn.dataset.cpanel));
+    });
+
+    const compCollapseBtn = $("#company-sidebar-collapse");
+    if (compCollapseBtn){
+      compCollapseBtn.addEventListener("click", () => {
+        const sidebar = $("#company-sidebar");
+        if (sidebar) sidebar.classList.toggle("collapsed");
+        document.body.classList.toggle("sidebar-collapsed");
+      });
+    }
+
+    showCompanyPanel("report");
   }
 }
 
 function setupAuth(){
+  let _pendingCreds = null;
+
   $("#form-login").addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const ok = await AUTH.signIn(fd.get("username")?.trim(), fd.get("password"));
+    const username = fd.get("username")?.trim();
+    const password = fd.get("password");
+    const ok = await AUTH.signIn(username, password);
     if (ok){
       $("#login-error").hidden = true;
+      const user = AUTH.user();
+      if (user && user.must_reset_password){
+        _pendingCreds = { username, oldPassword: password };
+        showModal("#reset-pw-modal");
+        return;
+      }
       showApp();
       await loadAllData();
     } else {
       $("#login-error").hidden = false;
     }
   });
+
+  const resetForm = $("#form-reset-pw");
+  if (resetForm){
+    resetForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(resetForm);
+      const newPw = (fd.get("new_password") || "").toString();
+      const confirm = (fd.get("confirm_password") || "").toString();
+      const errEl = $("#reset-pw-error");
+      if (newPw !== confirm){
+        errEl.textContent = t("resetPw.mismatch");
+        errEl.hidden = false;
+        return;
+      }
+      if (newPw.length < 4){
+        errEl.textContent = "Password must be at least 4 characters.";
+        errEl.hidden = false;
+        return;
+      }
+      try {
+        const r = await fetch(API.url("/api/change-password"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: _pendingCreds?.username,
+            old_password: _pendingCreds?.oldPassword,
+            new_password: newPw,
+          }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok){
+          errEl.textContent = data.error || t("toast.error");
+          errEl.hidden = false;
+          return;
+        }
+        // Re-sign in with the new password so the session is fresh
+        await AUTH.signIn(_pendingCreds?.username, newPw);
+        _pendingCreds = null;
+        hideModal("#reset-pw-modal");
+        toast(t("resetPw.success"), "success");
+        showApp();
+        await loadAllData();
+      } catch (err){
+        errEl.textContent = err.message || t("toast.error");
+        errEl.hidden = false;
+      }
+    });
+  }
 
   $("#btn-logout").addEventListener("click", () => {
     AUTH.signOut();
@@ -2784,6 +3432,7 @@ const ENTITY = {
     endpoint: "/api/companies",
     fields: [
       { name: "companyname", labelKey: "companies.f.name",  required: true },
+      { name: "owner_name",  labelKey: "register.f.owner" },
       { name: "location",    labelKey: "companies.f.loc",   required: true },
       { name: "companyid",   labelKey: "companies.f.cid",   required: true },
       { name: "phonenumber", labelKey: "companies.f.phone" },
@@ -2816,7 +3465,8 @@ const ENTITY = {
     endpoint: "/api/clients",
     fields: [
       { name: "personid",         labelKey: "clients.f.pid" },
-      { name: "name",             labelKey: "clients.f.name" },
+      { name: "firstname",        labelKey: "clients.f.firstname" },
+      { name: "lastname",         labelKey: "clients.f.lastname" },
       { name: "fathername",       labelKey: "clients.f.father" },
       { name: "mothername",       labelKey: "clients.f.mother" },
       { name: "nationality",      labelKey: "addClient.nationality" },
@@ -3162,6 +3812,7 @@ const Detail = (() => {
     if (head) head.innerHTML = companyHeadHtml();
     $("#detail-body").innerHTML = rowDl(row);
     loadMedia(row.rental_id);
+    loadCoRenters(row.rental_id);
     showModal("#detail-modal");
   }
 
@@ -3199,10 +3850,157 @@ const Detail = (() => {
     });
   });
 
-  // Co-renter stub — schema change for many-to-many rentals is the next iteration.
-  $("#detail-add-client")?.addEventListener("click", () => {
-    toast(t("detail.addRenter.coming"), "success");
-  });
+  // Co-renters
+  function showClientDetail(cr){
+    const body = $("#client-detail-body");
+    if (!body) return;
+    const k = (key) => escape(t(key));
+    const v = (x) => x == null || x === "" ? "—" : escape(String(x));
+    const name = [cr.firstname, cr.lastname].filter(Boolean).join(" ") || cr.name || "—";
+    const photoHtml = cr.photo
+      ? `<div class="client-photo-strip"><img src="${escape(cr.photo)}" alt="" class="client-photo"></div>`
+      : "";
+    body.innerHTML = `${photoHtml}
+      <dl class="detail-grid">
+        <dt>${k("clients.f.name")}</dt>        <dd><strong>${escape(name)}</strong></dd>
+        <dt>${k("clients.f.pid")}</dt>         <dd>${v(cr.personid)}</dd>
+        <dt>${k("clients.f.father")}</dt>      <dd>${v(cr.fathername)}</dd>
+        <dt>${k("clients.f.mother")}</dt>      <dd>${v(cr.mothername)}</dd>
+        <dt>${k("addClient.nationality")}</dt> <dd>${v(cr.nationality)}</dd>
+        <dt>${k("clients.f.dob")}</dt>         <dd>${v(cr.dateofbirth)}</dd>
+        <dt>${k("clients.f.phone")}</dt>       <dd>${cr.phonenumber ? `<a href="tel:${escape(cr.phonenumber)}">${escape(cr.phonenumber)}</a>` : "—"}</dd>
+        <div class="full"></div>
+        <dt>${k("clients.f.lic")}</dt>         <dd><code>${v(cr.licenseid)}</code></dd>
+        <dt>${k("addClient.idType")}</dt>      <dd>${v(cr.id_type)}</dd>
+        <dt>${k("clients.f.licstart")}</dt>    <dd>${v(cr.startdatelicense)}</dd>
+        <dt>${k("clients.f.licend")}</dt>      <dd>${v(cr.enddatelicense)}</dd>
+      </dl>`;
+    showModal("#client-detail-modal");
+  }
+  $("#client-detail-close")?.addEventListener("click", () => hideModal("#client-detail-modal"));
+  $("#client-detail-cancel")?.addEventListener("click", () => hideModal("#client-detail-modal"));
+
+  async function loadCoRenters(rentalId){
+    const list = $("#detail-co-renters-list");
+    if (!list || !rentalId) return;
+    try {
+      const r = await fetch(API.url(`/api/rentals/${rentalId}/co-renters`), { headers: authHeaders() });
+      if (!r.ok){ list.innerHTML = ""; return; }
+      const data = await r.json();
+      if (!data.length){
+        list.innerHTML = `<p class="co-renters-empty">${escape(t("detail.noCoRenters"))}</p>`;
+        return;
+      }
+      list.innerHTML = data.map((cr, idx) => {
+        const name = [cr.firstname, cr.lastname].filter(Boolean).join(" ") || cr.name || "—";
+        const phone = cr.phonenumber
+          ? `<a href="tel:${escape(cr.phonenumber)}">${escape(cr.phonenumber)}</a>`
+          : "—";
+        return `<div class="co-renter-row">
+          <div class="co-renter-info">
+            <span class="co-renter-name co-renter-clickable" data-cr-idx="${idx}">${escape(name)}</span>
+            <span class="co-renter-meta">📞 ${phone} · ${escape(cr.licenseid || "")}</span>
+          </div>
+          <button type="button" class="co-renter-remove" data-co-id="${cr.id}" title="${escape(t("action.delete"))}">&times;</button>
+        </div>`;
+      }).join("");
+      list.querySelectorAll(".co-renter-clickable").forEach(el => {
+        el.addEventListener("click", () => {
+          const cr = data[Number(el.dataset.crIdx)];
+          if (cr) showClientDetail(cr);
+        });
+      });
+      list.querySelectorAll(".co-renter-remove").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          if (!confirm(t("confirm.delete"))) return;
+          try {
+            await fetch(API.url(`/api/rentals/${rentalId}/co-renters/${btn.dataset.coId}`), {
+              method: "DELETE", headers: authHeaders(),
+            });
+            toast(t("toast.deleted"), "success");
+            await loadCoRenters(rentalId);
+          } catch (e){ toast(e.message || t("toast.error"), "error"); }
+        });
+      });
+    } catch (e){ list.innerHTML = ""; }
+  }
+
+  function openCoRenterPicker(){
+    if (!currentRow || !currentRow.rental_id) return;
+    const rentalId = currentRow.rental_id;
+    showModal("#co-renter-modal");
+    const listEl = $("#co-renter-list");
+    const searchEl = $("#co-renter-search");
+    if (searchEl) searchEl.value = "";
+
+    async function loadClients(){
+      let clients = [];
+      try {
+        const r = await fetch(API.url("/api/clients"), { headers: authHeaders() });
+        if (r.ok) clients = await r.json();
+      } catch (e){}
+      renderPicker(clients);
+    }
+
+    function renderPicker(clients){
+      const q = (searchEl?.value || "").trim().toLowerCase();
+      const filtered = q
+        ? clients.filter(c => {
+            const txt = `${c.firstname||""} ${c.lastname||""} ${c.name||""} ${c.phonenumber||""} ${c.licenseid||""}`.toLowerCase();
+            return txt.includes(q);
+          })
+        : clients;
+      if (!filtered.length){
+        listEl.innerHTML = `<p class="dash-empty">${escape(t("dash.search.none"))}</p>`;
+        return;
+      }
+      listEl.innerHTML = filtered.map(c => {
+        const name = [c.firstname, c.lastname].filter(Boolean).join(" ") || c.name || "—";
+        return `<div class="co-renter-pick-item" data-client-id="${c.id}">
+          <div class="co-renter-pick-info">
+            <span class="co-renter-pick-name">${escape(name)}</span>
+            <span class="co-renter-pick-meta">${escape(c.licenseid || "")} · ${escape(c.phonenumber || "")}</span>
+          </div>
+          <button type="button" class="co-renter-pick-btn">${escape(t("action.add"))}</button>
+        </div>`;
+      }).join("");
+
+      listEl.querySelectorAll(".co-renter-pick-item").forEach(item => {
+        item.querySelector(".co-renter-pick-btn").addEventListener("click", async () => {
+          const clientId = item.dataset.clientId;
+          try {
+            const r = await fetch(API.url(`/api/rentals/${rentalId}/co-renters`), {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...authHeaders() },
+              body: JSON.stringify({ client_id: Number(clientId) }),
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok){
+              toast(data.error || t("toast.error"), "error");
+              return;
+            }
+            toast(t("toast.added"), "success");
+            item.remove();
+            await loadCoRenters(rentalId);
+          } catch (e){ toast(e.message || t("toast.error"), "error"); }
+        });
+      });
+    }
+
+    loadClients().then(() => {
+      if (searchEl && !searchEl._coWired){
+        searchEl._coWired = true;
+        let _clients = [];
+        fetch(API.url("/api/clients"), { headers: authHeaders() })
+          .then(r => r.json()).then(d => { _clients = d; });
+        searchEl.addEventListener("input", () => renderPicker(_clients));
+      }
+    });
+  }
+
+  $("#detail-add-client")?.addEventListener("click", openCoRenterPicker);
+  $("#co-renter-close")?.addEventListener("click", () => hideModal("#co-renter-modal"));
+  $("#co-renter-cancel")?.addEventListener("click", () => hideModal("#co-renter-modal"));
 
   return { open };
 })();
@@ -3374,24 +4172,322 @@ const MapPicker = (() => {
   return { setup, openPick, openView };
 })();
 
+/* ============== RESERVATIONS ============== */
+const Reservations = (() => {
+  let _data = [];
+
+  async function refresh(){
+    const u = AUTH.user();
+    if (!u) return;
+    try {
+      const r = await fetch(API.url("/api/reservations"), { headers: authHeaders() });
+      if (!r.ok) return;
+      _data = await r.json();
+    } catch (e){ _data = []; }
+    render();
+  }
+
+  function renderAdmin(){
+    const tbl = $("#tbl-admin-reservations");
+    if (!tbl) return;
+    if (!_data.length) return emptyRow(tbl, 9);
+    const dash = `<span class="badge no">—</span>`;
+    tbl.tBodies[0].innerHTML = _data.map((rv, i) => {
+      const statusCls = rv.status || "pending";
+      const statusLabel = t(`reservations.${statusCls}`) || rv.status;
+      return `<tr>
+        <td>${i + 1}</td>
+        <td>${escape(rv.companyname || "")}</td>
+        <td>${escape(rv.client_name || "")}</td>
+        <td>${rv.client_phone ? `<a href="tel:${escape(rv.client_phone)}">${escape(rv.client_phone)}</a>` : dash}</td>
+        <td>${escape(rv.car_model || "")}</td>
+        <td>${escape(rv.car_plate || "")}</td>
+        <td>${escape(rv.start_date || "")}</td>
+        <td>${escape(rv.end_date || "")}</td>
+        <td><span class="reservation-status-badge ${statusCls}">${escape(statusLabel)}</span></td>
+      </tr>`;
+    }).join("");
+  }
+
+  function _today(){ return new Date().toISOString().slice(0, 10); }
+
+  function renderTodayBanner(){
+    const banner = $("#rv-today-banner");
+    const list   = $("#rv-today-list");
+    const count  = $("#rv-today-count");
+    if (!banner || !list) return;
+    const today = _today();
+    const todayItems = _data.filter(rv =>
+      rv.status === "pending" && rv.start_date === today
+    );
+    if (!todayItems.length){
+      banner.hidden = true; list.hidden = true; return;
+    }
+    banner.hidden = false; list.hidden = false;
+    if (count) count.textContent = todayItems.length;
+    const dash = `<span style="color:var(--muted)">—</span>`;
+    list.innerHTML = todayItems.map(rv => {
+      const phone = rv.client_phone
+        ? `<a href="tel:${escape(rv.client_phone)}">${escape(rv.client_phone)}</a>`
+        : dash;
+      return `<div class="rv-today-item">
+        <div>
+          <strong>${escape(rv.client_name || "")}</strong> — ${escape(rv.car_model || "")} (${escape(rv.car_plate || "")})
+          <span class="rv-today-meta"> · 📞 ${phone}</span>
+        </div>
+        <div class="row-actions">
+          <button type="button" class="rv-action-btn activate" data-rv-id="${rv.id}" data-action="active">${escape(t("reservations.activate"))}</button>
+          <button type="button" class="rv-action-btn cancel"   data-rv-id="${rv.id}" data-action="inactive">${escape(t("reservations.cancel"))}</button>
+        </div>
+      </div>`;
+    }).join("");
+    _wireActions(list);
+  }
+
+  function _getFiltered(){
+    const dateVal   = ($("#rv-filter-date")?.value || "").trim();
+    const statusVal = ($("#rv-filter-status")?.value || "").trim();
+    let rows = _data;
+    if (dateVal){
+      rows = rows.filter(rv => rv.start_date <= dateVal && rv.end_date >= dateVal);
+    }
+    if (statusVal){
+      rows = rows.filter(rv => rv.status === statusVal);
+    }
+    return rows;
+  }
+
+  function _wireActions(container){
+    container.querySelectorAll("[data-rv-id]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = Number(btn.dataset.rvId);
+        const action = btn.dataset.action;
+        if (action === "delete"){
+          if (!confirm(t("confirm.delete"))) return;
+          try {
+            await fetch(API.url(`/api/reservations/${id}`), {
+              method: "DELETE", headers: authHeaders(),
+            });
+            toast(t("toast.deleted"), "success");
+            await refresh();
+          } catch (e){ toast(e.message || t("toast.error"), "error"); }
+        } else {
+          try {
+            const r = await fetch(API.url(`/api/reservations/${id}`), {
+              method: "PUT",
+              headers: { "Content-Type": "application/json", ...authHeaders() },
+              body: JSON.stringify({ status: action }),
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok){
+              toast(data.error || t("toast.error"), "error");
+              return;
+            }
+            toast(action === "active" ? t("reservations.activated") : t("reservations.cancelled"), "success");
+            await refresh();
+            await refreshReport();
+          } catch (e){ toast(e.message || t("toast.error"), "error"); }
+        }
+      });
+    });
+  }
+
+  function render(){
+    const u = AUTH.user();
+    if (u && u.role === "admin"){ renderAdmin(); return; }
+    renderTodayBanner();
+    const tbl = $("#tbl-reservations");
+    if (!tbl) return;
+    const filtered = _getFiltered();
+    if (!filtered.length) return emptyRow(tbl, 9);
+    const dash = `<span class="badge no">—</span>`;
+    tbl.tBodies[0].innerHTML = filtered.map((rv, i) => {
+      const statusCls = rv.status || "pending";
+      const statusLabel = t(`reservations.${statusCls}`) || rv.status;
+      let actions = "";
+      if (rv.status === "pending"){
+        actions = `
+          <button type="button" class="rv-action-btn activate" data-rv-id="${rv.id}" data-action="active">${escape(t("reservations.activate"))}</button>
+          <button type="button" class="rv-action-btn cancel"   data-rv-id="${rv.id}" data-action="inactive">${escape(t("reservations.cancel"))}</button>`;
+      }
+      actions += `<button type="button" class="rv-action-btn delete" data-rv-id="${rv.id}" data-action="delete">${escape(t("action.delete"))}</button>`;
+      return `<tr>
+        <td>${i + 1}</td>
+        <td>${escape(rv.client_name || "")}</td>
+        <td>${rv.client_phone ? `<a href="tel:${escape(rv.client_phone)}">${escape(rv.client_phone)}</a>` : dash}</td>
+        <td>${escape(rv.car_model || "")}</td>
+        <td>${escape(rv.car_plate || "")}</td>
+        <td>${escape(rv.start_date || "")}</td>
+        <td>${escape(rv.end_date || "")}</td>
+        <td><span class="reservation-status-badge ${statusCls}">${escape(statusLabel)}</span></td>
+        <td><div class="row-actions">${actions}</div></td>
+      </tr>`;
+    }).join("");
+    _wireActions(tbl);
+  }
+
+  async function refreshPickers(){
+    const u = AUTH.user();
+    if (!u || u.role !== "company" || !u.company_id) return;
+    let cars = [], clients = [];
+    try { cars = await fetch(API.url(`/api/cars?company_id=${u.company_id}`)).then(r => r.json()); } catch (e){}
+    try { clients = await fetch(API.url("/api/clients"), { headers: authHeaders() }).then(r => r.json()); } catch (e){}
+
+    const carSel = $("#reservation-car-select");
+    if (carSel){
+      const ph = carSel.querySelector('option[disabled][hidden]')?.outerHTML || "";
+      carSel.innerHTML = ph + cars.map(c =>
+        `<option value="${escape(c.vin)}">${escape(`${c.model} — ${c.platenumber} (${c.vin})`)}</option>`
+      ).join("");
+      carSel.value = "";
+      if (carSel._ss) carSel._ss.sync();
+    }
+    const clientSel = $("#reservation-client-select");
+    if (clientSel){
+      const ph = clientSel.querySelector('option[disabled][hidden]')?.outerHTML || "";
+      clientSel.innerHTML = ph + clients.map(c =>
+        `<option value="${c.id}">${escape(`${c.name || c.personid} — ${c.licenseid || ""}`)}</option>`
+      ).join("");
+      clientSel.value = "";
+      if (clientSel._ss) clientSel._ss.sync();
+    }
+  }
+
+  function setup(){
+    const form = $("#form-create-reservation");
+    if (!form) return;
+
+    // Filter controls
+    $("#rv-filter-today")?.addEventListener("click", () => {
+      const dateEl = $("#rv-filter-date");
+      if (dateEl) dateEl.value = _today();
+      render();
+    });
+    $("#rv-filter-all")?.addEventListener("click", () => {
+      const dateEl = $("#rv-filter-date");
+      const statusEl = $("#rv-filter-status");
+      if (dateEl) dateEl.value = "";
+      if (statusEl) statusEl.value = "";
+      render();
+    });
+    $("#rv-filter-date")?.addEventListener("change", render);
+    $("#rv-filter-status")?.addEventListener("change", render);
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const u = AUTH.user();
+      if (!u || u.role !== "company") return;
+      const fd = new FormData(form);
+      const body = {
+        car_vin:    (fd.get("car_vin")    || "").toString().trim(),
+        client_id:  Number(fd.get("client_id")) || null,
+        start_date: (fd.get("start_date") || "").toString().trim(),
+        end_date:   (fd.get("end_date")   || "").toString().trim(),
+        notes:      (fd.get("notes")      || "").toString().trim(),
+      };
+      if (!body.car_vin || !body.client_id || !body.start_date || !body.end_date){
+        toast(t("toast.fillAll"), "error");
+        return;
+      }
+      if (body.end_date < body.start_date){
+        toast(t("rental.create.err.range"), "error");
+        return;
+      }
+      try {
+        const r = await fetch(API.url("/api/reservations"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok){
+          toast(data.error || t("toast.error"), "error");
+          return;
+        }
+        form.reset();
+        ["#reservation-car-select", "#reservation-client-select"].forEach(sel => {
+          const el = $(sel);
+          if (el){ el.value = ""; if (el._ss) el._ss.sync(); }
+        });
+        toast(t("reservations.saved"), "success");
+        await refresh();
+      } catch (err){ toast(err.message || t("toast.error"), "error"); }
+    });
+  }
+
+  return { refresh, refreshPickers, setup };
+})();
+
+/* ============== CONTACT SUPPORT ============== */
+function setupSupportForm(){
+  const form = $("#form-support");
+  if (!form) return;
+
+  const fileInput = $("#support-screenshot");
+  const fileName  = $("#support-file-name");
+  if (fileInput){
+    fileInput.addEventListener("change", () => {
+      const f = fileInput.files[0];
+      if (f && fileName){
+        fileName.textContent = f.name;
+        fileName.hidden = false;
+      } else if (fileName){
+        fileName.hidden = true;
+      }
+    });
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const message = (form.querySelector('[name="message"]')?.value || "").trim();
+    if (!message){
+      toast(t("support.error"), "error");
+      return;
+    }
+    const fd = new FormData(form);
+    const screenshot = fileInput?.files[0];
+    if (screenshot) fd.append("screenshot", screenshot);
+
+    try {
+      const r = await fetch(API.url("/api/support"), {
+        method: "POST",
+        body: fd,
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok){
+        toast(data.error || t("toast.error"), "error");
+        return;
+      }
+      form.reset();
+      if (fileName) fileName.hidden = true;
+      toast(t("support.sent"), "success");
+    } catch (err){
+      toast(err.message || t("toast.error"), "error");
+    }
+  });
+}
+
 /* ============== INIT ============== */
 async function loadAllData(){
   try{
     const u = AUTH.user();
     if (u && u.role === "company"){
-      // Company users only need their own dashboard + the report + the
-      // pickers (cars/clients) for the create-rental form.
       await Promise.all([
         refreshReport(),
         loadCompanyInfo(),
         refreshRentalPickers(),
+        Reservations.refresh(),
+        Reservations.refreshPickers(),
       ]);
     } else {
       await Promise.all([
         refreshCompanies(), refreshCars(), refreshClients(),
-        refreshBranches(), refreshReport(),
+        refreshBranches(), refreshReport(), Reservations.refresh(),
       ]);
-      updateUploadHint(); // refresh company-id reference list once data is in
+      updateStatsDashboard();
+      loadInactiveAlerts();
+      loadDashboardActivity();
+      updateUploadHint();
     }
   } catch (err){
     console.error(err);
@@ -3413,6 +4509,8 @@ async function init(){
   setupAddCarCsv();
   setupAddClientForm();
   setupCreateRentalForm();
+  Reservations.setup();
+  setupSupportForm();
   setupReportSearch();
   MapPicker.setup();
   setupReportPdf();

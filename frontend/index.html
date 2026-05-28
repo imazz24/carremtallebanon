@@ -6,7 +6,7 @@
   <title data-i18n="app.title">Car Rental | تأجير السيارات</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="css/style.css" />
 </head>
@@ -37,6 +37,32 @@
   </form>
 </div>
 
+<!-- ============== PASSWORD RESET MODAL (first-time login) ============== -->
+<div id="reset-pw-modal" class="modal" hidden>
+  <div class="modal-card reset-pw-card">
+    <header class="modal-head">
+      <h3 data-i18n="resetPw.title">Set Your Password</h3>
+    </header>
+    <form id="form-reset-pw" class="reset-pw-form" novalidate>
+      <p class="reset-pw-hint" data-i18n="resetPw.hint">
+        This is your first login. Please set a new password to secure your account.
+      </p>
+      <div class="field">
+        <label data-i18n="resetPw.new">New password</label>
+        <input name="new_password" type="password" autocomplete="new-password" required minlength="4">
+      </div>
+      <div class="field">
+        <label data-i18n="resetPw.confirm">Confirm new password</label>
+        <input name="confirm_password" type="password" autocomplete="new-password" required minlength="4">
+      </div>
+      <p id="reset-pw-error" class="login-error" hidden></p>
+      <footer class="modal-foot">
+        <button type="submit" class="btn btn-primary" data-i18n="resetPw.action">Set Password</button>
+      </footer>
+    </form>
+  </div>
+</div>
+
 <!-- ============== HEADER ============== -->
 <header class="site-header">
   <div class="container header-inner">
@@ -53,11 +79,13 @@
       <a href="#rent"       data-i18n="nav.rent">Rent</a>
       <a href="#upload"     data-i18n="nav.upload">Upload</a>
       <a href="#report"     data-i18n="nav.report">Report</a>
+      <a href="#admin-reservations" id="nav-admin-reservations" data-i18n="nav.reservations" hidden>Reservations</a>
 
-      <!-- Company-only tabs (shown only for role-company) -->
+      <!-- Company-only tabs — hidden, replaced by sidebar -->
       <a href="#company-info"     class="company-only-nav" data-i18n="nav.companyInfo">Company info</a>
       <a href="#company-cars"     class="company-only-nav" data-i18n="nav.addCar">Add car</a>
       <a href="#company-clients"  class="company-only-nav" data-i18n="nav.addClient">Add client</a>
+      <a href="#reservations"     class="company-only-nav" data-i18n="nav.reservations">Reservations</a>
       <a href="#report"           class="company-only-nav" data-i18n="nav.report">Report</a>
     </nav>
 
@@ -90,7 +118,179 @@
   </div>
 </section>
 
+<!-- ============== ADMIN SIDEBAR (replaces header nav for admin) ============== -->
+<aside id="admin-sidebar" class="admin-sidebar admin-only-show" hidden>
+  <div class="sidebar-top">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CR</span>
+      <span class="sidebar-brand-text" data-i18n="brand">Car Rental</span>
+    </div>
+    <button type="button" id="sidebar-collapse-btn" class="sidebar-collapse-btn" title="Toggle sidebar">
+      <span class="sidebar-collapse-icon">◂</span>
+    </button>
+  </div>
+  <div class="sidebar-divider"></div>
+  <nav class="sidebar-nav">
+    <button class="sidebar-btn active" data-panel="dashboard">
+      <span class="sidebar-icon">📊</span><span class="sidebar-label" data-i18n="nav.dashboard">Dashboard</span>
+    </button>
+    <button class="sidebar-btn" data-panel="companies">
+      <span class="sidebar-icon">🏢</span><span class="sidebar-label" data-i18n="nav.companies">Companies</span>
+    </button>
+    <button class="sidebar-btn" data-panel="cars">
+      <span class="sidebar-icon">🚗</span><span class="sidebar-label" data-i18n="nav.cars">Cars</span>
+    </button>
+    <button class="sidebar-btn" data-panel="clients">
+      <span class="sidebar-icon">👥</span><span class="sidebar-label" data-i18n="nav.clients">Clients</span>
+    </button>
+    <button class="sidebar-btn" data-panel="admin-reservations">
+      <span class="sidebar-icon">📅</span><span class="sidebar-label" data-i18n="nav.reservations">Reservations</span>
+    </button>
+    <button class="sidebar-btn" data-panel="report">
+      <span class="sidebar-icon">📋</span><span class="sidebar-label" data-i18n="nav.report">Report</span>
+    </button>
+    <div class="sidebar-divider"></div>
+    <button class="sidebar-btn" data-panel="register-modal">
+      <span class="sidebar-icon">➕</span><span class="sidebar-label" data-i18n="nav.register">Register</span>
+    </button>
+    <button class="sidebar-btn" data-panel="support">
+      <span class="sidebar-icon">💬</span><span class="sidebar-label" data-i18n="support.title">Support</span>
+    </button>
+  </nav>
+</aside>
+
+<!-- ============== COMPANY SIDEBAR ============== -->
+<aside id="company-sidebar" class="admin-sidebar company-only-show" hidden>
+  <div class="sidebar-top">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CR</span>
+      <span class="sidebar-brand-text" data-i18n="brand">Car Rental</span>
+    </div>
+    <button type="button" id="company-sidebar-collapse" class="sidebar-collapse-btn" title="Toggle sidebar">
+      <span class="sidebar-collapse-icon">◂</span>
+    </button>
+  </div>
+  <div class="sidebar-divider"></div>
+  <nav class="sidebar-nav">
+    <button class="sidebar-btn active" data-cpanel="report">
+      <span class="sidebar-icon">📋</span><span class="sidebar-label" data-i18n="nav.report">Report</span>
+    </button>
+    <button class="sidebar-btn" data-cpanel="reservations">
+      <span class="sidebar-icon">📅</span><span class="sidebar-label" data-i18n="nav.reservations">Reservations</span>
+    </button>
+    <div class="sidebar-divider"></div>
+    <button class="sidebar-btn" data-cpanel="company-info">
+      <span class="sidebar-icon">🏢</span><span class="sidebar-label" data-i18n="nav.companyInfo">Company Info</span>
+    </button>
+    <button class="sidebar-btn" data-cpanel="company-cars">
+      <span class="sidebar-icon">🚗</span><span class="sidebar-label" data-i18n="nav.addCar">Add Car</span>
+    </button>
+    <button class="sidebar-btn" data-cpanel="company-clients">
+      <span class="sidebar-icon">👥</span><span class="sidebar-label" data-i18n="nav.addClient">Add Client</span>
+    </button>
+    <div class="sidebar-divider"></div>
+    <button class="sidebar-btn" data-cpanel="support">
+      <span class="sidebar-icon">💬</span><span class="sidebar-label" data-i18n="support.title">Support</span>
+    </button>
+  </nav>
+</aside>
+
 <main class="container main">
+
+  <!-- ============== ADMIN DASHBOARD ============== -->
+  <section id="stats-dashboard" class="admin-only-show dash" hidden>
+
+    <!-- Row 1: welcome + date -->
+    <div class="dash-welcome">
+      <div>
+        <h1 class="dash-title" data-i18n="dash.welcome">Welcome back, Admin</h1>
+        <p class="dash-date" id="dash-date"></p>
+      </div>
+    </div>
+
+    <!-- Row 2: stat cards (always open, no toggle needed) -->
+    <div class="stats-grid">
+      <div class="stat-card stat-companies">
+        <div class="stat-icon">🏢</div>
+        <div class="stat-body">
+          <span class="stat-value" id="stat-companies">0</span>
+          <span class="stat-label" data-i18n="nav.companies">Companies</span>
+        </div>
+      </div>
+      <div class="stat-card stat-cars">
+        <div class="stat-icon">🚗</div>
+        <div class="stat-body">
+          <span class="stat-value" id="stat-cars">0</span>
+          <span class="stat-label" data-i18n="nav.cars">Cars</span>
+        </div>
+      </div>
+      <div class="stat-card stat-clients">
+        <div class="stat-icon">👥</div>
+        <div class="stat-body">
+          <span class="stat-value" id="stat-clients">0</span>
+          <span class="stat-label" data-i18n="nav.clients">Clients</span>
+        </div>
+      </div>
+      <div class="stat-card stat-rentals">
+        <div class="stat-icon">📋</div>
+        <div class="stat-body">
+          <span class="stat-value" id="stat-rentals">0</span>
+          <span class="stat-label" data-i18n="nav.report">Rentals</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Row 3: two-column layout — activity feed + inactive alerts -->
+    <div class="dash-columns">
+
+      <!-- Left: active companies feed -->
+      <div class="dash-panel" id="panel-activity">
+        <div class="dash-panel-head">
+          <h3><span class="dash-panel-icon">🟢</span> <span data-i18n="dash.activity.title">Activity — Last 24 Hours</span></h3>
+          <div class="dash-panel-actions">
+            <span class="dash-panel-badge" id="dash-active-count">0</span>
+            <button type="button" class="dash-toggle-btn" data-panel="panel-activity" title="Minimize / Expand">
+              <span class="dash-toggle-icon">▾</span>
+            </button>
+          </div>
+        </div>
+        <div class="dash-panel-body">
+          <div class="dash-search-bar">
+            <select id="dash-activity-search" class="dash-company-select" data-ss-prefix="2">
+              <option value="" disabled selected hidden data-i18n="dash.search.allCompanies">— All companies —</option>
+            </select>
+          </div>
+          <div id="dash-activity-list" class="dash-activity-list">
+            <p class="dash-empty" data-i18n="dash.activity.empty">No activity in the last 24 hours.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: inactive alerts -->
+      <div class="dash-panel dash-panel-warn" id="inactive-alert-box" hidden>
+        <div class="dash-panel-head">
+          <h3><span class="dash-panel-icon">⚠️</span> <span data-i18n="alert.inactive.title">Inactive Companies</span></h3>
+          <div class="dash-panel-actions">
+            <span class="dash-panel-badge dash-panel-badge-warn" id="inactive-alert-count">0</span>
+            <button type="button" class="dash-toggle-btn" data-panel="inactive-alert-box" title="Minimize / Expand">
+              <span class="dash-toggle-icon">▾</span>
+            </button>
+          </div>
+        </div>
+        <div class="dash-panel-body">
+          <div class="dash-search-bar dash-search-bar-warn">
+            <select id="dash-inactive-search" class="dash-company-select" data-ss-prefix="2">
+              <option value="" disabled selected hidden data-i18n="dash.search.allCompanies">— All companies —</option>
+            </select>
+          </div>
+          <div id="inactive-alert-list" class="alert-list"></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section id="inactive-alerts" class="admin-only-show" hidden></section>
 
   <!-- The Register flow now lives in a modal — the admin only supplies
        username + password. See #register-modal at the bottom of the body. -->
@@ -115,6 +315,10 @@
       <div class="field">
         <label data-i18n="companies.f.cid">Company ID</label>
         <input name="companyid">
+      </div>
+      <div class="field">
+        <label data-i18n="register.f.owner">Owner name</label>
+        <input name="owner_name" placeholder="Company owner full name">
       </div>
       <div class="field">
         <label data-i18n="companyInfo.f.address">Company address</label>
@@ -209,14 +413,24 @@
     <div id="add-car-status" class="company-info-status" hidden></div>
 
     <form id="form-add-car" class="grid-form" novalidate>
-      <div class="field">
+      <div class="field" style="grid-column: 1 / -1;">
         <label data-i18n="cars.f.vin">VIN</label>
-        <div class="vin-input-wrap">
-          <input name="vin" maxlength="17" required
+        <!-- Full VIN input (default mode) -->
+        <div class="vin-input-wrap" id="vin-full-mode">
+          <input name="vin" minlength="17" maxlength="17" required
                  list="known-vins-list" autocomplete="off"
                  data-i18n-placeholder="addCar.vin.placeholder"
                  placeholder="17-character VIN (e.g. 1HGCM82633A004352)">
           <span id="add-car-vin-hint" class="vin-hint" hidden></span>
+        </div>
+        <!-- Split mode: prefix (locked) + serial (editable) -->
+        <div class="vin-split-wrap" id="vin-split-mode" hidden>
+          <span class="vin-prefix-badge" id="vin-prefix-badge"></span>
+          <input type="text" id="vin-serial-input" class="vin-serial-input"
+                 minlength="6" maxlength="6" required
+                 data-i18n-placeholder="addCar.serial.placeholder"
+                 placeholder="Serial (6 digits)">
+          <button type="button" id="vin-edit-full-btn" class="vin-edit-full-btn" title="Edit full VIN">✎</button>
         </div>
         <datalist id="known-vins-list"></datalist>
         <div class="field-error" data-error-for="vin"></div>
@@ -339,23 +553,30 @@
         <label data-i18n="addClient.idType">Document type</label>
         <select id="add-client-id-type" name="id_type" required>
           <option value="" disabled selected hidden data-i18n="addClient.idType.placeholder">— Choose document type —</option>
-          <option value="passport"    data-i18n="addClient.idType.passport">Passport</option>
-          <option value="national_id" data-i18n="addClient.idType.national">National ID</option>
-          <option value="license"     data-i18n="addClient.idType.license">License only</option>
+          <option value="passport"              data-i18n="addClient.idType.passport">Passport</option>
+          <option value="national_id"           data-i18n="addClient.idType.national">National ID</option>
+          <option value="license"               data-i18n="addClient.idType.license">License only</option>
+          <option value="international_license" data-i18n="addClient.idType.international">International License</option>
         </select>
         <div class="field-error" data-error-for="id_type"></div>
       </div>
 
-      <div class="field" data-show-for-id-type="passport national_id license">
+      <div class="field" data-show-for-id-type="passport national_id license international_license">
         <label id="add-client-pid-label" data-i18n="clients.f.pid">Personal ID</label>
         <input name="personid">
         <div class="field-error" data-error-for="personid"></div>
       </div>
 
       <div class="field">
-        <label data-i18n="clients.f.name">Full name</label>
-        <input name="name" required>
-        <div class="field-error" data-error-for="name"></div>
+        <label data-i18n="clients.f.firstname">First name</label>
+        <input name="firstname" required>
+        <div class="field-error" data-error-for="firstname"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="clients.f.lastname">Last name</label>
+        <input name="lastname" required>
+        <div class="field-error" data-error-for="lastname"></div>
       </div>
 
       <div class="field">
@@ -384,7 +605,7 @@
         <div class="field-error" data-error-for="dateofbirth"></div>
       </div>
 
-      <div class="field" data-hide-for-id-type="license">
+      <div class="field" data-hide-for-id-type="license international_license">
         <label data-i18n="clients.f.lic">License ID</label>
         <input name="licenseid">
         <div class="field-error" data-error-for="licenseid"></div>
@@ -415,7 +636,7 @@
 
       <input type="hidden" name="photo" id="add-client-photo-data">
       <div class="field logo-field">
-        <label data-i18n="addClient.photoOrDoc">Client photo / document</label>
+        <label id="add-client-upload-label" data-i18n="addClient.photoOrDoc">Client photo / document</label>
         <div class="logo-picker">
           <img id="add-client-photo-preview" class="logo-preview" alt="" hidden>
           <span id="add-client-photo-fallback" class="logo-preview logo-preview-empty">+</span>
@@ -506,6 +727,7 @@
       <span id="companies-count" class="report-count"></span>
     </div>
 
+    <div id="pager-top-companies" class="pager-wrap" hidden></div>
     <div class="table-wrap">
       <table id="tbl-companies">
         <thead>
@@ -513,6 +735,7 @@
             <th>#</th>
             <th data-i18n="companies.f.logo">Logo</th>
             <th data-i18n="companies.f.name">Company name</th>
+            <th data-i18n="register.f.owner">Owner</th>
             <th data-i18n="companies.f.loc">Location</th>
             <th data-i18n="companies.f.cid">Company ID</th>
             <th data-i18n="companies.f.phone">Phone</th>
@@ -523,6 +746,7 @@
         <tbody></tbody>
       </table>
     </div>
+    <div id="pager-companies" class="pager-wrap" hidden></div>
   </section>
 
   <!-- ============== CARS ============== -->
@@ -585,6 +809,7 @@
       <span id="cars-count" class="report-count"></span>
     </div>
 
+    <div id="pager-top-cars" class="pager-wrap" hidden></div>
     <div class="table-wrap">
       <table id="tbl-cars">
         <thead>
@@ -603,6 +828,7 @@
         <tbody></tbody>
       </table>
     </div>
+    <div id="pager-cars" class="pager-wrap" hidden></div>
   </section>
 
   <!-- ============== CLIENTS ============== -->
@@ -644,6 +870,7 @@
       <span id="clients-count" class="report-count"></span>
     </div>
 
+    <div id="pager-top-clients" class="pager-wrap" hidden></div>
     <div class="table-wrap">
       <table id="tbl-clients">
         <thead>
@@ -651,7 +878,8 @@
             <th>#</th>
             <th data-i18n="addClient.photo">Photo</th>
             <th data-i18n="clients.f.pid">Person ID</th>
-            <th data-i18n="clients.f.name">Full name</th>
+            <th data-i18n="clients.f.firstname">First name</th>
+            <th data-i18n="clients.f.lastname">Last name</th>
             <th data-i18n="clients.f.father">Father</th>
             <th data-i18n="clients.f.mother">Mother</th>
             <th data-i18n="addClient.nationality">Nationality</th>
@@ -664,6 +892,7 @@
         <tbody></tbody>
       </table>
     </div>
+    <div id="pager-clients" class="pager-wrap" hidden></div>
   </section>
 
   <!-- ============== RENT A CAR ============== -->
@@ -890,6 +1119,7 @@
       <span id="report-count" class="report-count"></span>
     </div>
 
+    <div id="pager-top-report" class="pager-wrap" hidden></div>
     <div class="table-wrap">
       <table id="tbl-report">
         <thead>
@@ -912,6 +1142,165 @@
         <tbody></tbody>
       </table>
     </div>
+    <div id="pager-report" class="pager-wrap" hidden></div>
+  </section>
+
+  <!-- ============== RESERVATIONS (admin view) ============== -->
+  <section id="admin-reservations" class="card admin-only-show" hidden>
+    <div class="card-head">
+      <h2 data-i18n="reservations.title">Reservations</h2>
+      <p data-i18n="reservations.adminSubtitle">All reservations across companies.</p>
+    </div>
+
+    <div class="table-wrap">
+      <table id="tbl-admin-reservations">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th data-i18n="report.company">Company</th>
+            <th data-i18n="report.client">Client</th>
+            <th data-i18n="report.phone">Phone</th>
+            <th data-i18n="report.car">Car</th>
+            <th data-i18n="report.plate">Plate</th>
+            <th data-i18n="report.start">Start</th>
+            <th data-i18n="report.end">End</th>
+            <th data-i18n="reservations.status">Status</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============== RESERVATIONS (company-user) ============== -->
+  <section id="reservations" class="card company-only-card" hidden>
+    <div class="card-head">
+      <h2 data-i18n="reservations.title">Reservations</h2>
+      <p data-i18n="reservations.subtitle">
+        Manage car reservations. Activate when the client picks up, or cancel if they decline.
+      </p>
+    </div>
+
+    <div id="reservation-status" class="company-info-status" hidden></div>
+
+    <form id="form-create-reservation" class="grid-form" novalidate>
+      <div class="field">
+        <label data-i18n="rent.f.car">Car</label>
+        <select id="reservation-car-select" name="car_vin" data-ss-prefix="3" required>
+          <option value="" disabled selected hidden data-i18n="rental.create.carPh">— Choose a car —</option>
+        </select>
+        <div class="field-error" data-error-for="rv_car_vin"></div>
+      </div>
+      <div class="field">
+        <label data-i18n="rent.f.client">Client</label>
+        <select id="reservation-client-select" name="client_id" data-ss-prefix="3" required>
+          <option value="" disabled selected hidden data-i18n="rental.create.clientPh">— Choose a client —</option>
+        </select>
+        <div class="field-error" data-error-for="rv_client_id"></div>
+      </div>
+      <div class="field">
+        <label data-i18n="rent.f.start">Start date</label>
+        <input type="date" name="start_date" required>
+        <div class="field-error" data-error-for="rv_start_date"></div>
+      </div>
+      <div class="field">
+        <label data-i18n="rent.f.end">End date</label>
+        <input type="date" name="end_date" required>
+        <div class="field-error" data-error-for="rv_end_date"></div>
+      </div>
+      <div class="field" style="grid-column: 1 / -1;">
+        <label data-i18n="reservations.notes">Notes</label>
+        <input name="notes" placeholder="Optional notes...">
+      </div>
+      <button type="submit" class="btn btn-primary" data-i18n="reservations.action">Create Reservation</button>
+      <button type="reset" class="btn btn-ghost-dark" data-i18n="action.clear">Clear</button>
+    </form>
+
+    <!-- Today's reservations notification -->
+    <div id="rv-today-banner" class="rv-today-banner" hidden>
+      <span class="rv-today-icon">🔔</span>
+      <strong data-i18n="reservations.today">Today's Reservations</strong>
+      <span id="rv-today-count" class="dash-panel-badge">0</span>
+    </div>
+    <div id="rv-today-list" class="rv-today-list" hidden></div>
+
+    <!-- Date filter -->
+    <div class="rv-filter-bar">
+      <button type="button" id="rv-filter-today" class="btn btn-primary rv-filter-today-btn"
+              data-i18n="reservations.filterToday">Today</button>
+      <button type="button" id="rv-filter-all" class="btn btn-ghost-dark"
+              data-i18n="reservations.filterAll">All</button>
+      <div class="field rv-date-field">
+        <label data-i18n="reservations.filterDate">Search by date</label>
+        <input type="date" id="rv-filter-date">
+      </div>
+      <div class="field rv-date-field">
+        <label data-i18n="reservations.filterStatus">Status</label>
+        <select id="rv-filter-status">
+          <option value="" data-i18n="filter.all">— All —</option>
+          <option value="pending" data-i18n="reservations.pending">Pending</option>
+          <option value="active" data-i18n="reservations.active">Active</option>
+          <option value="inactive" data-i18n="reservations.inactive">Cancelled</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table id="tbl-reservations">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th data-i18n="report.client">Client</th>
+            <th data-i18n="report.phone">Phone</th>
+            <th data-i18n="report.car">Car</th>
+            <th data-i18n="report.plate">Plate</th>
+            <th data-i18n="report.start">Start</th>
+            <th data-i18n="report.end">End</th>
+            <th data-i18n="reservations.status">Status</th>
+            <th data-i18n="actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============== CONTACT SUPPORT ============== -->
+  <section id="support" class="card support-card">
+    <div class="card-head">
+      <h2 data-i18n="support.title">Contact Support</h2>
+      <p data-i18n="support.subtitle">
+        Having an issue? Describe it below and optionally attach a screenshot. We'll get back to you as soon as possible.
+      </p>
+    </div>
+
+    <div id="support-status" class="company-info-status" hidden></div>
+
+    <form id="form-support" class="grid-form" novalidate>
+      <div class="field" style="grid-column: 1 / -1;">
+        <label data-i18n="support.email">Your email</label>
+        <input name="email" type="email" placeholder="your@email.com">
+      </div>
+      <div class="field" style="grid-column: 1 / -1;">
+        <label data-i18n="support.message">Describe the issue</label>
+        <textarea name="message" rows="4" required
+                  style="border:1px solid var(--line);border-radius:10px;padding:.65rem .8rem;font:inherit;color:var(--ink);resize:vertical;width:100%;"
+                  placeholder="Describe the error or issue you're experiencing..."></textarea>
+      </div>
+      <div class="field upload-file-field" style="grid-column: 1 / -1;">
+        <label data-i18n="support.screenshot">Screenshot (optional)</label>
+        <div class="file-picker">
+          <input type="file" id="support-screenshot" accept="image/*" hidden>
+          <label for="support-screenshot" class="file-picker-btn">
+            <span class="file-picker-icon">📷</span>
+            <span data-i18n="support.chooseFile">Choose screenshot...</span>
+          </label>
+        </div>
+        <div id="support-file-name" class="support-file-name" hidden></div>
+      </div>
+      <button type="submit" class="btn btn-primary" data-i18n="support.send">Send Message</button>
+    </form>
+
   </section>
 </main>
 
@@ -983,16 +1372,14 @@
         <div id="detail-videos-grid" class="detail-videos-grid"></div>
       </section>
 
-      <!-- Co-renter stub (company-only — admin doesn't add renters) -->
-      <section class="detail-section company-only-show">
+      <!-- Co-renters (visible to admin + company) -->
+      <section class="detail-section">
         <div class="detail-section-head">
-          <h4 data-i18n="detail.coRenters">Additional renters</h4>
-          <button type="button" id="detail-add-client" class="btn btn-ghost-dark"
-                  data-i18n="detail.addRenter">+ Add renter</button>
+          <h4 data-i18n="detail.coRenters">Additional Drivers</h4>
+          <button type="button" id="detail-add-client" class="btn btn-ghost-dark company-only-show"
+                  data-i18n="detail.addRenter">+ Add driver</button>
         </div>
-        <p class="detail-section-note" data-i18n="detail.addRenter.coming">
-          Multiple renters per rental — coming soon.
-        </p>
+        <div id="detail-co-renters-list" class="co-renters-list"></div>
       </section>
     </div>
 
@@ -1003,6 +1390,38 @@
   </div>
 </div>
 
+
+<!-- ============== CLIENT DETAIL MODAL ============== -->
+<div id="client-detail-modal" class="modal" hidden>
+  <div class="modal-card" style="width: min(480px, 95vw);">
+    <header class="modal-head">
+      <h3 data-i18n="detail.clientInfo">Client Details</h3>
+      <button id="client-detail-close" class="modal-close" aria-label="Close">&times;</button>
+    </header>
+    <div id="client-detail-body" class="detail-body"></div>
+    <footer class="modal-foot">
+      <button type="button" id="client-detail-cancel" class="btn btn-ghost-dark" data-i18n="action.close">Close</button>
+    </footer>
+  </div>
+</div>
+
+<!-- ============== CO-RENTER PICKER MODAL ============== -->
+<div id="co-renter-modal" class="modal" hidden>
+  <div class="modal-card" style="width: min(500px, 95vw);">
+    <header class="modal-head">
+      <h3 data-i18n="detail.pickDriver">Add Additional Driver</h3>
+      <button id="co-renter-close" class="modal-close" aria-label="Close">&times;</button>
+    </header>
+    <div style="padding: .6rem .8rem; border-bottom: 1px solid var(--line);">
+      <input type="text" id="co-renter-search" class="dash-search-input"
+             data-i18n-placeholder="dash.search.placeholder" placeholder="Search client...">
+    </div>
+    <div id="co-renter-list" class="co-renter-picker-list"></div>
+    <footer class="modal-foot">
+      <button type="button" id="co-renter-cancel" class="btn btn-ghost-dark" data-i18n="action.close">Close</button>
+    </footer>
+  </div>
+</div>
 
 <!-- ============== REGISTER MODAL (admin only) ============== -->
 <div id="register-modal" class="modal" hidden>
@@ -1019,6 +1438,10 @@
       <div class="field">
         <label data-i18n="register.f.name">Username (company name)</label>
         <input name="companyname" autocomplete="off" required>
+      </div>
+      <div class="field">
+        <label data-i18n="register.f.owner">Owner name</label>
+        <input name="owner_name" autocomplete="off" placeholder="Company owner full name">
       </div>
       <div class="field">
         <label data-i18n="register.f.password">Password</label>
