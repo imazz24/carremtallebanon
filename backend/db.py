@@ -1,7 +1,6 @@
 """PostgreSQL connection helper for the carrental DB."""
 import os
 import threading
-import psycopg2
 from psycopg2.pool import ThreadedConnectionPool
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
