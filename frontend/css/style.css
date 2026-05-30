@@ -1462,13 +1462,37 @@ html[dir="rtl"] .dash-search-input{
   padding: 1.5rem 1rem; font-size: .88rem;
 }
 .dash-activity-item{
-  display: flex; align-items: center; gap: .7rem;
-  padding: .6rem 1rem;
   border-bottom: 1px solid var(--line-soft);
-  transition: background .1s;
 }
 .dash-activity-item:last-child{ border-bottom: 0; }
-.dash-activity-item:hover{ background: var(--primary-lt); }
+.dash-activity-row{
+  display: flex; align-items: center; gap: .7rem;
+  padding: .6rem 1rem;
+  cursor: pointer;
+  transition: background .1s;
+}
+.dash-activity-row:hover{ background: var(--primary-lt); }
+.dash-activity-expand{
+  font-size: .7rem; color: var(--muted);
+  transition: transform .15s;
+}
+.dash-activity-sub{
+  font-size: .74rem; color: var(--muted);
+}
+.dash-activity-timeline{
+  padding: .2rem 1rem .7rem 2.4rem;
+  display: flex; flex-direction: column; gap: .3rem;
+  background: var(--primary-lt);
+}
+.dash-timeline-item{
+  display: flex; gap: .6rem; align-items: baseline;
+  font-size: .78rem; color: var(--ink-soft);
+}
+.dash-timeline-when{
+  flex: 0 0 auto; min-width: 2.6rem;
+  font-weight: 700; color: var(--muted);
+}
+.dash-timeline-text{ flex: 1; min-width: 0; }
 .dash-activity-dot{
   width: 8px; height: 8px; border-radius: 50%;
   flex: 0 0 auto;
@@ -1501,6 +1525,12 @@ html[dir="rtl"] .dash-search-input{
 }
 .dash-activity-chip.reservations{
   background: rgba(245,158,11,.08); color: #b45309;
+}
+.dash-activity-chip.cars{
+  background: rgba(16,185,129,.10); color: #15803d;
+}
+.dash-activity-chip.clients{
+  background: rgba(67,56,202,.10); color: #4338ca;
 }
 .dash-activity-chip.none{
   background: var(--surface-3); color: var(--muted);
@@ -1569,6 +1599,15 @@ html[dir="rtl"] .dash-search-input{
 }
 .reservation-status-badge.inactive{
   background: var(--surface-3); color: var(--muted);
+}
+
+/* Admin reservations: subtly highlight rows booked today so the newest
+   additions stand out at the top of the (newest-first) table. */
+#tbl-admin-reservations tr.rv-row-today td{
+  background: rgba(16,185,129,.07);
+}
+#tbl-admin-reservations tr.rv-row-today td:first-child{
+  box-shadow: inset 3px 0 0 #10b981;
 }
 .rv-action-btn{
   font: inherit; border: 1px solid var(--line); background: var(--surface);

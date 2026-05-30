@@ -427,7 +427,7 @@
         <div class="vin-split-wrap" id="vin-split-mode" hidden>
           <span class="vin-prefix-badge" id="vin-prefix-badge"></span>
           <input type="text" id="vin-serial-input" class="vin-serial-input"
-                 minlength="6" maxlength="6" required
+                 maxlength="6" autocomplete="off"
                  data-i18n-placeholder="addCar.serial.placeholder"
                  placeholder="Serial (6 digits)">
           <button type="button" id="vin-edit-full-btn" class="vin-edit-full-btn" title="Edit full VIN">✎</button>
@@ -1119,6 +1119,31 @@
       <span id="report-count" class="report-count"></span>
     </div>
 
+    <div class="report-toolbar company-only-show">
+      <div class="field report-search-field">
+        <label for="filter-report-client-co" data-i18n="filter.byClient">Filter by client name</label>
+        <select id="filter-report-client-co" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field report-search-field">
+        <label for="filter-report-car-co" data-i18n="filter.byCar">Filter by car</label>
+        <select id="filter-report-car-co" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field report-date-field">
+        <label for="report-from-co" data-i18n="report.from">From</label>
+        <input type="date" id="report-from-co">
+      </div>
+      <div class="field report-date-field">
+        <label for="report-to-co" data-i18n="report.to">To</label>
+        <input type="date" id="report-to-co">
+      </div>
+      <button type="button" id="report-reset-co" class="btn btn-ghost-dark report-reset"
+              data-i18n="report.reset">Reset filters</button>
+    </div>
+
     <div id="pager-top-report" class="pager-wrap" hidden></div>
     <div class="table-wrap">
       <table id="tbl-report">
@@ -1152,6 +1177,53 @@
       <p data-i18n="reservations.adminSubtitle">All reservations across companies.</p>
     </div>
 
+    <div class="report-toolbar">
+      <div class="field report-search-field">
+        <label for="filter-arv-company" data-i18n="filter.byCompany">Filter by company</label>
+        <select id="filter-arv-company" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field report-search-field">
+        <label for="filter-arv-client" data-i18n="filter.byClient">Filter by client name</label>
+        <select id="filter-arv-client" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field report-search-field">
+        <label for="filter-arv-car" data-i18n="filter.byCar">Filter by car</label>
+        <select id="filter-arv-car" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field report-search-field">
+        <label for="filter-arv-plate" data-i18n="filter.byPlate">Filter by plate</label>
+        <select id="filter-arv-plate" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field report-search-field">
+        <label for="filter-arv-status" data-i18n="filter.byStatus">Filter by status</label>
+        <select id="filter-arv-status" data-ss-prefix="3">
+          <option value="" selected data-i18n="filter.all">— All —</option>
+          <option value="pending"  data-i18n="reservations.pending">Pending</option>
+          <option value="active"   data-i18n="reservations.active">Active</option>
+          <option value="inactive" data-i18n="reservations.inactive">Cancelled</option>
+        </select>
+      </div>
+      <div class="field report-date-field">
+        <label for="arv-from" data-i18n="report.from">From</label>
+        <input type="date" id="arv-from">
+      </div>
+      <div class="field report-date-field">
+        <label for="arv-to" data-i18n="report.to">To</label>
+        <input type="date" id="arv-to">
+      </div>
+      <button type="button" id="arv-reset" class="btn btn-ghost-dark report-reset"
+              data-i18n="report.reset">Reset filters</button>
+    </div>
+
+    <div id="pager-top-admin-reservations" class="pager-wrap" hidden></div>
     <div class="table-wrap">
       <table id="tbl-admin-reservations">
         <thead>
@@ -1164,12 +1236,14 @@
             <th data-i18n="report.plate">Plate</th>
             <th data-i18n="report.start">Start</th>
             <th data-i18n="report.end">End</th>
+            <th data-i18n="reservations.bookedOn">Booked on</th>
             <th data-i18n="reservations.status">Status</th>
           </tr>
         </thead>
         <tbody></tbody>
       </table>
     </div>
+    <div id="pager-admin-reservations" class="pager-wrap" hidden></div>
   </section>
 
   <!-- ============== RESERVATIONS (company-user) ============== -->

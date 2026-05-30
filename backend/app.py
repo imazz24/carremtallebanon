@@ -113,6 +113,25 @@ def _can_edit_company(company_id: int) -> bool:
     return u.get("role") == "company" and u.get("company_id") == int(company_id)
 
 
+def _log_activity(company_id, action, entity, detail=None):
+    """Record one company action for the admin dashboard's "what are they
+    doing" view. Best-effort: a logging failure must never break the
+    user's actual create/update/delete."""
+    if not company_id:
+        return
+    try:
+        u = _current_user() or {}
+        execute(
+            """INSERT INTO activity_log
+                 (company_id, user_id, username, action, entity, detail)
+               VALUES (%s,%s,%s,%s,%s,%s)""",
+            (int(company_id), u.get("id"), u.get("username"),
+             action, entity, detail),
+        )
+    except Exception:
+        pass
+
+
 @app.post("/api/login")
 def login():
     data = request.get_json(force=True) or {}
@@ -135,6 +154,13 @@ def login():
     )
     if not row:
         return jsonify({"error": "Invalid username or password"}), 401
+
+    # Stamp the login so the admin dashboard can tell who's still active and
+    # how long a company has been away. Best-effort — never block sign-in.
+    try:
+        execute("UPDATE users SET last_login = NOW() WHERE id = %s", (row["id"],))
+    except Exception:
+        pass
 
     company = None
     if row.get("company_id") and row.get("companyname"):
@@ -161,7 +187,7 @@ def login():
 
 # Admin-only: create a company AND its login user in one step.
 # The admin only supplies companyname + password; the rest of the company
-# row is filled with safe placeholders the company can edit later.
+# row is filled with safe placeholders the company can edit later.1
 @app.post("/api/register-company")
 def register_company():
     if not _is_admin_request():
@@ -224,14 +250,7 @@ def register_company():
 # ----------------------- COMPANIES ------------------------------------
 @app.get("/api/companies")
 def list_companies():
-    u = _current_user()
-    if u and u.get("role") == "company" and u.get("company_id"):
-        rows = query(
-            "SELECT * FROM companies WHERE id = %s AND is_active = TRUE",
-            (u["company_id"],),
-        )
-    else:
-        rows = query("SELECT * FROM companies WHERE is_active = TRUE ORDER BY companyname")
+    rows = query("SELECT * FROM companies WHERE is_active = TRUE ORDER BY companyname")
     return jsonify(_clean(rows))
 
 
@@ -312,10 +331,7 @@ def create_company():
 # ----------------------- CARS -----------------------------------------
 @app.get("/api/cars")
 def list_cars():
-    u = _current_user()
     company_id = request.args.get("company_id")
-    if u and u.get("role") == "company" and u.get("company_id"):
-        company_id = u["company_id"]
     if company_id:
         rows = query(
             """SELECT c.*, co.companyname
@@ -370,10 +386,16 @@ def soft_delete_car(car_id):
 
 
 def _validate_car_inputs(vin, type_, model, color, icon, plate, company_id,
-                         existing_vin_id=None):
+                         existing_vin_id=None, enforce_check_digit=True):
     """Run the full validation gauntlet on a single car. Returns
     {ok: bool, errors: dict[field -> message]} so the frontend can show
-    each error next to its field."""
+    each error next to its field.
+
+    enforce_check_digit: when False, the VIN still has to be structurally
+    valid (17 chars, legal VIN characters) but a wrong North-American
+    check digit is tolerated. The single Add-Car form sets this False
+    because the user deliberately edits the last 6 chars to match their
+    real car, which legitimately changes what the check digit would be."""
     errs = {}
 
     # Field presence
@@ -406,9 +428,9 @@ def _validate_car_inputs(vin, type_, model, color, icon, plate, company_id,
             else:
                 errs["plate_number"] = msg
 
-    # vininfo offline structural + check digit
+    # vininfo offline structural + (optional) check digit
     if vin and "vin" not in errs:
-        ok, msg = _validate_vin_offline(vin)
+        ok, msg = _validate_vin_offline(vin, enforce_check_digit=enforce_check_digit)
         if not ok:
             errs["vin"] = msg
 
@@ -420,11 +442,24 @@ def _validate_car_inputs(vin, type_, model, color, icon, plate, company_id,
         if existing:
             errs["plate_number"] = f"Plate '{platenumber}' is already registered"
 
-    # VIN uniqueness against the DB (skip for the same-row update case)
+    # The VIN must not be the same as the plate (icon + plate number). Compare
+    # case-insensitively and ignore spacing so "B 12345" / "B12345" both match.
+    if vin and platenumber and "vin" not in errs:
+        norm = lambda s: (s or "").upper().replace(" ", "")
+        if norm(vin) == norm(platenumber):
+            errs["vin"] = "VIN must not be the same as the plate number"
+
+    # VIN uniqueness against the DB (skip for the same-row update case).
+    # When another company already registered this VIN, say so explicitly so
+    # the company user knows it's claimed elsewhere, not just a typo.
     if vin and "vin" not in errs:
-        existing = query("SELECT id FROM cars WHERE vin = %s", (vin,), one=True)
+        existing = query("SELECT id, company_id FROM cars WHERE vin = %s",
+                         (vin,), one=True)
         if existing and (existing_vin_id is None or existing["id"] != existing_vin_id):
-            errs["vin"] = f"VIN '{vin}' is already registered"
+            if company_id and existing.get("company_id") != int(company_id):
+                errs["vin"] = "this vin car already use by another rental companies"
+            else:
+                errs["vin"] = f"VIN '{vin}' is already registered"
 
     # NHTSA cross-check — only if everything else is clean. Soft-fail when
     # NHTSA returns nothing (common for JDM / Gulf imports).
@@ -461,31 +496,52 @@ def create_car():
     else:
         icon, plate = "", raw_plate
 
+    vin = data["vin"].strip().upper()
     result = _validate_car_inputs(
-        vin=data["vin"].strip(),
+        vin=vin,
         type_=data["type"].strip(),
         model=data["model"].strip(),
         color=(data.get("color") or "").strip(),
         icon=icon,
         plate=plate,
         company_id=int(data["company_id"]),
+        # The user may edit the last 6 chars of a catalog VIN to match their
+        # actual car, which changes the check digit — accept that, but still
+        # require a structurally valid VIN and reject duplicates below.
+        enforce_check_digit=False,
     )
     if not result["ok"]:
         return jsonify({"error": "Validation failed", "errors": result["errors"]}), 400
 
-    row = execute(
-        """INSERT INTO cars
-             (vin, type, model, color, platenumber, has_gps, company_id)
-           VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
-        (
-            data["vin"].strip(), data["type"].strip(), data["model"].strip(),
-            result["color"],
-            result["platenumber"],
-            bool(data.get("has_gps", False)),
-            int(data["company_id"]),
-        ),
-        returning=True,
-    )
+    try:
+        row = execute(
+            """INSERT INTO cars
+                 (vin, type, model, color, platenumber, has_gps, company_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+            (
+                vin, data["type"].strip(), data["model"].strip(),
+                result["color"],
+                result["platenumber"],
+                bool(data.get("has_gps", False)),
+                int(data["company_id"]),
+            ),
+            returning=True,
+        )
+    except Exception as e:
+        # Belt-and-suspenders: the UNIQUE(vin)/UNIQUE(platenumber) constraints
+        # catch any duplicate that slipped past the checks above (e.g. a race
+        # between two concurrent adds) — return a clean 409, not a 500.
+        msg = str(e).lower()
+        if "vin" in msg:
+            return jsonify({"error": "Validation failed",
+                            "errors": {"vin": f"VIN '{vin}' is already registered"}}), 409
+        if "platenumber" in msg or "plate" in msg:
+            return jsonify({"error": "Validation failed",
+                            "errors": {"plate_number": f"Plate '{result['platenumber']}' is already registered"}}), 409
+        return jsonify({"error": "Could not save car"}), 409
+
+    _log_activity(int(data["company_id"]), "create", "car",
+                  f'{row.get("model") or ""} · {row.get("platenumber") or ""}'.strip(" ·"))
     return jsonify(_clean(row)), 201
 
 
@@ -567,21 +623,6 @@ KNOWN_VINS = [
 ]
 
 
-@app.get("/api/check-vin")
-def check_vin():
-    """Check if a VIN is already registered. Returns the car with its
-    company_id so the frontend can tell same-company vs other-company."""
-    vin = (request.args.get("vin") or "").strip().upper()
-    if not vin:
-        return jsonify(None)
-    row = query(
-        "SELECT id, vin, type, model, color, platenumber, has_gps, company_id "
-        "FROM cars WHERE UPPER(vin) = %s AND is_active = TRUE",
-        (vin,), one=True,
-    )
-    return jsonify(_clean(row)) if row else ("", 204)
-
-
 @app.get("/api/known-vins")
 def list_known_vins():
     """Return the curated VIN registry used by the Add Car form's VIN
@@ -609,6 +650,24 @@ def decode_vin():
         "model": model,
         "type":  body,
     })
+
+
+@app.get("/api/check-vin")
+def check_vin():
+    """Look up a VIN across every active car so the Add-Car form can warn,
+    before save, that the VIN is already registered (and by which company).
+    Returns the car row, or 204 No Content when the VIN is free."""
+    vin = (request.args.get("vin") or "").strip().upper()
+    if not vin:
+        return ("", 204)
+    row = query(
+        "SELECT id, vin, company_id, model, type, color, platenumber, has_gps "
+        "FROM cars WHERE vin = %s AND is_active = TRUE",
+        (vin,), one=True,
+    )
+    if not row:
+        return ("", 204)
+    return jsonify(_clean(row))
 
 
 # ----------------------- CARS — bulk CSV upload + VIN validation -----
@@ -661,17 +720,34 @@ def _validate_lebanese_plate(icon: str, plate: str):
     return True, ""
 
 
-def _validate_vin_offline(vin: str):
-    """Offline VIN structural validation via vininfo.
-    Returns (ok: bool, error_message: str). The check digit (position 9
-    on North American VINs) is NOT enforced — companies often reuse a
-    known VIN prefix and change only the last 6 serial digits, which
-    invalidates the original check digit. Structural errors (wrong
-    characters, bad length) are still rejected."""
+# A VIN never contains the letters I, O, or Q (to avoid 1/0 confusion).
+_VIN_CHAR_RE = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$", re.IGNORECASE)
+
+
+def _validate_vin_offline(vin: str, enforce_check_digit: bool = True):
+    """Offline VIN structural + check-digit validation via vininfo.
+    Returns (ok: bool, error_message: str). North American VINs have a
+    real check digit (9th char); other regions return None and we accept
+    them. Catches typos cheaply before any network round-trip.
+
+    When enforce_check_digit is False we still require a structurally
+    valid VIN (17 legal characters) but allow a non-matching check digit,
+    so a user can hand-edit the last 6 chars to match their real car."""
+    # Structural: exactly 17 chars from the legal VIN alphabet (no I/O/Q).
+    if not _VIN_CHAR_RE.match(vin or ""):
+        return False, (f"VIN '{vin}' is not valid: must be 17 letters/digits "
+                       f"(letters I, O, Q are not allowed)")
     try:
         v = _VinInfo(vin)
     except Exception as e:
         return False, f"Invalid VIN '{vin}': {e}"
+    if enforce_check_digit:
+        try:
+            cs = v.verify_checksum()
+        except Exception:
+            cs = None
+        if cs is False:
+            return False, f"VIN '{vin}' has an invalid check digit (typo?)"
     return True, ""
 
 
@@ -1038,16 +1114,9 @@ def update_client(client_id):
     personid = _none_if_blank(data.get("personid"))
     if id_type in ("passport", "national_id") and not personid:
         return jsonify({"error": "personid required for passport / national ID"}), 400
-    firstname = _none_if_blank(data.get("firstname"))
-    lastname  = _none_if_blank(data.get("lastname"))
-    full_name = _none_if_blank(data.get("name"))
-    if not full_name and (firstname or lastname):
-        full_name = " ".join(filter(None, [firstname, lastname]))
-
     row = execute(
         """UPDATE clients
-              SET personid = %s, name = %s, firstname = %s, lastname = %s,
-                  fathername = %s, mothername = %s,
+              SET personid = %s, name = %s, fathername = %s, mothername = %s,
                   nationality = %s,
                   phonenumber = %s, dateofbirth = %s, licenseid = %s,
                   startdatelicense = %s, enddatelicense = %s,
@@ -1057,9 +1126,7 @@ def update_client(client_id):
         RETURNING *""",
         (
             personid,
-            full_name,
-            firstname,
-            lastname,
+            _none_if_blank(data.get("name")),
             _none_if_blank(data.get("fathername")),
             _none_if_blank(data.get("mothername")),
             _none_if_blank(data.get("nationality")),
@@ -1116,7 +1183,7 @@ def soft_delete_client(client_id):
     return ("", 204)
 
 
-_ID_TYPES = {"passport", "national_id", "license", "international_license"}
+_ID_TYPES = {"passport", "national_id", "license"}
 
 
 def _norm_id_type(v):
@@ -1195,23 +1262,15 @@ def create_client():
             "error": "personid or licenseid is already used by a different client",
         }), 409
 
-    firstname = _none_if_blank(data.get("firstname"))
-    lastname  = _none_if_blank(data.get("lastname"))
-    full_name = _none_if_blank(data.get("name"))
-    if not full_name and (firstname or lastname):
-        full_name = " ".join(filter(None, [firstname, lastname]))
-
     row = execute(
         """INSERT INTO clients
-             (personid, name, firstname, lastname, fathername, mothername,
-              nationality, phonenumber, dateofbirth, licenseid,
+             (personid, name, fathername, mothername, nationality,
+              phonenumber, dateofbirth, licenseid,
               startdatelicense, enddatelicense, company_id, photo, id_type)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
         (
             personid,
-            full_name,
-            firstname,
-            lastname,
+            _none_if_blank(data.get("name")),
             _none_if_blank(data.get("fathername")),
             _none_if_blank(data.get("mothername")),
             _none_if_blank(data.get("nationality")),
@@ -1232,6 +1291,9 @@ def create_client():
                  VALUES (%s, %s) ON CONFLICT DO NOTHING""",
             (row["id"], int(company_id)),
         )
+    if row:
+        _log_activity(int(company_id) if company_id else None, "create", "client",
+                      row.get("name") or row.get("licenseid"))
     return jsonify(_attach_linked_companies(_clean(row))), 201
 
 
@@ -1338,6 +1400,8 @@ def create_rental():
                  data["start_date"], data["end_date"]),
             )
             row = cur.fetchone()
+    _log_activity(int(car["company_id"]), "create", "rental",
+                  f'{data["car_vin"]} · {data["start_date"]}→{data["end_date"]}')
     return jsonify(_clean(row)), 201
 
 
@@ -1407,6 +1471,8 @@ def create_reservation():
                  _none_if_blank(data.get("notes"))),
             )
             row = cur.fetchone()
+    _log_activity(int(car["company_id"]), "create", "reservation",
+                  f'{data["car_vin"]} · {data["start_date"]}→{data["end_date"]}')
     return jsonify(_clean(row)), 201
 
 
@@ -1423,11 +1489,12 @@ def update_reservation_status(res_id):
     if not _can_edit_company(int(existing["company_id"])):
         return jsonify({"error": "Not authorized"}), 403
 
-    from db import get_conn
-    from psycopg2.extras import RealDictCursor
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            if new_status == "active" and existing["status"] == "pending":
+    # When activating, create the actual rental and mark reservation active
+    if new_status == "active" and existing["status"] == "pending":
+        from db import get_conn
+        from psycopg2.extras import RealDictCursor
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 overlap = _check_car_date_overlap(
                     cur, existing["car_vin"],
                     str(existing["start_date"]), str(existing["end_date"]),
@@ -1441,11 +1508,12 @@ def update_reservation_status(res_id):
                     (existing["client_id"], existing["car_vin"],
                      existing["start_date"], existing["end_date"]),
                 )
-            cur.execute(
-                "UPDATE reservations SET status = %s WHERE id = %s RETURNING *",
-                (new_status, res_id),
-            )
-            row = cur.fetchone()
+
+    row = execute(
+        "UPDATE reservations SET status = %s WHERE id = %s RETURNING *",
+        (new_status, res_id),
+        returning=True,
+    )
     return jsonify(_clean(row))
 
 
@@ -1461,119 +1529,134 @@ def delete_reservation(res_id):
     return ("", 204)
 
 
-# ----------------------- INACTIVE COMPANIES ALERT ------------------------
-@app.get("/api/inactive-companies")
-def inactive_companies():
-    """Return companies whose users haven't added any data (car, client,
-    rental, or reservation) in the last 72 hours. Admin-only."""
-    if not _is_admin_request():
-        return jsonify({"error": "Admin only"}), 403
-
-    rows = query(
-        """SELECT c.id, c.companyname, c.phonenumber, c.location, c.owner_name,
-                  u.username,
-                  GREATEST(
-                    COALESCE((SELECT MAX(ca.created_at) FROM rentals ca
-                              JOIN cars cr ON cr.vin = ca.car_vin
-                              WHERE cr.company_id = c.id), '1970-01-01'),
-                    COALESCE((SELECT MAX(rv.created_at) FROM reservations rv
-                              WHERE rv.company_id = c.id), '1970-01-01'),
-                    u.created_at
-                  ) AS last_activity
-             FROM companies c
-             JOIN users u ON u.company_id = c.id AND u.role = 'company'
-            WHERE c.is_active = TRUE
-            ORDER BY last_activity ASC"""
-    )
-    cutoff = datetime.utcnow().replace(microsecond=0)
-    result = []
-    for r in (rows or []):
-        last = r.get("last_activity")
-        if not last:
-            continue
-        if isinstance(last, str):
-            last = datetime.fromisoformat(last)
-        hours_ago = (cutoff - last).total_seconds() / 3600
-        if hours_ago >= 72:
-            result.append({
-                "id":           r["id"],
-                "companyname":  r["companyname"],
-                "phonenumber":  r["phonenumber"],
-                "location":     r["location"],
-                "owner_name":   r["owner_name"],
-                "username":     r["username"],
-                "last_activity": last.isoformat(),
-                "hours_inactive": round(hours_ago),
-                "days_inactive":  round(hours_ago / 24, 1),
-            })
-    return jsonify(_clean(result))
+# ----------------------- ADMIN DASHBOARD ---------------------------------
+# "Active" = the company logged in OR added data within the last 24h.
+# A company is flagged inactive once BOTH login and data go quiet for 72h+.
+ACTIVE_WINDOW_HOURS = 24
+INACTIVE_THRESHOLD_HOURS = 72
 
 
-# ----------------------- DASHBOARD ACTIVITY ------------------------------
+def _dashboard_company_rows():
+    """One row per active company with its login + activity timestamps and
+    24h create-counts. Shared by the activity feed and the inactive list."""
+    return query(
+        """
+        SELECT co.id, co.companyname, co.phonenumber, co.location,
+               co.owner_name,
+               u.username, u.last_login, u.created_at AS registered_at,
+               (SELECT MAX(a.created_at) FROM activity_log a
+                 WHERE a.company_id = co.id) AS last_activity,
+               (SELECT COUNT(*) FROM activity_log a
+                 WHERE a.company_id = co.id AND a.entity = 'rental'
+                   AND a.created_at > NOW() - INTERVAL '24 hours') AS rentals_24h,
+               (SELECT COUNT(*) FROM activity_log a
+                 WHERE a.company_id = co.id AND a.entity = 'reservation'
+                   AND a.created_at > NOW() - INTERVAL '24 hours') AS reservations_24h,
+               (SELECT COUNT(*) FROM activity_log a
+                 WHERE a.company_id = co.id AND a.entity = 'car'
+                   AND a.created_at > NOW() - INTERVAL '24 hours') AS cars_24h,
+               (SELECT COUNT(*) FROM activity_log a
+                 WHERE a.company_id = co.id AND a.entity = 'client'
+                   AND a.created_at > NOW() - INTERVAL '24 hours') AS clients_24h,
+               EXISTS(SELECT 1 FROM activity_log a
+                       WHERE a.company_id = co.id) AS has_activity
+          FROM companies co
+          LEFT JOIN users u ON u.company_id = co.id
+         WHERE co.is_active = TRUE
+         ORDER BY co.companyname
+        """
+    ) or []
+
+
+def _last_seen(row):
+    """Most recent sign of life: latest of last_login / last_activity."""
+    stamps = [d for d in (row.get("last_login"), row.get("last_activity")) if d]
+    return max(stamps) if stamps else None
+
+
+def _hours_since(dt):
+    if not dt:
+        return None
+    return (datetime.now() - dt).total_seconds() / 3600.0
+
+
 @app.get("/api/dashboard-activity")
 def dashboard_activity():
-    """Return per-company activity summary for the last 24 hours. Admin-only."""
     if not _is_admin_request():
-        return jsonify({"error": "Admin only"}), 403
-
-    rows = query(
-        """SELECT
-             c.id, c.companyname, c.phonenumber, c.location, c.owner_name,
-             u.username,
-             (SELECT COUNT(*) FROM cars ca
-               WHERE ca.company_id = c.id AND ca.is_active = TRUE) AS total_cars,
-             (SELECT COUNT(*) FROM client_companies cc
-               WHERE cc.company_id = c.id) AS total_clients,
-             (SELECT COUNT(*) FROM rentals r
-               JOIN cars ca ON ca.vin = r.car_vin
-               WHERE ca.company_id = c.id
-                 AND r.created_at >= NOW() - INTERVAL '24 hours') AS rentals_24h,
-             (SELECT COUNT(*) FROM reservations rv
-               WHERE rv.company_id = c.id
-                 AND rv.created_at >= NOW() - INTERVAL '24 hours') AS reservations_24h,
-             GREATEST(
-               COALESCE((SELECT MAX(r2.created_at) FROM rentals r2
-                         JOIN cars ca2 ON ca2.vin = r2.car_vin
-                         WHERE ca2.company_id = c.id), '1970-01-01'::timestamp),
-               COALESCE((SELECT MAX(rv2.created_at) FROM reservations rv2
-                         WHERE rv2.company_id = c.id), '1970-01-01'::timestamp),
-               u.created_at
-             ) AS last_activity
-           FROM companies c
-           JOIN users u ON u.company_id = c.id AND u.role = 'company'
-          WHERE c.is_active = TRUE
-          ORDER BY (
-             (SELECT COUNT(*) FROM rentals r3
-               JOIN cars ca3 ON ca3.vin = r3.car_vin
-               WHERE ca3.company_id = c.id
-                 AND r3.created_at >= NOW() - INTERVAL '24 hours')
-             +
-             (SELECT COUNT(*) FROM reservations rv3
-               WHERE rv3.company_id = c.id
-                 AND rv3.created_at >= NOW() - INTERVAL '24 hours')
-          ) DESC, c.companyname"""
-    )
-    result = []
-    for r in (rows or []):
-        r24 = int(r.get("rentals_24h") or 0)
-        rv24 = int(r.get("reservations_24h") or 0)
-        last = r.get("last_activity")
-        last_str = last.isoformat() if hasattr(last, "isoformat") else str(last or "")
-        result.append({
-            "id":              r["id"],
-            "companyname":     r["companyname"],
-            "phonenumber":     r["phonenumber"],
-            "location":        r["location"],
-            "owner_name":      r["owner_name"],
-            "username":        r["username"],
-            "total_cars":      int(r.get("total_cars") or 0),
-            "total_clients":   int(r.get("total_clients") or 0),
-            "rentals_24h":     r24,
-            "reservations_24h": rv24,
-            "active_24h":      r24 + rv24 > 0,
-            "last_activity":   last_str,
+        return jsonify({"error": "Not authorized"}), 403
+    out = []
+    for r in _dashboard_company_rows():
+        seen = _last_seen(r)
+        hrs = _hours_since(seen)
+        out.append({
+            "id": r["id"],
+            "companyname": r["companyname"],
+            "phonenumber": r["phonenumber"],
+            "location": r["location"],
+            "owner_name": r["owner_name"],
+            "username": r["username"],
+            "last_login": r["last_login"].isoformat() if r.get("last_login") else None,
+            "last_activity": r["last_activity"].isoformat() if r.get("last_activity") else None,
+            "has_activity": bool(r.get("has_activity")),
+            "rentals_24h": int(r.get("rentals_24h") or 0),
+            "reservations_24h": int(r.get("reservations_24h") or 0),
+            "cars_24h": int(r.get("cars_24h") or 0),
+            "clients_24h": int(r.get("clients_24h") or 0),
+            "active_24h": hrs is not None and hrs <= ACTIVE_WINDOW_HOURS,
         })
-    return jsonify(_clean(result))
+    return jsonify(out)
+
+
+@app.get("/api/inactive-companies")
+def inactive_companies():
+    if not _is_admin_request():
+        return jsonify({"error": "Not authorized"}), 403
+    out = []
+    for r in _dashboard_company_rows():
+        seen = _last_seen(r)
+        # Never logged in and never added data → count from registration, so
+        # brand-new dormant accounts still surface (and keep counting up).
+        idle_since = seen or r.get("registered_at")
+        hrs = _hours_since(idle_since)
+        if hrs is None or hrs < INACTIVE_THRESHOLD_HOURS:
+            continue
+        out.append({
+            "id": r["id"],
+            "companyname": r["companyname"],
+            "phonenumber": r["phonenumber"],
+            "location": r["location"],
+            "owner_name": r["owner_name"],
+            "username": r["username"],
+            "last_login": r["last_login"].isoformat() if r.get("last_login") else None,
+            "has_activity": bool(r.get("has_activity")),
+            "hours_inactive": int(hrs),
+            "days_inactive": int(hrs // 24),
+        })
+    out.sort(key=lambda c: c["hours_inactive"], reverse=True)
+    return jsonify(out)
+
+
+@app.get("/api/company-activity/<int:company_id>")
+def company_activity(company_id):
+    """The timeline of what a single company has been doing — drives the
+    click-to-expand view in the admin dashboard."""
+    if not _is_admin_request():
+        return jsonify({"error": "Not authorized"}), 403
+    rows = query(
+        """SELECT action, entity, detail, username, created_at
+             FROM activity_log
+            WHERE company_id = %s
+            ORDER BY created_at DESC
+            LIMIT 50""",
+        (company_id,),
+    ) or []
+    return jsonify([{
+        "action": r["action"],
+        "entity": r["entity"],
+        "detail": r["detail"],
+        "username": r["username"],
+        "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+    } for r in rows])
 
 
 # ----------------------- CONTACT SUPPORT ---------------------------------
@@ -1597,15 +1680,8 @@ def contact_support():
 # THE main reporting query: every client + their rented cars + the company
 @app.get("/api/rentals/report")
 def rentals_report():
-    u = _current_user()
     client_id = request.args.get("client_id")
-    if u and u.get("role") == "company" and u.get("company_id"):
-        rows = query(
-            "SELECT * FROM v_client_rentals WHERE company_id = %s "
-            "ORDER BY start_date DESC",
-            (u["company_id"],),
-        )
-    elif client_id:
+    if client_id:
         rows = query(
             "SELECT * FROM v_client_rentals WHERE client_id = %s "
             "ORDER BY start_date DESC",
@@ -1616,54 +1692,6 @@ def rentals_report():
             "SELECT * FROM v_client_rentals ORDER BY client_name, start_date DESC"
         )
     return jsonify(_clean(rows))
-
-
-# ----------------------- CO-RENTERS -----------------------------------
-@app.get("/api/rentals/<int:rental_id>/co-renters")
-def list_co_renters(rental_id):
-    rows = query(
-        """SELECT cr.id, cr.client_id, cr.created_at,
-                  c.name, c.firstname, c.lastname, c.phonenumber,
-                  c.licenseid, c.personid, c.fathername, c.mothername,
-                  c.nationality, c.dateofbirth, c.photo,
-                  c.startdatelicense, c.enddatelicense, c.id_type
-             FROM co_renters cr
-             JOIN clients c ON c.id = cr.client_id
-            WHERE cr.rental_id = %s
-            ORDER BY cr.created_at""",
-        (rental_id,),
-    )
-    return jsonify(_clean(rows or []))
-
-
-@app.post("/api/rentals/<int:rental_id>/co-renters")
-def add_co_renter(rental_id):
-    if not _can_attach_to_rental(rental_id):
-        return jsonify({"error": "Not authorized"}), 403
-    data = request.get_json(force=True) or {}
-    client_id = data.get("client_id")
-    if not client_id:
-        return jsonify({"error": "client_id required"}), 400
-    existing = query(
-        "SELECT id FROM co_renters WHERE rental_id = %s AND client_id = %s",
-        (rental_id, int(client_id)), one=True,
-    )
-    if existing:
-        return jsonify({"error": "This client is already added as a co-renter"}), 409
-    row = execute(
-        "INSERT INTO co_renters (rental_id, client_id) VALUES (%s, %s) RETURNING *",
-        (rental_id, int(client_id)),
-        returning=True,
-    )
-    return jsonify(_clean(row)), 201
-
-
-@app.delete("/api/rentals/<int:rental_id>/co-renters/<int:co_id>")
-def remove_co_renter(rental_id, co_id):
-    if not _can_attach_to_rental(rental_id):
-        return jsonify({"error": "Not authorized"}), 403
-    execute("DELETE FROM co_renters WHERE id = %s AND rental_id = %s", (co_id, rental_id))
-    return ("", 204)
 
 
 # ----------------------- RENTAL MEDIA (photos + videos) ---------------
@@ -1815,13 +1843,4 @@ def download_report_pdf():
 # ----------------------- entrypoint -----------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("FLASK_PORT", "5000"))
-    debug = os.getenv("FLASK_DEBUG", "1") == "1"
-    if debug:
-        app.run(host="0.0.0.0", port=port, debug=True)
-    else:
-        try:
-            from waitress import serve
-            print(f"Serving on http://0.0.0.0:{port} (waitress, multi-threaded)")
-            serve(app, host="0.0.0.0", port=port, threads=16)
-        except ImportError:
-            app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=True)

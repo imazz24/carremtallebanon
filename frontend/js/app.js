@@ -281,6 +281,12 @@ function populateFilterSelect(selectEl, values){
   if (selectEl._ss) selectEl._ss.sync();
 }
 
+/* A readable, per-car-unique label for report rows: "Model — Plate". */
+function carLabel(r){
+  if (!r || !r.car_model) return "";
+  return r.car_plate ? `${r.car_model} — ${r.car_plate}` : r.car_model;
+}
+
 function refreshFilterDropdowns(){
   const companyNames = state.companies.map(c => c.companyname);
   const clientNames  = state.clients.map(c => c.name);
@@ -296,6 +302,15 @@ function refreshFilterDropdowns(){
   populateFilterSelect($("#filter-report-company"), reportCompanies);
   populateFilterSelect($("#filter-report-client"),  reportClients);
   populateFilterSelect($("#filter-report-lic"),     reportLics);
+
+  // Company-user report search dropdowns — scoped to the user's own company.
+  const u = AUTH.user();
+  let coRows = state.report || [];
+  if (u && u.role === "company"){
+    coRows = coRows.filter(r => Number(r.company_id) === Number(u.company_id));
+  }
+  populateFilterSelect($("#filter-report-client-co"), coRows.map(r => r.client_name));
+  populateFilterSelect($("#filter-report-car-co"),    coRows.map(carLabel));
 }
 
 function getCompaniesRows(){
@@ -497,12 +512,25 @@ function getReportRows(){
   let rows = state.report.slice();
 
   if (u && u.role === "company"){
-    const cutoff = new Date();
-    cutoff.setMonth(cutoff.getMonth() - 1);
-    rows = rows.filter(r =>
-      Number(r.company_id) === Number(u.company_id) &&
-      r.start_date && new Date(r.start_date) >= cutoff
-    );
+    // Always scoped to the user's own company.
+    rows = rows.filter(r => Number(r.company_id) === Number(u.company_id));
+    // Optional search filters — any combination, none required.
+    const client = $("#filter-report-client-co")?.value || "";
+    const car    = $("#filter-report-car-co")?.value    || "";
+    const from   = ($("#report-from-co")?.value || "").trim();
+    const to     = ($("#report-to-co")?.value   || "").trim();
+    if (client) rows = rows.filter(r => r.client_name === client);
+    if (car)    rows = rows.filter(r => carLabel(r) === car);
+    // Date filter = "rentals active in this range" (overlap).
+    if (from) rows = rows.filter(r => r.end_date   && r.end_date   >= from);
+    if (to)   rows = rows.filter(r => r.start_date && r.start_date <= to);
+    // With no filter active, default to the last 30 days so the initial
+    // view stays small; any filter unlocks the full history.
+    if (!client && !car && !from && !to){
+      const cutoff = new Date();
+      cutoff.setMonth(cutoff.getMonth() - 1);
+      rows = rows.filter(r => r.start_date && new Date(r.start_date) >= cutoff);
+    }
   } else if (u && u.role === "admin"){
     const company = $("#filter-report-company")?.value || "";
     const client  = $("#filter-report-client")?.value  || "";
@@ -1513,22 +1541,38 @@ function setupAddCarForm(){
   const vinSerialInput = $("#vin-serial-input");
   const vinEditFullBtn = $("#vin-edit-full-btn");
   let _vinPrefix = "";
+  let _vinOrigSerial = "";   // last 6 of the picked VIN, shown as a shadow
 
   function enterSplitMode(vin){
-    _vinPrefix = vin.substring(0, 11).toUpperCase();
+    const v = (vin || "").toUpperCase();
+    _vinPrefix = v.substring(0, 11);
+    _vinOrigSerial = v.substring(11);   // VIN is 17 chars → last 6
     if (vinPrefixBadge) vinPrefixBadge.textContent = _vinPrefix;
-    if (vinSerialInput) vinSerialInput.value = "";
+    if (vinSerialInput){
+      // Leave the field empty but show the car's original last-6 as a
+      // placeholder "shadow" the user can type over (or keep as-is).
+      vinSerialInput.value = "";
+      vinSerialInput.placeholder = _vinOrigSerial || "000000";
+    }
     if (vinFullMode)  vinFullMode.hidden = true;
     if (vinSplitMode) vinSplitMode.hidden = false;
     setTimeout(() => vinSerialInput?.focus(), 50);
   }
 
+  // The effective serial: what the user typed, or — if they left it blank —
+  // the original shadow value of the selected VIN.
+  function _currentSerial(){
+    const typed = (vinSerialInput?.value || "").toUpperCase();
+    return typed || _vinOrigSerial;
+  }
+
   function exitSplitMode(){
-    const serial = (vinSerialInput?.value || "").toUpperCase();
+    const serial = _currentSerial();
     const fullVin = _vinPrefix + serial;
     const vinInput2 = form.querySelector('input[name="vin"]');
     if (vinInput2) vinInput2.value = fullVin;
     _vinPrefix = "";
+    _vinOrigSerial = "";
     if (vinFullMode)  vinFullMode.hidden = false;
     if (vinSplitMode) vinSplitMode.hidden = true;
     lastVinSeen = "";
@@ -1537,7 +1581,7 @@ function setupAddCarForm(){
 
   function getSplitVin(){
     if (!vinSplitMode?.hidden && _vinPrefix){
-      return (_vinPrefix + (vinSerialInput?.value || "")).toUpperCase();
+      return (_vinPrefix + _currentSerial()).toUpperCase();
     }
     return null;
   }
@@ -2649,6 +2693,20 @@ function setupReportSearch(){
     Pager.reset("report");
     renderReport();
   });
+
+  // ---------- Report toolbar (company user) ----------
+  $("#filter-report-client-co")?.addEventListener("change", () => { Pager.reset("report"); renderReport(); });
+  $("#filter-report-car-co")?.addEventListener("change",    () => { Pager.reset("report"); renderReport(); });
+  $("#report-from-co")?.addEventListener("change", () => { Pager.reset("report"); renderReport(); });
+  $("#report-to-co")?.addEventListener("change",   () => { Pager.reset("report"); renderReport(); });
+  $("#report-reset-co")?.addEventListener("click", () => {
+    clearFilterSelect($("#filter-report-client-co"));
+    clearFilterSelect($("#filter-report-car-co"));
+    const f = $("#report-from-co"); if (f) f.value = "";
+    const t2 = $("#report-to-co");  if (t2) t2.value = "";
+    Pager.reset("report");
+    renderReport();
+  });
 }
 
 /* Common header for endpoints that need the current-user identity. */
@@ -2772,6 +2830,33 @@ function _searchText(c){
   return `${c.companyname} ${c.phonenumber||""} ${c.location||""} ${c.owner_name||""} ${c.username||""}`;
 }
 
+/* Relative "time ago" from an ISO timestamp, e.g. "3h", "2d", "just now". */
+function _timeAgo(iso){
+  if (!iso) return "";
+  const then = new Date(iso);
+  if (isNaN(then)) return "";
+  const secs = Math.max(0, (Date.now() - then.getTime()) / 1000);
+  const mins = Math.floor(secs / 60);
+  const hrs  = Math.floor(mins / 60);
+  const days = Math.floor(hrs / 24);
+  if (days >= 1) return `${days}${t("time.d")}`;
+  if (hrs  >= 1) return `${hrs}${t("time.h")}`;
+  if (mins >= 1) return `${mins}${t("time.m")}`;
+  return t("time.now");
+}
+
+/* One row in a company's expand-on-click activity timeline. */
+function _timelineItemHtml(a){
+  const verb = t(`activity.${a.action}`);
+  const ent  = t(`activity.entity.${a.entity}`);
+  const when = a.created_at ? _timeAgo(a.created_at) : "";
+  const who  = a.username ? ` · ${escape(a.username)}` : "";
+  return `<div class="dash-timeline-item">
+    <span class="dash-timeline-when">${escape(when)}</span>
+    <span class="dash-timeline-text">${escape(verb)} ${escape(ent)}${a.detail ? ` — ${escape(a.detail)}` : ""}${who}</span>
+  </div>`;
+}
+
 function _activityItemHtml(c){
   const phone = c.phonenumber
     ? c.phonenumber.split(",").map(p => p.trim()).filter(Boolean)
@@ -2779,19 +2864,33 @@ function _activityItemHtml(c){
     : `<span style="color:var(--muted)">—</span>`;
   const dotCls = c.active_24h ? "active" : "idle";
   const chips = [];
+  if (c.cars_24h > 0)
+    chips.push(`<span class="dash-activity-chip cars">${c.cars_24h} ${escape(t("dash.chip.cars"))}</span>`);
+  if (c.clients_24h > 0)
+    chips.push(`<span class="dash-activity-chip clients">${c.clients_24h} ${escape(t("dash.chip.clients"))}</span>`);
   if (c.rentals_24h > 0)
     chips.push(`<span class="dash-activity-chip rentals">${c.rentals_24h} ${escape(t("dash.chip.rentals"))}</span>`);
   if (c.reservations_24h > 0)
     chips.push(`<span class="dash-activity-chip reservations">${c.reservations_24h} ${escape(t("dash.chip.reservations"))}</span>`);
-  if (!c.active_24h)
+  if (!c.has_activity)
+    chips.push(`<span class="dash-activity-chip none">${escape(t("dash.chip.noData"))}</span>`);
+  else if (!c.active_24h)
     chips.push(`<span class="dash-activity-chip none">${escape(t("dash.chip.idle"))}</span>`);
-  return `<div class="dash-activity-item">
-    <span class="dash-activity-dot ${dotCls}"></span>
-    <div class="dash-activity-info">
-      <span class="dash-activity-name">${escape(c.companyname)}</span>
-      <span class="dash-activity-meta">📞 ${phone}${c.location ? ` · 📍 ${escape(c.location)}` : ""}${c.owner_name ? ` · ${escape(c.owner_name)}` : ""}</span>
+  // Sub-line: last login + whether they've ever added data.
+  const login = c.last_login
+    ? `${escape(t("dash.lastLogin"))}: ${escape(_timeAgo(c.last_login))} ${escape(t("dash.ago"))}`
+    : escape(t("dash.neverLoggedIn"));
+  return `<div class="dash-activity-item" data-company-id="${c.id}">
+    <div class="dash-activity-row">
+      <span class="dash-activity-dot ${dotCls}"></span>
+      <div class="dash-activity-info">
+        <span class="dash-activity-name">${escape(c.companyname)} <span class="dash-activity-expand">▾</span></span>
+        <span class="dash-activity-meta">📞 ${phone}${c.location ? ` · 📍 ${escape(c.location)}` : ""}${c.owner_name ? ` · ${escape(c.owner_name)}` : ""}</span>
+        <span class="dash-activity-sub">${login}</span>
+      </div>
+      <div class="dash-activity-stats">${chips.join("")}</div>
     </div>
-    <div class="dash-activity-stats">${chips.join("")}</div>
+    <div class="dash-activity-timeline" hidden></div>
   </div>`;
 }
 
@@ -2805,6 +2904,10 @@ function _inactiveItemHtml(c){
   const days = c.days_inactive >= 1
     ? `${c.days_inactive} ${t("alert.inactive.days")}`
     : `${c.hours_inactive}h`;
+  const login = c.last_login
+    ? `${escape(t("dash.lastLogin"))}: ${escape(_timeAgo(c.last_login))} ${escape(t("dash.ago"))}`
+    : escape(t("dash.neverLoggedIn"));
+  const dataNote = c.has_activity ? "" : ` &middot; ${escape(t("dash.chip.noData"))}`;
   return `<div class="alert-card">
     <div class="alert-card-info">
       <span class="alert-card-name">${escape(c.companyname)}${ownerBit}</span>
@@ -2813,6 +2916,7 @@ function _inactiveItemHtml(c){
         ${c.location ? ` · 📍 ${escape(c.location)}` : ""}
         · 👤 ${escape(c.username)}
       </span>
+      <span class="alert-card-meta">${login}${dataNote}</span>
     </div>
     <span class="alert-card-badge">${escape(days)} ${t("alert.inactive.ago")}</span>
   </div>`;
@@ -2870,17 +2974,52 @@ function renderDashActivity(){
     _dashActivityShown += DASH_PAGE_SIZE;
     renderDashActivity();
   });
+
+  // Click a company row to expand a timeline of what they've been doing.
+  list.querySelectorAll(".dash-activity-row").forEach(rowEl => {
+    rowEl.addEventListener("click", async () => {
+      const item = rowEl.closest(".dash-activity-item");
+      const tl   = item?.querySelector(".dash-activity-timeline");
+      if (!tl) return;
+      if (!tl.hidden){ tl.hidden = true; return; }
+      if (!tl.dataset.loaded){
+        tl.innerHTML = `<p class="dash-empty">${escape(t("dash.loading"))}</p>`;
+        try {
+          const r = await fetch(API.url(`/api/company-activity/${item.dataset.companyId}`),
+                                { headers: authHeaders() });
+          const data = r.ok ? await r.json() : [];
+          tl.innerHTML = data.length
+            ? data.map(_timelineItemHtml).join("")
+            : `<p class="dash-empty">${escape(t("dash.timeline.empty"))}</p>`;
+        } catch (e){
+          tl.innerHTML = `<p class="dash-empty">${escape(t("dash.timeline.empty"))}</p>`;
+        }
+        tl.dataset.loaded = "1";
+      }
+      tl.hidden = false;
+    });
+  });
 }
 
-async function loadDashboardActivity(){
+let _dashActivityRaw = "";
+async function loadDashboardActivity(silent = false){
   const u = AUTH.user();
   if (!u || u.role !== "admin") return;
+  let raw;
   try {
     const r = await fetch(API.url("/api/dashboard-activity"), { headers: authHeaders() });
     if (!r.ok) return;
-    _dashActivityData = await r.json();
-  } catch (e){ _dashActivityData = []; }
-  _dashActivityShown = DASH_PAGE_SIZE;
+    raw = await r.text();
+  } catch (e){
+    if (silent) return;        // transient error on an auto-poll → keep current view
+    raw = "[]";
+  }
+  // On a silent auto-refresh, skip the whole re-render when nothing changed.
+  // This keeps any expanded company timeline + "load more" position intact.
+  if (silent && raw === _dashActivityRaw){ DashboardLive.ensure(); return; }
+  _dashActivityRaw = raw;
+  try { _dashActivityData = JSON.parse(raw) || []; } catch (e){ _dashActivityData = []; }
+  if (!silent) _dashActivityShown = DASH_PAGE_SIZE;
   // The dropdown lists every registered company (both active + inactive).
   _populateDashCompanySelect($("#dash-activity-search"), _dashActivityData);
   _populateDashCompanySelect($("#dash-inactive-search"), _dashActivityData);
@@ -2890,6 +3029,7 @@ async function loadDashboardActivity(){
     searchEl._wired = true;
     searchEl.addEventListener("change", () => { _dashActivityShown = DASH_PAGE_SIZE; renderDashActivity(); });
   }
+  DashboardLive.ensure();   // start the live auto-refresh once the admin lands here
 }
 
 /* ---- Dashboard: inactive alerts ---- */
@@ -2925,15 +3065,23 @@ function renderInactiveAlerts(){
   });
 }
 
-async function loadInactiveAlerts(){
+let _dashInactiveRaw = "";
+async function loadInactiveAlerts(silent = false){
   const u = AUTH.user();
   if (!u || u.role !== "admin") return;
+  let raw;
   try {
     const r = await fetch(API.url("/api/inactive-companies"), { headers: authHeaders() });
     if (!r.ok) return;
-    _dashInactiveData = await r.json();
-  } catch (e){ _dashInactiveData = []; }
-  _dashInactiveShown = DASH_PAGE_SIZE;
+    raw = await r.text();
+  } catch (e){
+    if (silent) return;
+    raw = "[]";
+  }
+  if (silent && raw === _dashInactiveRaw) return;
+  _dashInactiveRaw = raw;
+  try { _dashInactiveData = JSON.parse(raw) || []; } catch (e){ _dashInactiveData = []; }
+  if (!silent) _dashInactiveShown = DASH_PAGE_SIZE;
   renderInactiveAlerts();
   const searchEl = $("#dash-inactive-search");
   if (searchEl && !searchEl._wired){
@@ -2941,6 +3089,66 @@ async function loadInactiveAlerts(){
     searchEl.addEventListener("change", () => { _dashInactiveShown = DASH_PAGE_SIZE; renderInactiveAlerts(); });
   }
 }
+
+/* ---- Dashboard live auto-refresh ----
+   Re-polls the activity + inactive feeds every few seconds so the admin
+   sees logins and newly-added data appear without a manual refresh.
+   Polling only runs while an admin is signed in, the browser tab is
+   visible, and the dashboard section is on screen — so it costs nothing
+   otherwise. Plain polling (no shared server state) so it works with the
+   multi-worker gunicorn deployment. The loaders above no-op the re-render
+   when the payload is unchanged, so this is cheap and non-disruptive. */
+const DashboardLive = (() => {
+  const INTERVAL_MS = 5000;
+  let timer = null;
+
+  function dashboardVisible(){
+    const sd = document.getElementById("stats-dashboard");
+    // The admin sidebar toggles this section between display "" and "none".
+    return !!sd && sd.style.display !== "none" && !sd.hidden;
+  }
+
+  // Refresh whichever admin tab is currently open, so the admin sees a
+  // company's new cars / clients / rentals / reservations appear without
+  // touching the page. Each refresher re-fetches + re-renders; the Pager
+  // keeps the current page, and filter dropdowns keep their selection.
+  async function refreshActivePanel(){
+    const panel = (typeof AdminSidebar !== "undefined" && AdminSidebar.current)
+      ? AdminSidebar.current() : "dashboard";
+    try {
+      switch (panel){
+        case "dashboard":
+          await loadDashboardActivity(true);
+          await loadInactiveAlerts(true);
+          // Keep the stat cards (companies / cars / clients / rentals) moving
+          // too — refresh the underlying datasets, then recompute the totals.
+          await Promise.all([
+            refreshCompanies(), refreshCars(), refreshClients(), refreshReport(),
+          ]);
+          updateStatsDashboard();
+          break;
+        case "companies":         await refreshCompanies(); break;
+        case "cars":              await refreshCars();      break;
+        case "clients":           await refreshClients();   break;
+        case "report":            await refreshReport();    break;
+        case "admin-reservations":await Reservations.refresh(); break;
+        // "support" has nothing live to poll.
+      }
+    } catch (e){ /* transient fetch error on a poll → keep current view */ }
+  }
+
+  async function tick(){
+    const u = AUTH.user();
+    if (!u || u.role !== "admin") return;          // not an admin (e.g. logged out)
+    if (document.visibilityState !== "visible") return;
+    await refreshActivePanel();
+  }
+
+  function ensure(){ if (!timer) timer = setInterval(tick, INTERVAL_MS); }
+  function stop(){ if (timer){ clearInterval(timer); timer = null; } }
+
+  return { ensure, stop };
+})();
 
 function showApp(){
   $("#login-overlay").style.display = "none";
@@ -3019,7 +3227,9 @@ const AdminSidebar = (() => {
     show("dashboard");
   }
 
-  return { setup, show };
+  function current(){ return _current; }
+
+  return { setup, show, current };
 })();
 
 function applyRoleUI(){
@@ -4187,16 +4397,82 @@ const Reservations = (() => {
     render();
   }
 
+  // Newest-first: most recently booked reservation on top. Falls back to
+  // start_date when created_at is missing on older rows.
+  function _byNewest(a, b){
+    const ka = a.created_at || a.start_date || "";
+    const kb = b.created_at || b.start_date || "";
+    return kb < ka ? -1 : (kb > ka ? 1 : 0);
+  }
+
+  function _carLabel(rv){
+    const m = rv.car_model || "";
+    const p = rv.car_plate || "";
+    return p ? `${m} — ${p}` : m;
+  }
+
+  // Format an ISO/SQL timestamp as a short, locale-aware date+time.
+  function _fmtBooked(ts){
+    if (!ts) return "";
+    const d = new Date(ts);
+    if (isNaN(d)) return String(ts).slice(0, 16).replace("T", " ");
+    return d.toLocaleString(undefined, {
+      year: "numeric", month: "short", day: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+  }
+
+  function _populateAdminFilters(){
+    populateFilterSelect($("#filter-arv-company"), _data.map(rv => rv.companyname));
+    populateFilterSelect($("#filter-arv-client"),  _data.map(rv => rv.client_name));
+    populateFilterSelect($("#filter-arv-car"),     _data.map(_carLabel));
+    populateFilterSelect($("#filter-arv-plate"),   _data.map(rv => rv.car_plate));
+  }
+
+  function _getAdminFiltered(){
+    const company = $("#filter-arv-company")?.value || "";
+    const client  = $("#filter-arv-client")?.value  || "";
+    const car     = $("#filter-arv-car")?.value     || "";
+    const plate   = $("#filter-arv-plate")?.value   || "";
+    const status  = $("#filter-arv-status")?.value  || "";
+    const from    = ($("#arv-from")?.value || "").trim();
+    const to      = ($("#arv-to")?.value   || "").trim();
+
+    let rows = _data.slice();
+    if (company) rows = rows.filter(rv => (rv.companyname || "") === company);
+    if (client)  rows = rows.filter(rv => (rv.client_name || "") === client);
+    if (car)     rows = rows.filter(rv => _carLabel(rv) === car);
+    if (plate)   rows = rows.filter(rv => (rv.car_plate || "") === plate);
+    if (status)  rows = rows.filter(rv => (rv.status || "") === status);
+    // Date filter = "reservations active in this range" (overlap), same
+    // semantics as the Report tab.
+    if (from) rows = rows.filter(rv => rv.end_date   && rv.end_date   >= from);
+    if (to)   rows = rows.filter(rv => rv.start_date && rv.start_date <= to);
+
+    rows.sort(_byNewest);
+    return rows;
+  }
+
   function renderAdmin(){
     const tbl = $("#tbl-admin-reservations");
     if (!tbl) return;
-    if (!_data.length) return emptyRow(tbl, 9);
+    _populateAdminFilters();
+    const rows = _getAdminFiltered();
+    if (!rows.length){
+      const pt = $("#pager-top-admin-reservations"); if (pt) pt.hidden = true;
+      const pb = $("#pager-admin-reservations"); if (pb) pb.hidden = true;
+      return emptyRow(tbl, 10);
+    }
     const dash = `<span class="badge no">—</span>`;
-    tbl.tBodies[0].innerHTML = _data.map((rv, i) => {
+    const today = _today();
+    const info = Pager.slice("admin-reservations", rows);
+    tbl.tBodies[0].innerHTML = info.rows.map((rv, i) => {
       const statusCls = rv.status || "pending";
       const statusLabel = t(`reservations.${statusCls}`) || rv.status;
-      return `<tr>
-        <td>${i + 1}</td>
+      // Highlight reservations booked today so the newest stand out.
+      const isToday = (rv.created_at || "").slice(0, 10) === today;
+      return `<tr${isToday ? ' class="rv-row-today"' : ""}>
+        <td>${(info.page - 1) * info.size + i + 1}</td>
         <td>${escape(rv.companyname || "")}</td>
         <td>${escape(rv.client_name || "")}</td>
         <td>${rv.client_phone ? `<a href="tel:${escape(rv.client_phone)}">${escape(rv.client_phone)}</a>` : dash}</td>
@@ -4204,9 +4480,12 @@ const Reservations = (() => {
         <td>${escape(rv.car_plate || "")}</td>
         <td>${escape(rv.start_date || "")}</td>
         <td>${escape(rv.end_date || "")}</td>
+        <td>${rv.created_at ? escape(_fmtBooked(rv.created_at)) : dash}</td>
         <td><span class="reservation-status-badge ${statusCls}">${escape(statusLabel)}</span></td>
       </tr>`;
     }).join("");
+    Pager.render("admin-reservations", "#pager-top-admin-reservations",
+                 "#pager-admin-reservations", info, renderAdmin);
   }
 
   function _today(){ return new Date().toISOString().slice(0, 10); }
@@ -4372,6 +4651,27 @@ const Reservations = (() => {
     });
     $("#rv-filter-date")?.addEventListener("change", render);
     $("#rv-filter-status")?.addEventListener("change", render);
+
+    // Admin reservations filters — per-column dropdowns + status + date range.
+    const arvIds = ["filter-arv-company", "filter-arv-client", "filter-arv-car",
+                    "filter-arv-plate", "filter-arv-status", "arv-from", "arv-to"];
+    arvIds.forEach(id => {
+      $(`#${id}`)?.addEventListener("change", () => {
+        Pager.reset("admin-reservations");
+        renderAdmin();
+      });
+    });
+    $("#arv-reset")?.addEventListener("click", () => {
+      clearFilterSelect($("#filter-arv-company"));
+      clearFilterSelect($("#filter-arv-client"));
+      clearFilterSelect($("#filter-arv-car"));
+      clearFilterSelect($("#filter-arv-plate"));
+      const st = $("#filter-arv-status"); if (st){ st.value = ""; if (st._ss) st._ss.sync(); }
+      const f = $("#arv-from"); if (f) f.value = "";
+      const t2 = $("#arv-to");  if (t2) t2.value = "";
+      Pager.reset("admin-reservations");
+      renderAdmin();
+    });
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
