@@ -16,7 +16,7 @@ const API = (() => {
     listCompanies: () => fetch(url("/api/companies")).then(json),
     addCompany:    (b) => fetch(url("/api/companies"), { method:"POST", headers:{ "Content-Type":"application/json"}, body: JSON.stringify(b)}).then(json),
 
-    listCars:      (companyId) => fetch(url("/api/cars" + (companyId ? `?company_id=${companyId}` : ""))).then(json),
+    listCars:      (companyId) => fetch(url("/api/cars" + (companyId ? `?company_id=${companyId}` : "")), { headers: authHeaders() }).then(json),
     addCar:        (b) => fetch(url("/api/cars"),      { method:"POST", headers:{ "Content-Type":"application/json"}, body: JSON.stringify(b)}).then(json),
 
     listClients:   () => fetch(url("/api/clients"), { headers: authHeaders() }).then(json),
@@ -25,7 +25,7 @@ const API = (() => {
     listBranches:  () => fetch(url("/api/branches")).then(json),
 
     addRental:     (b) => fetch(url("/api/rentals"),   { method:"POST", headers:{ "Content-Type":"application/json"}, body: JSON.stringify(b)}).then(json),
-    report:        () => fetch(url("/api/rentals/report")).then(json),
+    report:        () => fetch(url("/api/rentals/report"), { headers: authHeaders() }).then(json),
   };
 })();
 
@@ -593,6 +593,161 @@ function renderReport(){
   });
   Pager.render("report", "#pager-top-report", "#pager-report", info, renderReport);
 }
+
+/* ============== RETURNS DUE (company-user tab) ==============
+   A schedule of when each rented car must come back, derived from the same
+   rental report rows (no extra endpoint). Sorted by end_date so the most
+   overdue / soonest-due cars sit on top. There's no "returned" flag in the
+   data, so "Current & overdue" caps how far back we look to avoid showing
+   long-finished rentals forever; "All" lifts the cap. */
+const Returns = (() => {
+  let filter = "active";                       // "active" | "overdue" | "all"
+  const ACTIVE_WINDOW_DAYS = 30;               // how far back "active" reaches
+
+  const _z = n => String(n).padStart(2, "0");
+  function _dateStr(d){ return `${d.getFullYear()}-${_z(d.getMonth() + 1)}-${_z(d.getDate())}`; }
+  function _today(){ return _dateStr(new Date()); }
+  function _shiftToday(days){
+    const d = new Date(); d.setDate(d.getDate() + days); return _dateStr(d);
+  }
+  // Whole days from one YYYY-MM-DD to another (b - a). Parsed as local noon
+  // to sidestep DST edge cases.
+  function _dayDiff(a, b){
+    const pa = new Date(a + "T12:00:00"), pb = new Date(b + "T12:00:00");
+    return Math.round((pb - pa) / 86400000);
+  }
+
+  function _rows(){
+    const u = AUTH.user();
+    if (!u || u.role !== "company") return [];
+    const today = _today();
+    // Only cars still out: a returned car is back in stock, so it drops off
+    // this list. (Server already scopes to this company; the company_id
+    // check is a belt-and-suspenders guard.)
+    let rows = (state.report || []).filter(r =>
+      Number(r.company_id) === Number(u.company_id) && r.end_date && !r.returned_at);
+    // A specific return date takes precedence over the status window: show
+    // exactly the cars due back on that day.
+    const dateVal = ($("#returns-filter-date")?.value || "").trim();
+    if (dateVal){
+      rows = rows.filter(r => r.end_date === dateVal);
+    } else if (filter === "overdue"){
+      rows = rows.filter(r => r.end_date < today);
+    } else if (filter === "active"){
+      const cutoff = _shiftToday(-ACTIVE_WINDOW_DAYS);
+      rows = rows.filter(r => r.end_date >= cutoff);
+    }
+    // Soonest end date first; overdue (earlier dates) bubble to the top.
+    rows.sort((a, b) => (a.end_date < b.end_date ? -1 : a.end_date > b.end_date ? 1 : 0));
+    return rows;
+  }
+
+  function _statusHtml(endDate, today){
+    const diff = _dayDiff(today, endDate);     // <0 past, 0 today, >0 future
+    if (diff < 0)
+      return `<span class="return-badge overdue">${escape(t("returns.overdue"))} · ${escape(t("returns.daysOverdue").replace("{n}", -diff))}</span>`;
+    if (diff === 0)
+      return `<span class="return-badge today">${escape(t("returns.dueToday"))}</span>`;
+    return `<span class="return-badge upcoming">${escape(t("returns.upcoming"))} · ${escape(t("returns.daysLeft").replace("{n}", diff))}</span>`;
+  }
+
+  function render(){
+    const tbl = $("#tbl-returns");
+    if (!tbl) return;
+    const rows = _rows();
+    if (!rows.length){
+      const pt = $("#pager-top-returns"); if (pt) pt.hidden = true;
+      const pb = $("#pager-returns");     if (pb) pb.hidden = true;
+      return emptyRow(tbl, 8);
+    }
+    const today = _today();
+    const info = Pager.slice("returns", rows);
+    tbl.tBodies[0].innerHTML = info.rows.map((r, i) => {
+      const idx = (info.page - 1) * info.size + i;
+      return `
+      <tr data-row="${idx}" class="returns-row">
+        <td>${idx + 1}</td>
+        <td><strong>${escape(r.client_name)}</strong></td>
+        <td>${escape(r.client_phone)}</td>
+        <td>${escape(r.car_model)} <span style="color:#94a3b8">(${escape(r.car_type)})</span></td>
+        <td>${escape(r.car_plate)}</td>
+        <td>${escape(r.end_date)}</td>
+        <td>${_statusHtml(r.end_date, today)}</td>
+        <td>
+          <div class="row-actions">
+            <button type="button" class="row-btn pdf" data-detail="${idx}">${escape(t("action.open"))}</button>
+            <button type="button" class="row-btn return-btn" data-return="${idx}">${escape(t("returns.backToOffice"))}</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join("");
+    $$("tr.returns-row", tbl).forEach(tr => {
+      tr.addEventListener("click", (e) => {
+        // Let the "Back to office" button run its own action.
+        if (e.target.closest(".return-btn")) return;
+        Detail.open(rows[Number(tr.dataset.row)]);
+      });
+    });
+    $$(".return-btn", tbl).forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        _markReturned(rows[Number(btn.dataset.return)]);
+      });
+    });
+    Pager.render("returns", "#pager-top-returns", "#pager-returns", info, render);
+  }
+
+  async function _markReturned(row){
+    if (!row || !row.rental_id) return;
+    const label = carLabel(row) || row.car_plate || row.car_vin || "";
+    if (!confirm(t("returns.confirmReturn").replace("{car}", label))) return;
+    try {
+      const r = await fetch(API.url(`/api/rentals/${row.rental_id}/return`), {
+        method: "POST",
+        headers: { ...authHeaders() },
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok){
+        toast(data.error || t("toast.error"), "error");
+        return;
+      }
+      toast(t("returns.returned"), "success");
+      await refresh();
+    } catch (err){
+      toast(err.message || t("toast.error"), "error");
+    }
+  }
+
+  // Pull fresh report rows, then render. Used when the tab is opened.
+  async function refresh(){
+    try { state.report = await API.report(); } catch (e){}
+    render();
+  }
+
+  function setup(){
+    const BTNS = ["returns-filter-active", "returns-filter-overdue", "returns-filter-all"];
+    const setFilter = (f, activeId) => {
+      filter = f;
+      // Switching status window clears any specific-date filter.
+      const dateEl = $("#returns-filter-date"); if (dateEl) dateEl.value = "";
+      BTNS.forEach(id => {
+        const b = $(`#${id}`);
+        if (!b) return;
+        b.classList.toggle("btn-primary", id === activeId);
+        b.classList.toggle("btn-ghost-dark", id !== activeId);
+      });
+      Pager.reset("returns");
+      render();
+    };
+    $("#returns-filter-active") ?.addEventListener("click", () => setFilter("active",  "returns-filter-active"));
+    $("#returns-filter-overdue")?.addEventListener("click", () => setFilter("overdue", "returns-filter-overdue"));
+    $("#returns-filter-all")    ?.addEventListener("click", () => setFilter("all",     "returns-filter-all"));
+    // Filter by a specific return date.
+    $("#returns-filter-date")?.addEventListener("change", () => { Pager.reset("returns"); render(); });
+  }
+
+  return { render, refresh, setup };
+})();
 
 /* ============== RENT FLOW ============== */
 function setupRentFlow(){
@@ -1859,8 +2014,10 @@ function setupAddCarForm(){
       lastVinSeen = "";
       showAddCarStatus(t("addCar.saved").replace("{plate}", platenumber));
       toast(t("toast.added"), "success");
-      // Update the create-rental Car dropdown with the new entry.
+      // Update the create-rental and create-reservation Car dropdowns with
+      // the new entry, so it's selectable without a page refresh.
       refreshRentalPickers();
+      Reservations.refreshPickers();
     } catch (err){
       toast(err.message || t("toast.error"), "error");
     }
@@ -2299,6 +2456,7 @@ function setupAddClientForm(){
       // Keep the admin's clients list and both client pickers in sync.
       await refreshClients();
       refreshRentalPickers();
+      Reservations.refreshPickers();
     } catch (err){
       toast(err.message || t("toast.error"), "error");
     }
@@ -2399,7 +2557,7 @@ async function refreshRentalPickers(){
   // returns the joined companyname for the label.
   let cars = [];
   try {
-    cars = await fetch(API.url(`/api/cars?company_id=${u.company_id}`)).then(r => r.json());
+    cars = await fetch(API.url(`/api/cars?company_id=${u.company_id}`), { headers: authHeaders() }).then(r => r.json());
   } catch (e){ cars = []; }
 
   // The backend filters clients by company for company users, so this
@@ -3258,7 +3416,7 @@ function applyRoleUI(){
   }
 
   if (user.role === "company"){
-    const COMPANY_PANELS = ["report", "reservations", "company-info", "company-cars", "company-clients", "support"];
+    const COMPANY_PANELS = ["report", "reservations", "company-returns", "company-info", "company-cars", "company-clients", "support"];
     let _compCurrent = "report";
 
     function showCompanyPanel(panel){
@@ -3270,6 +3428,12 @@ function applyRoleUI(){
       $$("#company-sidebar .sidebar-btn").forEach(btn => {
         btn.classList.toggle("active", btn.dataset.cpanel === panel);
       });
+      // Opening the Reservations tab: rebuild the car/client pickers so cars
+      // (or clients) added on another tab are selectable without a refresh.
+      if (panel === "reservations") Reservations.refreshPickers();
+      // Opening the Returns tab: pull fresh rentals so due/overdue dates are
+      // current without a page refresh.
+      if (panel === "company-returns") Returns.refresh();
     }
 
     $$("#company-sidebar .sidebar-btn").forEach(btn => {
@@ -4033,7 +4197,7 @@ const Detail = (() => {
     if (!currentRow) return;
     const id = currentRow.rental_id;
     if (!id){ toast("Missing rental_id in row.", "error"); return; }
-    downloadFromUrl(API.url(`/api/report.pdf?rental_id=${id}&lang=${currentLang()}`));
+    downloadAuthed(API.url(`/api/report.pdf?rental_id=${id}&lang=${currentLang()}`), `rental_${id}.pdf`);
   });
 
   // Photo upload
@@ -4232,6 +4396,36 @@ function downloadFromUrl(url){
   setTimeout(() => a.remove(), 1000);
 }
 
+// Authenticated download: a plain anchor can't send the X-Auth-User header
+// the server now requires for company-scoped exports, so fetch the file as a
+// blob with auth headers and trigger the save from the in-memory object URL.
+async function downloadAuthed(url, fallbackName){
+  try {
+    const r = await fetch(url, { headers: authHeaders() });
+    if (!r.ok){
+      const err = await r.json().catch(() => ({}));
+      toast(err.error || t("toast.error"), "error");
+      return;
+    }
+    // Prefer the server's Content-Disposition filename when present.
+    let name = fallbackName || "download";
+    const cd = r.headers.get("Content-Disposition") || "";
+    const m = /filename="?([^"]+)"?/.exec(cd);
+    if (m) name = m[1];
+    const blob = await r.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = name;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { a.remove(); URL.revokeObjectURL(objUrl); }, 1000);
+  } catch (err){
+    toast(err.message || t("toast.error"), "error");
+  }
+}
+
 function currentLang(){
   return (typeof LangStore !== "undefined" && LangStore.get) ? LangStore.get() : "en";
 }
@@ -4240,7 +4434,7 @@ function setupReportPdf(){
   $("#btn-export-pdf").addEventListener("click", () => {
     const rows = state.report || [];
     if (!rows.length){ toast(t("table.empty"), "error"); return; }
-    downloadFromUrl(API.url(`/api/report.pdf?lang=${currentLang()}`));
+    downloadAuthed(API.url(`/api/report.pdf?lang=${currentLang()}`), "rental_report.pdf");
   });
 }
 
@@ -4565,6 +4759,9 @@ const Reservations = (() => {
             toast(action === "active" ? t("reservations.activated") : t("reservations.cancelled"), "success");
             await refresh();
             await refreshReport();
+            // Activating ties the car to a rental; cancelling frees it. Either
+            // way the available-car dropdown may have changed.
+            await refreshPickers();
           } catch (e){ toast(e.message || t("toast.error"), "error"); }
         }
       });
@@ -4578,9 +4775,15 @@ const Reservations = (() => {
     const tbl = $("#tbl-reservations");
     if (!tbl) return;
     const filtered = _getFiltered();
-    if (!filtered.length) return emptyRow(tbl, 9);
+    if (!filtered.length){
+      const pt = $("#pager-top-reservations"); if (pt) pt.hidden = true;
+      const pb = $("#pager-reservations");     if (pb) pb.hidden = true;
+      return emptyRow(tbl, 9);
+    }
     const dash = `<span class="badge no">—</span>`;
-    tbl.tBodies[0].innerHTML = filtered.map((rv, i) => {
+    const info = Pager.slice("reservations", filtered);
+    tbl.tBodies[0].innerHTML = info.rows.map((rv, i) => {
+      const idx = (info.page - 1) * info.size + i;
       const statusCls = rv.status || "pending";
       const statusLabel = t(`reservations.${statusCls}`) || rv.status;
       let actions = "";
@@ -4591,7 +4794,7 @@ const Reservations = (() => {
       }
       actions += `<button type="button" class="rv-action-btn delete" data-rv-id="${rv.id}" data-action="delete">${escape(t("action.delete"))}</button>`;
       return `<tr>
-        <td>${i + 1}</td>
+        <td>${idx + 1}</td>
         <td>${escape(rv.client_name || "")}</td>
         <td>${rv.client_phone ? `<a href="tel:${escape(rv.client_phone)}">${escape(rv.client_phone)}</a>` : dash}</td>
         <td>${escape(rv.car_model || "")}</td>
@@ -4603,22 +4806,44 @@ const Reservations = (() => {
       </tr>`;
     }).join("");
     _wireActions(tbl);
+    Pager.render("reservations", "#pager-top-reservations", "#pager-reservations", info, render);
   }
 
   async function refreshPickers(){
     const u = AUTH.user();
     if (!u || u.role !== "company" || !u.company_id) return;
     let cars = [], clients = [];
-    try { cars = await fetch(API.url(`/api/cars?company_id=${u.company_id}`)).then(r => r.json()); } catch (e){}
+    // Date-aware availability: once both reservation dates are filled in, only
+    // show cars free for THAT range — no pending reservation or un-returned
+    // rental that overlaps it. So a car out until June 2 is still bookable from
+    // June 2 onward (same-day handoff allowed). With no dates yet we can't
+    // compute overlap, so we show all of the company's cars and rely on the
+    // save-time conflict check.
+    const rform = $("#form-create-reservation");
+    const from = (rform?.querySelector('[name="start_date"]')?.value || "").trim();
+    const to   = (rform?.querySelector('[name="end_date"]')?.value   || "").trim();
+    let carsUrl = `/api/cars?company_id=${u.company_id}`;
+    if (from && to && to >= from){
+      carsUrl += `&available=1&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+    }
+    try { cars = await fetch(API.url(carsUrl), { headers: authHeaders() }).then(r => r.json()); } catch (e){}
     try { clients = await fetch(API.url("/api/clients"), { headers: authHeaders() }).then(r => r.json()); } catch (e){}
 
     const carSel = $("#reservation-car-select");
     if (carSel){
+      const prev = carSel.value;
       const ph = carSel.querySelector('option[disabled][hidden]')?.outerHTML || "";
       carSel.innerHTML = ph + cars.map(c =>
         `<option value="${escape(c.vin)}">${escape(`${c.model} — ${c.platenumber} (${c.vin})`)}</option>`
       ).join("");
-      carSel.value = "";
+      // Keep the chosen car if it's still available for these dates; otherwise
+      // clear it and let the user know it clashes.
+      if (prev && cars.some(c => c.vin === prev)){
+        carSel.value = prev;
+      } else {
+        carSel.value = "";
+        if (prev) toast(t("reservations.carUnavailable"), "error");
+      }
       if (carSel._ss) carSel._ss.sync();
     }
     const clientSel = $("#reservation-client-select");
@@ -4636,21 +4861,28 @@ const Reservations = (() => {
     const form = $("#form-create-reservation");
     if (!form) return;
 
-    // Filter controls
+    // Re-filter the car dropdown to the chosen date range as soon as either
+    // date changes, so only cars free for those dates are offered.
+    ["start_date", "end_date"].forEach(n => {
+      form.querySelector(`[name="${n}"]`)?.addEventListener("change", () => refreshPickers());
+    });
+
+    // Filter controls — reset to page 1 whenever the filter changes.
+    const rerender = () => { Pager.reset("reservations"); render(); };
     $("#rv-filter-today")?.addEventListener("click", () => {
       const dateEl = $("#rv-filter-date");
       if (dateEl) dateEl.value = _today();
-      render();
+      rerender();
     });
     $("#rv-filter-all")?.addEventListener("click", () => {
       const dateEl = $("#rv-filter-date");
       const statusEl = $("#rv-filter-status");
       if (dateEl) dateEl.value = "";
       if (statusEl) statusEl.value = "";
-      render();
+      rerender();
     });
-    $("#rv-filter-date")?.addEventListener("change", render);
-    $("#rv-filter-status")?.addEventListener("change", render);
+    $("#rv-filter-date")?.addEventListener("change", rerender);
+    $("#rv-filter-status")?.addEventListener("change", rerender);
 
     // Admin reservations filters — per-column dropdowns + status + date range.
     const arvIds = ["filter-arv-company", "filter-arv-client", "filter-arv-car",
@@ -4711,6 +4943,9 @@ const Reservations = (() => {
         });
         toast(t("reservations.saved"), "success");
         await refresh();
+        // Drop the just-reserved car from the dropdown so it can't be
+        // reserved again to another client.
+        await refreshPickers();
       } catch (err){ toast(err.message || t("toast.error"), "error"); }
     });
   }
@@ -4810,6 +5045,7 @@ async function init(){
   setupAddClientForm();
   setupCreateRentalForm();
   Reservations.setup();
+  Returns.setup();
   setupSupportForm();
   setupReportSearch();
   MapPicker.setup();

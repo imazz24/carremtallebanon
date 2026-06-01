@@ -331,6 +331,50 @@ def create_company():
 # ----------------------- CARS -----------------------------------------
 @app.get("/api/cars")
 def list_cars():
+    # Data isolation: a company user only ever sees their own cars,
+    # whatever company_id is passed. Admin may filter by company_id or
+    # list the whole fleet. Unauthenticated callers see nothing.
+    u = _current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    if u.get("role") == "company" and u.get("company_id"):
+        # ?available=1 → only cars free to book. With from/to it's date-aware:
+        # exclude cars whose pending reservation or un-returned rental OVERLAPS
+        # [from, to]. Overlap is strict (start < to AND end > from) so a booking
+        # may start the exact day another ends — same-day handoff. Without dates
+        # it falls back to "free right now" (any open booking excludes the car).
+        params = [u["company_id"]]
+        avail_sql = ""
+        if request.args.get("available"):
+            frm = request.args.get("from")
+            to = request.args.get("to")
+            if frm and to:
+                avail_sql = """
+              AND NOT EXISTS (SELECT 1 FROM reservations rv
+                               WHERE rv.car_vin = c.vin AND rv.status = 'pending'
+                                 AND rv.start_date < %s AND rv.end_date > %s)
+              AND NOT EXISTS (SELECT 1 FROM rentals r
+                               WHERE r.car_vin = c.vin AND r.returned_at IS NULL
+                                 AND r.start_date < %s AND r.end_date > %s)"""
+                params += [to, frm, to, frm]
+            else:
+                avail_sql = """
+              AND NOT EXISTS (SELECT 1 FROM reservations rv
+                               WHERE rv.car_vin = c.vin AND rv.status = 'pending')
+              AND NOT EXISTS (SELECT 1 FROM rentals r
+                               WHERE r.car_vin = c.vin AND r.returned_at IS NULL)"""
+        rows = query(
+            """SELECT c.*, co.companyname
+                 FROM cars c JOIN companies co ON co.id = c.company_id
+                WHERE c.company_id = %s AND c.is_active = TRUE AND co.is_active = TRUE"""
+            + avail_sql +
+            "\n                ORDER BY c.model",
+            tuple(params),
+        )
+        return jsonify(_clean(rows))
+    if u.get("role") != "admin":
+        return jsonify({"error": "Not authorized"}), 403
+
     company_id = request.args.get("company_id")
     if company_id:
         rows = query(
@@ -1066,7 +1110,9 @@ def list_clients():
     # clients.company_id column is no longer used for filtering — the
     # junction is the source of truth.
     u = _current_user()
-    if u and u.get("role") == "company" and u.get("company_id"):
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    if u.get("role") == "company" and u.get("company_id"):
         rows = query(
             """SELECT cl.*
                  FROM clients cl
@@ -1076,8 +1122,10 @@ def list_clients():
                 ORDER BY cl.name""",
             (u["company_id"],),
         )
-    else:
+    elif u.get("role") == "admin":
         rows = query("SELECT * FROM clients WHERE is_active = TRUE ORDER BY name")
+    else:
+        return jsonify({"error": "Not authorized"}), 403
     rows = _clean(rows)
     rows = _attach_linked_companies(rows)
     return jsonify(rows)
@@ -1330,13 +1378,17 @@ def _check_car_date_overlap(cur, car_vin, start_date, end_date,
     """Check if a car has any overlapping rentals or reservations in the
     given date range. Must be called inside a transaction with an open
     cursor — uses FOR UPDATE to prevent two concurrent requests from
-    both passing the check on the same car."""
+    both passing the check on the same car.
+
+    Overlap is strict (existing.start < new_end AND existing.end > new_start)
+    so a booking may start the exact day another ends — same-day handoff."""
     cur.execute(
         """SELECT r.id, c.name AS client_name, r.start_date, r.end_date
              FROM rentals r
              JOIN clients c ON c.id = r.client_id
             WHERE r.car_vin = %s
-              AND r.start_date <= %s AND r.end_date >= %s
+              AND r.returned_at IS NULL
+              AND r.start_date < %s AND r.end_date > %s
               AND (%s IS NULL OR r.id != %s)
             FOR UPDATE OF r""",
         (car_vin, end_date, start_date,
@@ -1353,7 +1405,7 @@ def _check_car_date_overlap(cur, car_vin, start_date, end_date,
              JOIN clients c ON c.id = rv.client_id
             WHERE rv.car_vin = %s
               AND rv.status = 'pending'
-              AND rv.start_date <= %s AND rv.end_date >= %s
+              AND rv.start_date < %s AND rv.end_date > %s
               AND (%s IS NULL OR rv.id != %s)
             FOR UPDATE OF rv""",
         (car_vin, end_date, start_date,
@@ -1403,6 +1455,27 @@ def create_rental():
     _log_activity(int(car["company_id"]), "create", "rental",
                   f'{data["car_vin"]} · {data["start_date"]}→{data["end_date"]}')
     return jsonify(_clean(row)), 201
+
+
+@app.post("/api/rentals/<int:rental_id>/return")
+def mark_rental_returned(rental_id):
+    """Company received the car back ("back to office"). Stamps returned_at
+    so the car becomes available to rent again (the overlap check skips
+    returned rentals) and the row drops off the Returns Due tab. Only the
+    owning company (or an admin) may do this."""
+    if not _can_attach_to_rental(rental_id):
+        return jsonify({"error": "Not authorized"}), 403
+    row = execute(
+        """UPDATE rentals SET returned_at = NOW()
+            WHERE id = %s AND returned_at IS NULL
+        RETURNING *""",
+        (rental_id,), returning=True,
+    )
+    if not row:
+        return jsonify({"error": "Rental not found or already returned"}), 404
+    _log_activity(_rental_company_id(rental_id), "update", "rental",
+                  f'{row["car_vin"]} returned (back to office)')
+    return jsonify(_clean(row))
 
 
 # ----------------------- RESERVATIONS ------------------------------------
@@ -1680,16 +1753,27 @@ def contact_support():
 # THE main reporting query: every client + their rented cars + the company
 @app.get("/api/rentals/report")
 def rentals_report():
+    # Data isolation: a company user only ever sees their own rentals; an
+    # admin sees everything. An unauthenticated caller sees nothing.
+    u = _current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    is_company = u.get("role") == "company" and u.get("company_id")
+    scope_sql = " AND company_id = %s" if is_company else ""
+    scope_val = (u["company_id"],) if is_company else ()
+
     client_id = request.args.get("client_id")
     if client_id:
         rows = query(
-            "SELECT * FROM v_client_rentals WHERE client_id = %s "
-            "ORDER BY start_date DESC",
-            (client_id,),
+            "SELECT * FROM v_client_rentals WHERE client_id = %s" + scope_sql +
+            " ORDER BY start_date DESC",
+            (client_id,) + scope_val,
         )
     else:
         rows = query(
-            "SELECT * FROM v_client_rentals ORDER BY client_name, start_date DESC"
+            "SELECT * FROM v_client_rentals WHERE TRUE" + scope_sql +
+            " ORDER BY client_name, start_date DESC",
+            scope_val,
         )
     return jsonify(_clean(rows))
 
@@ -1713,10 +1797,66 @@ def _can_attach_to_rental(rental_id: int) -> bool:
     return _can_edit_company(company_id)
 
 
+def _remove_media_file(rental_id, filename):
+    """Best-effort delete of one media file from disk. Missing files and
+    permission errors are ignored so a stale file never blocks the DB row
+    from being removed."""
+    path = os.path.join(MEDIA_ROOT, str(rental_id), filename)
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+
+
+def _delete_media_rows(rows):
+    """Delete the given rental_media rows (list of dicts with id/rental_id/
+    filename) from both disk and the DB."""
+    if not rows:
+        return
+    for r in rows:
+        _remove_media_file(r["rental_id"], r["filename"])
+    execute("DELETE FROM rental_media WHERE id = ANY(%s)",
+            ([r["id"] for r in rows],))
+
+
+def _purge_expired_media():
+    """Retention rule: a car's photos/videos live only until the car is back
+    with the company — rental end_date + 24h, i.e. any calendar day after
+    end_date. Past that they're removed from disk and the DB. Run lazily when
+    media is listed/uploaded, so expired files drop out of the report the next
+    time it's opened (the app has no background scheduler)."""
+    rows = query(
+        """SELECT m.id, m.rental_id, m.filename
+             FROM rental_media m
+             JOIN rentals r ON r.id = m.rental_id
+            WHERE r.end_date < CURRENT_DATE""",
+    ) or []
+    _delete_media_rows(rows)
+
+
+def _purge_other_media_for_vin(rental_id, keep_media_id):
+    """Keep only the newest media file per car: after a new upload, delete
+    every other photo/video tied to the same car VIN (across all of that
+    car's rentals), leaving just the file that was just uploaded."""
+    rows = query(
+        """SELECT m.id, m.rental_id, m.filename
+             FROM rental_media m
+             JOIN rentals r   ON r.id = m.rental_id
+             JOIN rentals cur ON cur.id = %s
+            WHERE r.car_vin = cur.car_vin
+              AND m.id <> %s""",
+        (rental_id, keep_media_id),
+    ) or []
+    _delete_media_rows(rows)
+
+
 @app.get("/api/rentals/<int:rental_id>/media")
 def list_rental_media(rental_id):
     if not _can_attach_to_rental(rental_id):
         return jsonify({"error": "Not authorized"}), 403
+    # Lazy retention sweep: clear any media whose car has been returned.
+    _purge_expired_media()
     rows = query(
         "SELECT id, kind, filename, original_name, mime, uploaded_at, uploaded_by "
         "FROM rental_media WHERE rental_id = %s ORDER BY uploaded_at DESC",
@@ -1761,6 +1901,10 @@ def upload_rental_media(rental_id):
         (rental_id, kind, fname, f.filename, mime, user.get("username")),
         returning=True,
     )
+    # Retention rules: keep only this newest file for the car's VIN, and
+    # sweep out any media whose car has already been returned.
+    _purge_other_media_for_vin(rental_id, row["id"])
+    _purge_expired_media()
     row["url"] = f"/uploads/rental_media/{rental_id}/{fname}"
     return jsonify(_clean(row)), 201
 
@@ -1775,12 +1919,7 @@ def delete_rental_media(rental_id, media_id):
     )
     if not row:
         return jsonify({"error": "Not found"}), 404
-    path = os.path.join(MEDIA_ROOT, str(rental_id), row["filename"])
-    try:
-        if os.path.exists(path):
-            os.remove(path)
-    except Exception:
-        pass
+    _remove_media_file(rental_id, row["filename"])
     execute("DELETE FROM rental_media WHERE id = %s", (media_id,))
     return ("", 204)
 
@@ -1812,10 +1951,18 @@ def download_report_pdf():
     if lang not in ("en", "ar"):
         lang = "en"
 
+    # Data isolation: company users may only export their own rentals.
+    u = _current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    is_company = u.get("role") == "company" and u.get("company_id")
+    scope_sql = " AND company_id = %s" if is_company else ""
+    scope_val = (u["company_id"],) if is_company else ()
+
     if rental_id:
         row = query(
-            "SELECT * FROM v_client_rentals WHERE rental_id = %s",
-            (rental_id,),
+            "SELECT * FROM v_client_rentals WHERE rental_id = %s" + scope_sql,
+            (rental_id,) + scope_val,
             one=True,
         )
         if not row:
@@ -1827,7 +1974,9 @@ def download_report_pdf():
         )
     else:
         rows = query(
-            "SELECT * FROM v_client_rentals ORDER BY client_name, start_date DESC"
+            "SELECT * FROM v_client_rentals WHERE TRUE" + scope_sql +
+            " ORDER BY client_name, start_date DESC",
+            scope_val,
         )
         buf = report_pdf(rows or [], lang=lang)
         filename = "rental_report.pdf"

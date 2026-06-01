@@ -348,6 +348,9 @@ tbody tr.report-row:hover{ background: rgba(99,102,241,.06); }
 .row-btn.edit:hover  { color: var(--primary); border-color: var(--primary); background: var(--primary-lt); }
 .row-btn.delete:hover{ color: var(--danger);  border-color: var(--danger);  background: var(--danger-lt); }
 .row-btn.pdf:hover   { color: var(--primary-dk); border-color: var(--primary-dk); background: var(--primary-lt); }
+/* "Back to office" — return a rented car to stock. */
+.row-btn.return-btn{ color: #059669; border-color: var(--success-lt); }
+.row-btn.return-btn:hover{ color: #fff; background: #059669; border-color: #059669; }
 
 /* =================== EDIT MODAL =================== */
 .edit-card{ width: min(720px, 100%); max-height: 90vh; }
@@ -1599,6 +1602,19 @@ html[dir="rtl"] .dash-search-input{
 }
 .reservation-status-badge.inactive{
   background: var(--surface-3); color: var(--muted);
+}
+
+/* Returns-due tab: when a rented car is due back. */
+.return-badge{
+  display: inline-block; padding: .2rem .55rem; border-radius: 999px;
+  font-size: .72rem; font-weight: 700; white-space: nowrap;
+}
+.return-badge.overdue{  background: #fee2e2; color: #b91c1c; }
+.return-badge.today{    background: var(--accent-lt); color: #b45309; }
+.return-badge.upcoming{ background: var(--success-lt); color: #059669; }
+/* Nudge overdue rows so they read as needing attention. */
+#tbl-returns tr.returns-row:has(.return-badge.overdue) td{
+  background: rgba(239,68,68,.06);
 }
 
 /* Admin reservations: subtly highlight rows booked today so the newest
