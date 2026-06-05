@@ -4,11 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title data-i18n="app.title">Car Rental | تأجير السيارات</title>
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="css/style.css?v=7" />
+  <link rel="stylesheet" href="css/style.css?v=20" />
 </head>
 <body>
 
@@ -35,6 +36,45 @@
       Invalid username or password.
     </p>
   </form>
+</div>
+
+<!-- ============== APP LOADER (login → dashboard transition) ============== -->
+<div id="app-loader" class="app-loader" hidden>
+  <div class="al-aurora"></div>
+  <div class="al-particles">
+    <span></span><span></span><span></span><span></span><span></span><span></span>
+    <span></span><span></span><span></span><span></span><span></span><span></span>
+  </div>
+  <div class="app-loader-card">
+    <span class="brand-mark al-badge"></span>
+    <div class="al-gauge">
+      <svg class="al-g-svg" viewBox="0 0 200 200" aria-hidden="true">
+        <defs>
+          <linearGradient id="alGaugeGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#6366f1"/>
+            <stop offset=".55" stop-color="#818cf8"/>
+            <stop offset="1" stop-color="#c4b5fd"/>
+          </linearGradient>
+        </defs>
+        <circle class="al-g-track" cx="100" cy="100" r="80" pathLength="100"
+                fill="none" stroke-width="10" stroke-linecap="round"
+                stroke-dasharray="75 25" transform="rotate(135 100 100)"/>
+        <circle class="al-g-prog" cx="100" cy="100" r="80" pathLength="100"
+                fill="none" stroke="url(#alGaugeGrad)" stroke-width="10" stroke-linecap="round"
+                stroke-dasharray="0 100" transform="rotate(135 100 100)"/>
+        <g class="al-g-needle" transform="rotate(-135 100 100)">
+          <line x1="100" y1="100" x2="100" y2="38" stroke="#e9ecff" stroke-width="3.5" stroke-linecap="round"/>
+        </g>
+        <circle class="al-g-hub" cx="100" cy="100" r="7" fill="#c4b5fd"/>
+      </svg>
+      <div class="al-gauge-readout">
+        <b id="al-gauge-num">0</b><i>%</i>
+        <span class="al-gauge-unit" data-i18n="loader.loading">Loading</span>
+      </div>
+    </div>
+    <div class="app-loader-title" data-i18n="brand">Car Rental</div>
+    <div class="app-loader-status" id="app-loader-status">Igniting the engine…</div>
+  </div>
 </div>
 
 <!-- ============== PASSWORD RESET MODAL (first-time login) ============== -->
@@ -203,12 +243,18 @@
   <!-- ============== ADMIN DASHBOARD ============== -->
   <section id="stats-dashboard" class="admin-only-show dash" hidden>
 
-    <!-- Row 1: welcome + date -->
-    <div class="dash-welcome">
-      <div>
+    <!-- Row 1: hero welcome banner -->
+    <div class="dash-hero">
+      <div class="dash-hero-orb dash-hero-orb-1"></div>
+      <div class="dash-hero-orb dash-hero-orb-2"></div>
+      <div class="dash-hero-grid"></div>
+      <div class="dash-hero-content">
+        <span class="dash-hero-eyebrow" id="dash-greeting" data-i18n="dash.greeting.day">Good day</span>
         <h1 class="dash-title" data-i18n="dash.welcome">Welcome back, Admin</h1>
-        <p class="dash-date" id="dash-date"></p>
+        <p class="dash-hero-sub" data-i18n="dash.hero.sub">Here's what's happening across your fleet today.</p>
+        <p class="dash-date"><span class="dash-date-dot"></span><span id="dash-date"></span></p>
       </div>
+      <div class="dash-hero-mark">🚘</div>
     </div>
 
     <!-- Row 2: stat cards (always open, no toggle needed) -->
@@ -218,6 +264,7 @@
         <div class="stat-body">
           <span class="stat-value" id="stat-companies">0</span>
           <span class="stat-label" data-i18n="nav.companies">Companies</span>
+          <span class="stat-foot" data-i18n="dash.stat.companies">Registered partners</span>
         </div>
       </div>
       <div class="stat-card stat-cars">
@@ -225,6 +272,7 @@
         <div class="stat-body">
           <span class="stat-value" id="stat-cars">0</span>
           <span class="stat-label" data-i18n="nav.cars">Cars</span>
+          <span class="stat-foot" data-i18n="dash.stat.cars">Vehicles in fleet</span>
         </div>
       </div>
       <div class="stat-card stat-clients">
@@ -232,6 +280,7 @@
         <div class="stat-body">
           <span class="stat-value" id="stat-clients">0</span>
           <span class="stat-label" data-i18n="nav.clients">Clients</span>
+          <span class="stat-foot" data-i18n="dash.stat.clients">Total customers</span>
         </div>
       </div>
       <div class="stat-card stat-rentals">
@@ -239,6 +288,7 @@
         <div class="stat-body">
           <span class="stat-value" id="stat-rentals">0</span>
           <span class="stat-label" data-i18n="nav.report">Rentals</span>
+          <span class="stat-foot" data-i18n="dash.stat.rentals">All-time bookings</span>
         </div>
       </div>
     </div>
@@ -1301,47 +1351,83 @@
     </div>
     <div id="rv-today-list" class="rv-today-list" hidden></div>
 
-    <!-- Date filter -->
-    <div class="rv-filter-bar">
-      <button type="button" id="rv-filter-today" class="btn btn-primary rv-filter-today-btn"
-              data-i18n="reservations.filterToday">Today</button>
-      <button type="button" id="rv-filter-all" class="btn btn-ghost-dark"
-              data-i18n="reservations.filterAll">All</button>
-      <div class="field rv-date-field">
-        <label data-i18n="reservations.filterDate">Search by date</label>
-        <input type="date" id="rv-filter-date">
-      </div>
-      <div class="field rv-date-field">
-        <label data-i18n="reservations.filterStatus">Status</label>
-        <select id="rv-filter-status">
-          <option value="" data-i18n="filter.all">— All —</option>
-          <option value="pending" data-i18n="reservations.pending">Pending</option>
-          <option value="active" data-i18n="reservations.active">Active</option>
-          <option value="inactive" data-i18n="reservations.inactive">Cancelled</option>
-        </select>
-      </div>
+    <!-- View toggle: Calendar (default) vs List -->
+    <div class="rv-view-toggle" role="tablist">
+      <button type="button" class="rv-view-btn active" data-rv-view="calendar" role="tab">
+        <span aria-hidden="true">📅</span> <span data-i18n="reservations.viewCalendar">Calendar</span>
+      </button>
+      <button type="button" class="rv-view-btn" data-rv-view="list" role="tab">
+        <span aria-hidden="true">☰</span> <span data-i18n="reservations.viewList">List</span>
+      </button>
     </div>
 
-    <div id="pager-top-reservations" class="pager-wrap" hidden></div>
-    <div class="table-wrap">
-      <table id="tbl-reservations">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th data-i18n="report.client">Client</th>
-            <th data-i18n="report.phone">Phone</th>
-            <th data-i18n="report.car">Car</th>
-            <th data-i18n="report.plate">Plate</th>
-            <th data-i18n="report.start">Start</th>
-            <th data-i18n="report.end">End</th>
-            <th data-i18n="reservations.status">Status</th>
-            <th data-i18n="actions">Actions</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+    <!-- ===== Calendar view (Google-Calendar style month grid) ===== -->
+    <div id="rv-calendar-view" class="rv-calendar-view">
+      <div class="cal-toolbar">
+        <div class="cal-nav">
+          <button type="button" id="cal-prev" class="cal-nav-btn" aria-label="Previous month">‹</button>
+          <button type="button" id="cal-today" class="cal-today-btn"
+                  data-i18n="reservations.filterToday">Today</button>
+          <button type="button" id="cal-next" class="cal-nav-btn" aria-label="Next month">›</button>
+        </div>
+        <h3 id="cal-title" class="cal-title"></h3>
+        <div class="cal-legend">
+          <span class="cal-legend-item"><i class="cal-dot pending"></i><span data-i18n="reservations.pending">Pending</span></span>
+          <span class="cal-legend-item"><i class="cal-dot active"></i><span data-i18n="reservations.active">Active</span></span>
+          <span class="cal-legend-item"><i class="cal-dot inactive"></i><span data-i18n="reservations.inactive">Cancelled</span></span>
+        </div>
+      </div>
+      <div id="cal-weekdays" class="cal-weekdays"></div>
+      <div id="rv-calendar" class="cal-grid"></div>
     </div>
-    <div id="pager-reservations" class="pager-wrap" hidden></div>
+
+    <!-- ===== List view ===== -->
+    <div id="rv-list-view" class="rv-list-view" hidden>
+      <!-- Date filter -->
+      <div class="rv-filter-bar">
+        <button type="button" id="rv-filter-today" class="btn btn-primary rv-filter-today-btn"
+                data-i18n="reservations.filterToday">Today</button>
+        <button type="button" id="rv-filter-all" class="btn btn-ghost-dark"
+                data-i18n="reservations.filterAll">All</button>
+        <div class="field rv-date-field">
+          <label data-i18n="reservations.filterDate">Search by date</label>
+          <input type="date" id="rv-filter-date">
+        </div>
+        <div class="field rv-date-field">
+          <label data-i18n="reservations.filterStatus">Status</label>
+          <select id="rv-filter-status">
+            <option value="" data-i18n="filter.all">— All —</option>
+            <option value="pending" data-i18n="reservations.pending">Pending</option>
+            <option value="active" data-i18n="reservations.active">Active</option>
+            <option value="inactive" data-i18n="reservations.inactive">Cancelled</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="pager-top-reservations" class="pager-wrap" hidden></div>
+      <div class="table-wrap">
+        <table id="tbl-reservations">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th data-i18n="report.client">Client</th>
+              <th data-i18n="report.phone">Phone</th>
+              <th data-i18n="report.car">Car</th>
+              <th data-i18n="report.plate">Plate</th>
+              <th data-i18n="report.start">Start</th>
+              <th data-i18n="report.end">End</th>
+              <th data-i18n="reservations.status">Status</th>
+              <th data-i18n="actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="pager-reservations" class="pager-wrap" hidden></div>
+    </div>
+
+    <!-- Floating event detail popover (calendar) -->
+    <div id="rv-event-pop" class="rv-event-pop" hidden></div>
   </section>
 
   <!-- ============== RETURNS DUE (company-user) ============== -->
@@ -1353,38 +1439,90 @@
       </p>
     </div>
 
-    <div class="rv-filter-bar">
-      <button type="button" id="returns-filter-active" class="btn btn-primary rv-filter-today-btn"
-              data-i18n="returns.filterActive">Current &amp; overdue</button>
-      <button type="button" id="returns-filter-overdue" class="btn btn-ghost-dark"
-              data-i18n="returns.filterOverdue">Overdue only</button>
-      <button type="button" id="returns-filter-all" class="btn btn-ghost-dark"
-              data-i18n="returns.filterAll">All</button>
-      <div class="field rv-date-field">
-        <label data-i18n="returns.filterDate">Filter by return date</label>
-        <input type="date" id="returns-filter-date">
+    <!-- KPI summary -->
+    <div class="returns-stats" id="returns-stats">
+      <div class="ret-stat overdue">
+        <b id="ret-stat-overdue">0</b>
+        <span data-i18n="returns.statOverdue">Overdue</span>
+      </div>
+      <div class="ret-stat today">
+        <b id="ret-stat-today">0</b>
+        <span data-i18n="returns.statToday">Due today</span>
+      </div>
+      <div class="ret-stat week">
+        <b id="ret-stat-week">0</b>
+        <span data-i18n="returns.statWeek">Due in 7 days</span>
       </div>
     </div>
 
-    <div id="pager-top-returns" class="pager-wrap" hidden></div>
-    <div class="table-wrap">
-      <table id="tbl-returns">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th data-i18n="report.client">Client</th>
-            <th data-i18n="report.phone">Phone</th>
-            <th data-i18n="report.car">Car</th>
-            <th data-i18n="report.plate">Plate</th>
-            <th data-i18n="returns.returnDate">Return date</th>
-            <th data-i18n="returns.status">Status</th>
-            <th data-i18n="actions">Actions</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+    <!-- View toggle -->
+    <div class="rv-view-toggle" role="tablist">
+      <button type="button" class="rv-view-btn returns-view-btn active" data-rview="calendar" role="tab">
+        <span aria-hidden="true">📅</span> <span data-i18n="returns.viewCalendar">Calendar</span>
+      </button>
+      <button type="button" class="rv-view-btn returns-view-btn" data-rview="list" role="tab">
+        <span aria-hidden="true">☰</span> <span data-i18n="returns.viewList">List</span>
+      </button>
     </div>
-    <div id="pager-returns" class="pager-wrap" hidden></div>
+
+    <!-- ===== Calendar view (returns plotted on their due date) ===== -->
+    <div id="returns-calendar-view" class="rv-calendar-view">
+      <div class="cal-toolbar">
+        <div class="cal-nav">
+          <button type="button" id="returns-cal-prev" class="cal-nav-btn" aria-label="Previous month">‹</button>
+          <button type="button" id="returns-cal-today" class="cal-today-btn"
+                  data-i18n="reservations.filterToday">Today</button>
+          <button type="button" id="returns-cal-next" class="cal-nav-btn" aria-label="Next month">›</button>
+        </div>
+        <h3 id="returns-cal-title" class="cal-title"></h3>
+        <div class="cal-legend">
+          <span class="cal-legend-item"><i class="cal-dot overdue"></i><span data-i18n="returns.overdue">Overdue</span></span>
+          <span class="cal-legend-item"><i class="cal-dot today"></i><span data-i18n="returns.dueToday">Due today</span></span>
+          <span class="cal-legend-item"><i class="cal-dot upcoming"></i><span data-i18n="returns.upcoming">Upcoming</span></span>
+        </div>
+      </div>
+      <div id="returns-cal-weekdays" class="cal-weekdays"></div>
+      <div id="returns-calendar" class="cal-grid returns-cal"></div>
+    </div>
+
+    <!-- ===== List view ===== -->
+    <div id="returns-list-view" class="rv-list-view" hidden>
+      <div class="rv-filter-bar">
+        <button type="button" id="returns-filter-active" class="btn btn-primary rv-filter-today-btn"
+                data-i18n="returns.filterActive">Current &amp; overdue</button>
+        <button type="button" id="returns-filter-overdue" class="btn btn-ghost-dark"
+                data-i18n="returns.filterOverdue">Overdue only</button>
+        <button type="button" id="returns-filter-all" class="btn btn-ghost-dark"
+                data-i18n="returns.filterAll">All</button>
+        <div class="field rv-date-field">
+          <label data-i18n="returns.filterDate">Filter by return date</label>
+          <input type="date" id="returns-filter-date">
+        </div>
+      </div>
+
+      <div id="pager-top-returns" class="pager-wrap" hidden></div>
+      <div class="table-wrap">
+        <table id="tbl-returns">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th data-i18n="report.client">Client</th>
+              <th data-i18n="report.phone">Phone</th>
+              <th data-i18n="report.car">Car</th>
+              <th data-i18n="report.plate">Plate</th>
+              <th data-i18n="returns.returnDate">Return date</th>
+              <th data-i18n="returns.status">Status</th>
+              <th data-i18n="actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="pager-returns" class="pager-wrap" hidden></div>
+    </div>
+
+    <!-- Floating return detail popover (calendar) -->
+    <div id="returns-event-pop" class="rv-event-pop" hidden></div>
   </section>
 
   <!-- ============== CONTACT SUPPORT ============== -->
@@ -1410,15 +1548,14 @@
                   placeholder="Describe the error or issue you're experiencing..."></textarea>
       </div>
       <div class="field upload-file-field" style="grid-column: 1 / -1;">
-        <label data-i18n="support.screenshot">Screenshot (optional)</label>
-        <div class="file-picker">
-          <input type="file" id="support-screenshot" accept="image/*" hidden>
-          <label for="support-screenshot" class="file-picker-btn">
-            <span class="file-picker-icon">📷</span>
-            <span data-i18n="support.chooseFile">Choose screenshot...</span>
-          </label>
+        <label data-i18n="support.screenshot">Screenshots (optional)</label>
+        <div id="support-dropzone" class="support-dropzone" tabindex="0" role="button">
+          <input type="file" id="support-screenshot" accept="image/*" multiple hidden>
+          <span class="support-dropzone-icon">🖼️</span>
+          <p class="support-dropzone-text" data-i18n="support.dropHint">Drag &amp; drop images here, or click to browse</p>
+          <p class="support-dropzone-hint" data-i18n="support.dropLimit">Images only · up to 50 MB each</p>
         </div>
-        <div id="support-file-name" class="support-file-name" hidden></div>
+        <div id="support-previews" class="support-previews"></div>
       </div>
       <button type="submit" class="btn btn-primary" data-i18n="support.send">Send Message</button>
     </form>
@@ -1611,8 +1748,8 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="js/i18n.js?v=7"></script>
+<script src="js/i18n.js?v=19"></script>
 <script src="js/searchselect.js?v=7"></script>
-<script src="js/app.js?v=7"></script>
+<script src="js/app.js?v=19"></script>
 </body>
 </html>

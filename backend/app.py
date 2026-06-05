@@ -1742,11 +1742,21 @@ def contact_support():
     if not text:
         return jsonify({"error": "Message is required"}), 400
     # In production: send an email to imadhawara36@gmail.com with the
-    # text and any attached screenshot. For now, log and acknowledge.
-    screenshot = request.files.get("screenshot")
-    fname = screenshot.filename if screenshot else None
-    app.logger.info("Support request from=%s screenshot=%s message=%s",
-                    email, fname, text[:200])
+    # text and any attached screenshots. For now, validate, log and acknowledge.
+    MAX_BYTES = 50 * 1024 * 1024  # 50 MB per image
+    shots = [f for f in request.files.getlist("screenshot") if f and f.filename]
+    for f in shots:
+        ctype = (f.mimetype or "")
+        if not ctype.startswith("image/"):
+            return jsonify({"error": "Only image files are allowed"}), 400
+        # Measure size without loading the whole file into memory.
+        f.stream.seek(0, os.SEEK_END)
+        size = f.stream.tell()
+        f.stream.seek(0)
+        if size > MAX_BYTES:
+            return jsonify({"error": "Each image must be 50 MB or smaller"}), 400
+    app.logger.info("Support request from=%s screenshots=%s message=%s",
+                    email, [f.filename for f in shots], text[:200])
     return jsonify({"ok": True, "message": "Support request received. We will get back to you soon."})
 
 

@@ -602,7 +602,10 @@ function renderReport(){
    long-finished rentals forever; "All" lifts the cap. */
 const Returns = (() => {
   let filter = "active";                       // "active" | "overdue" | "all"
+  let _view = "calendar";                      // "calendar" | "list"
+  let _calCursor = null;                       // first-of-month shown in calendar
   const ACTIVE_WINDOW_DAYS = 30;               // how far back "active" reaches
+  const MAX_CHIPS = 3;                          // chips shown per calendar day
 
   const _z = n => String(n).padStart(2, "0");
   function _dateStr(d){ return `${d.getFullYear()}-${_z(d.getMonth() + 1)}-${_z(d.getDate())}`; }
@@ -651,7 +654,186 @@ const Returns = (() => {
     return `<span class="return-badge upcoming">${escape(t("returns.upcoming"))} · ${escape(t("returns.daysLeft").replace("{n}", diff))}</span>`;
   }
 
+  // All cars still out for this company (ignores the list filters) — used by
+  // the KPI summary and the calendar so they always show the full picture.
+  function _allRows(){
+    const u = AUTH.user();
+    if (!u || u.role !== "company") return [];
+    return (state.report || []).filter(r =>
+      Number(r.company_id) === Number(u.company_id) && r.end_date && !r.returned_at);
+  }
+
+  function _statusOf(endDate, today){
+    const diff = _dayDiff(today, endDate);
+    return diff < 0 ? "overdue" : diff === 0 ? "today" : "upcoming";
+  }
+
+  function renderStats(){
+    const today = _today();
+    const weekEnd = _shiftToday(7);
+    let overdue = 0, todayC = 0, weekC = 0;
+    _allRows().forEach(r => {
+      if (r.end_date < today) overdue++;
+      else if (r.end_date === today) todayC++;
+      if (r.end_date >= today && r.end_date <= weekEnd) weekC++;
+    });
+    const set = (id, v) => { const e = $(`#${id}`); if (e) e.textContent = v; };
+    set("ret-stat-overdue", overdue);
+    set("ret-stat-today", todayC);
+    set("ret-stat-week", weekC);
+  }
+
+  /* ---------- Calendar (returns plotted on their due date) ---------- */
+  function _firstOfMonth(){ const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); }
+  function _addDays(d, n){ return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); }
+
+  function _shiftMonth(n){
+    if (!_calCursor) _calCursor = _firstOfMonth();
+    _calCursor = new Date(_calCursor.getFullYear(), _calCursor.getMonth() + n, 1);
+    renderCalendar();
+  }
+
+  function renderCalendar(){
+    const grid = $("#returns-calendar");
+    if (!grid) return;
+    if (!_calCursor) _calCursor = _firstOfMonth();
+    const cur = _calCursor;
+    const lang = (typeof currentLang === "function") ? currentLang() : "en";
+
+    const titleEl = $("#returns-cal-title");
+    if (titleEl) titleEl.textContent = new Intl.DateTimeFormat(lang, { month: "long", year: "numeric" }).format(cur);
+    const wd = $("#returns-cal-weekdays");
+    if (wd){
+      const fmt = new Intl.DateTimeFormat(lang, { weekday: "short" });
+      let h = "";
+      for (let i = 0; i < 7; i++) h += `<div class="cal-weekday">${escape(fmt.format(new Date(2024, 8, 1 + i)))}</div>`;
+      wd.innerHTML = h;
+    }
+
+    // Group returns by their due date.
+    const today = _today();
+    const byDate = {};
+    _allRows().forEach(r => { (byDate[r.end_date] || (byDate[r.end_date] = [])).push(r); });
+
+    const first = new Date(cur.getFullYear(), cur.getMonth(), 1);
+    const gridStart = _addDays(first, -first.getDay());
+    const last = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
+    const gridEnd = _addDays(last, 6 - last.getDay());
+    const weeks = Math.round((gridEnd - gridStart) / 86400000 + 1) / 7;
+
+    let html = "";
+    for (let w = 0; w < weeks; w++){
+      const weekStart = _addDays(gridStart, w * 7);
+      let lanes = 1;
+      let daysHtml = "";
+      for (let i = 0; i < 7; i++){
+        const d = _addDays(weekStart, i);
+        const ymd = _dateStr(d);
+        const inMonth = d.getMonth() === cur.getMonth();
+        const isToday = ymd === today;
+        const list = byDate[ymd] || [];
+        const used = Math.min(list.length, MAX_CHIPS) + (list.length > MAX_CHIPS ? 1 : 0);
+        if (used > lanes) lanes = used;
+        let chips = "";
+        list.slice(0, MAX_CHIPS).forEach(r => {
+          const st = _statusOf(r.end_date, today);
+          const label = `${r.car_plate || r.car_model || ""}${r.client_name ? " · " + r.client_name : ""}`;
+          chips += `<button type="button" class="ret-chip ${st}" data-ret-id="${r.rental_id}" title="${escape(label)}">${escape(label)}</button>`;
+        });
+        if (list.length > MAX_CHIPS){
+          chips += `<button type="button" class="ret-more" data-ret-date="${ymd}">+${list.length - MAX_CHIPS}</button>`;
+        }
+        daysHtml += `<div class="cal-day${inMonth ? "" : " other-month"}${isToday ? " today" : ""}">` +
+          `<span class="cal-daynum">${d.getDate()}</span>` +
+          (chips ? `<div class="cal-day-events">${chips}</div>` : "") +
+          `</div>`;
+      }
+      html += `<div class="cal-week" style="--lanes:${lanes}"><div class="cal-week-grid">${daysHtml}</div></div>`;
+    }
+    grid.innerHTML = html;
+
+    grid.querySelectorAll(".ret-chip").forEach(chip => {
+      chip.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const row = _allRows().find(r => String(r.rental_id) === chip.dataset.retId);
+        if (row) _openRetPop(row, chip);
+      });
+    });
+    grid.querySelectorAll(".ret-more").forEach(btn => {
+      btn.addEventListener("click", () => {
+        // Jump to the list, filtered to that exact day.
+        const dateEl = $("#returns-filter-date");
+        if (dateEl) dateEl.value = btn.dataset.retDate;
+        _setView("list");
+      });
+    });
+  }
+
+  function _closeRetPop(){
+    const p = $("#returns-event-pop");
+    if (p){ p.hidden = true; p.innerHTML = ""; }
+    document.removeEventListener("mousedown", _onRetDoc, true);
+    document.removeEventListener("keydown", _onRetKey, true);
+  }
+  function _onRetDoc(e){ const p = $("#returns-event-pop"); if (p && !p.contains(e.target)) _closeRetPop(); }
+  function _onRetKey(e){ if (e.key === "Escape") _closeRetPop(); }
+
+  function _openRetPop(row, anchor){
+    const p = $("#returns-event-pop");
+    if (!p || !row) return;
+    const today = _today();
+    const badge = _statusHtml(row.end_date, today);
+    const phone = row.client_phone
+      ? `<a href="tel:${escape(row.client_phone)}">${escape(row.client_phone)}</a>` : "—";
+    p.innerHTML = `
+      <div class="rv-pop-head">
+        <h4 class="rv-pop-title">${escape(row.client_name || "")}</h4>
+        <button type="button" class="rv-pop-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="rv-pop-row"><span class="rv-pop-ico">🚗</span><span>${escape(row.car_model || "")}${row.car_plate ? " — " + escape(row.car_plate) : ""}</span></div>
+      <div class="rv-pop-row"><span class="rv-pop-ico">📅</span><span>${escape(t("returns.returnDate"))}: ${escape(row.end_date || "")}</span></div>
+      <div class="rv-pop-row"><span class="rv-pop-ico">📞</span><span>${phone}</span></div>
+      <div class="rv-pop-row"><span class="rv-pop-ico">●</span><span>${badge}</span></div>
+      <div class="rv-pop-actions">
+        <button type="button" class="rv-action-btn" data-ret-open>${escape(t("action.open"))}</button>
+        <button type="button" class="rv-action-btn activate" data-ret-return>${escape(t("returns.backToOffice"))}</button>
+      </div>`;
+    p.hidden = false;
+    const r = anchor.getBoundingClientRect();
+    const pw = p.offsetWidth, ph = p.offsetHeight;
+    let left = r.left, top = r.bottom + 6;
+    if (left + pw > window.innerWidth - 12) left = window.innerWidth - pw - 12;
+    if (left < 12) left = 12;
+    if (top + ph > window.innerHeight - 12) top = r.top - ph - 6;
+    if (top < 12) top = 12;
+    p.style.left = left + "px";
+    p.style.top = top + "px";
+    p.querySelector(".rv-pop-close")?.addEventListener("click", _closeRetPop);
+    p.querySelector("[data-ret-open]")?.addEventListener("click", () => { _closeRetPop(); Detail.open(row); });
+    p.querySelector("[data-ret-return]")?.addEventListener("click", () => { _closeRetPop(); _markReturned(row); });
+    setTimeout(() => {
+      document.addEventListener("mousedown", _onRetDoc, true);
+      document.addEventListener("keydown", _onRetKey, true);
+    }, 0);
+  }
+
+  function _setView(v){
+    _view = v;
+    $$(".returns-view-btn").forEach(b => b.classList.toggle("active", b.dataset.rview === v));
+    render();
+  }
+
   function render(){
+    renderStats();
+    const calView  = $("#returns-calendar-view");
+    const listView = $("#returns-list-view");
+    if (calView)  calView.hidden  = (_view !== "calendar");
+    if (listView) listView.hidden = (_view !== "list");
+    if (_view === "calendar") renderCalendar();
+    else renderList();
+  }
+
+  function renderList(){
     const tbl = $("#tbl-returns");
     if (!tbl) return;
     const rows = _rows();
@@ -744,6 +926,15 @@ const Returns = (() => {
     $("#returns-filter-all")    ?.addEventListener("click", () => setFilter("all",     "returns-filter-all"));
     // Filter by a specific return date.
     $("#returns-filter-date")?.addEventListener("change", () => { Pager.reset("returns"); render(); });
+
+    // Calendar / List view toggle.
+    $$(".returns-view-btn").forEach(btn => {
+      btn.addEventListener("click", () => _setView(btn.dataset.rview || "calendar"));
+    });
+    // Calendar month navigation.
+    $("#returns-cal-prev")?.addEventListener("click", () => _shiftMonth(-1));
+    $("#returns-cal-next")?.addEventListener("click", () => _shiftMonth(1));
+    $("#returns-cal-today")?.addEventListener("click", () => { _calCursor = _firstOfMonth(); renderCalendar(); });
   }
 
   return { render, refresh, setup };
@@ -2960,19 +3151,53 @@ function refreshHeaderFromCompanies(){
   renderReportCompanyHead();
 }
 
+// Tween a stat number from its current value up to `to`. Only animates when
+// the value actually changed (this runs on a 5s live poll), so the numbers
+// don't re-count on every tick. Respects prefers-reduced-motion.
+function animateCount(el, to){
+  if (!el) return;
+  const prev = Number(el.dataset.val);
+  const from = Number.isFinite(prev) ? prev : 0;
+  el.dataset.val = String(to);
+  if (from === to){ el.textContent = String(to); return; }
+  const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduce){ el.textContent = String(to); return; }
+  if (el._countRAF) cancelAnimationFrame(el._countRAF);
+  const dur = 650, t0 = performance.now();
+  const step = (now) => {
+    const p = Math.min(1, (now - t0) / dur);
+    const eased = 1 - Math.pow(1 - p, 3);           // easeOutCubic
+    el.textContent = String(Math.round(from + (to - from) * eased));
+    if (p < 1) el._countRAF = requestAnimationFrame(step);
+    else el.textContent = String(to);
+  };
+  el._countRAF = requestAnimationFrame(step);
+}
+
 function updateStatsDashboard(){
-  const el = (id, val) => { const e = $(`#${id}`); if (e) e.textContent = val; };
+  const el = (id, val) => animateCount($(`#${id}`), val);
   el("stat-companies", state.companies.length);
   el("stat-cars",      state.cars.length);
   el("stat-clients",   state.clients.length);
   el("stat-rentals",   state.report.length);
 
+  const now = new Date();
   const dateEl = $("#dash-date");
   if (dateEl){
-    const now = new Date();
     dateEl.textContent = now.toLocaleDateString(undefined, {
       weekday: "long", year: "numeric", month: "long", day: "numeric"
     });
+  }
+
+  // Time-aware greeting in the hero eyebrow.
+  const greetEl = $("#dash-greeting");
+  if (greetEl){
+    const h = now.getHours();
+    const key = h < 12 ? "dash.greeting.morning"
+              : h < 18 ? "dash.greeting.afternoon"
+              : "dash.greeting.evening";
+    greetEl.setAttribute("data-i18n", key);
+    greetEl.textContent = t(key);
   }
 }
 
@@ -3316,6 +3541,98 @@ function showApp(){
   applyRoleUI();
 }
 
+function _wait(ms){ return new Promise(r => setTimeout(r, ms)); }
+
+let _gaugeRAF = null;
+let _gaugeLastStep = -1;
+const _LOADER_STEPS = ["loader.s1", "loader.s2", "loader.s3", "loader.s4"];
+
+// Paint the speedometer at progress p (0..1): fill the arc, swing the
+// needle (-135° → +135° = a 270° sweep), and update the digital readout.
+function _setGauge(p){
+  const pc = Math.max(0, Math.min(1, p));
+  const prog   = document.querySelector(".al-g-prog");
+  const needle = document.querySelector(".al-g-needle");
+  const num    = document.getElementById("al-gauge-num");
+  if (prog)   prog.setAttribute("stroke-dasharray", `${(pc * 75).toFixed(2)} 100`);
+  if (needle) needle.setAttribute("transform", `rotate(${(-135 + pc * 270).toFixed(1)} 100 100)`);
+  if (num)    num.textContent = String(Math.round(pc * 100));
+}
+
+function _setStatus(idx){
+  const statusEl = document.getElementById("app-loader-status");
+  if (!statusEl || idx === _gaugeLastStep) return;
+  _gaugeLastStep = idx;
+  statusEl.style.opacity = "0";
+  setTimeout(() => {
+    statusEl.textContent = t(_LOADER_STEPS[Math.min(idx, _LOADER_STEPS.length - 1)]);
+    statusEl.style.opacity = "1";
+  }, 150);
+}
+
+function showAppLoader(){
+  const el = document.getElementById("app-loader");
+  if (!el) return;
+  el.classList.remove("done");
+  el.hidden = false;
+  _gaugeLastStep = -1;
+  _setGauge(0);
+  _setStatus(0);
+  requestAnimationFrame(() => el.classList.add("show"));
+
+  // Rev the gauge from 0 → 90% over ~2.6s (easeOut); the last 10% lands
+  // on hide() when the data is actually ready. Status text tracks the rev.
+  if (_gaugeRAF) cancelAnimationFrame(_gaugeRAF);
+  const dur = 2600, t0 = performance.now();
+  const tick = (now) => {
+    const x = Math.min(1, (now - t0) / dur);
+    const eased = 1 - Math.pow(1 - x, 2);
+    _setGauge(eased * 0.9);
+    _setStatus(Math.min(_LOADER_STEPS.length - 1, Math.floor(x * _LOADER_STEPS.length)));
+    if (x < 1) _gaugeRAF = requestAnimationFrame(tick);
+  };
+  _gaugeRAF = requestAnimationFrame(tick);
+}
+
+function hideAppLoader(){
+  const el = document.getElementById("app-loader");
+  if (!el) return;
+  if (_gaugeRAF){ cancelAnimationFrame(_gaugeRAF); _gaugeRAF = null; }
+  _setStatus(_LOADER_STEPS.length - 1);
+  // Redline: sweep the needle to 100 with a tiny overshoot, then zoom-blur away.
+  const t0 = performance.now(), dur = 420;
+  const finish = (now) => {
+    const x = Math.min(1, (now - t0) / dur);
+    const eased = 1 - Math.pow(1 - x, 2);
+    const overshoot = Math.sin(x * Math.PI) * 0.03;     // little bounce past 100
+    _setGauge(Math.min(1, 0.9 + 0.1 * eased + overshoot));
+    if (x < 1){ requestAnimationFrame(finish); return; }
+    _setGauge(1);
+    el.classList.add("done");
+    el.classList.remove("show");
+    setTimeout(() => {
+      el.hidden = true;
+      el.classList.remove("done");
+      _setGauge(0);
+    }, 560);
+  };
+  requestAnimationFrame(finish);
+}
+
+// Branded login → dashboard transition: show the splash, load all data,
+// then reveal the app. A minimum on-screen time keeps the animation from
+// just flashing when the data loads instantly.
+async function enterApp(){
+  showAppLoader();
+  showApp();
+  try {
+    // Hold the splash long enough to enjoy a full drive-by (car crosses in 3s).
+    await Promise.all([loadAllData(), _wait(3200)]);
+  } finally {
+    hideAppLoader();
+  }
+}
+
 /* Branded header at the top of the Report tab — only shown when a
    company user is signed in. Uses the cached company on the user object. */
 function renderReportCompanyHead(){
@@ -3470,8 +3787,7 @@ function setupAuth(){
         showModal("#reset-pw-modal");
         return;
       }
-      showApp();
-      await loadAllData();
+      await enterApp();
     } else {
       $("#login-error").hidden = false;
     }
@@ -3516,8 +3832,7 @@ function setupAuth(){
         _pendingCreds = null;
         hideModal("#reset-pw-modal");
         toast(t("resetPw.success"), "success");
-        showApp();
-        await loadAllData();
+        await enterApp();
       } catch (err){
         errEl.textContent = err.message || t("toast.error");
         errEl.hidden = false;
@@ -4579,6 +4894,8 @@ const MapPicker = (() => {
 /* ============== RESERVATIONS ============== */
 const Reservations = (() => {
   let _data = [];
+  let _view = "calendar";     // "calendar" | "list" (company-user view)
+  let _calCursor = null;      // first-of-month Date currently shown in calendar
 
   async function refresh(){
     const u = AUTH.user();
@@ -4772,6 +5089,198 @@ const Reservations = (() => {
     const u = AUTH.user();
     if (u && u.role === "admin"){ renderAdmin(); return; }
     renderTodayBanner();
+    const calView  = $("#rv-calendar-view");
+    const listView = $("#rv-list-view");
+    if (calView)  calView.hidden  = (_view !== "calendar");
+    if (listView) listView.hidden = (_view !== "list");
+    if (_view === "calendar") renderCalendar();
+    else renderList();
+  }
+
+  /* ---------- Calendar (Google-Calendar style month grid) ---------- */
+  function _firstOfMonth(){ const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); }
+  function _ymd(d){
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  function _parseYmd(s){
+    const p = String(s).slice(0, 10).split("-").map(Number);
+    return new Date(p[0], (p[1] || 1) - 1, p[2] || 1);
+  }
+  function _addDays(d, n){ return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); }
+  function _dayDiff(a, b){ return Math.round((a - b) / 86400000); }
+
+  function _calEvents(){
+    const statusVal = ($("#rv-filter-status")?.value || "").trim();
+    let rows = _data.filter(rv => rv.start_date && rv.end_date);
+    if (statusVal) rows = rows.filter(rv => rv.status === statusVal);
+    return rows;
+  }
+
+  function _shiftMonth(n){
+    if (!_calCursor) _calCursor = _firstOfMonth();
+    _calCursor = new Date(_calCursor.getFullYear(), _calCursor.getMonth() + n, 1);
+    renderCalendar();
+  }
+
+  function renderCalendar(){
+    const grid = $("#rv-calendar");
+    if (!grid) return;
+    if (!_calCursor) _calCursor = _firstOfMonth();
+    const cur = _calCursor;
+    const lang = (typeof currentLang === "function") ? currentLang() : "en";
+
+    const titleEl = $("#cal-title");
+    if (titleEl){
+      titleEl.textContent = new Intl.DateTimeFormat(lang, { month: "long", year: "numeric" }).format(cur);
+    }
+    // Weekday headers, Sunday-first (2024-09-01 is a Sunday).
+    const wd = $("#cal-weekdays");
+    if (wd){
+      const fmt = new Intl.DateTimeFormat(lang, { weekday: "short" });
+      let h = "";
+      for (let i = 0; i < 7; i++) h += `<div class="cal-weekday">${escape(fmt.format(new Date(2024, 8, 1 + i)))}</div>`;
+      wd.innerHTML = h;
+    }
+
+    const firstOfMonth = new Date(cur.getFullYear(), cur.getMonth(), 1);
+    const gridStart = _addDays(firstOfMonth, -firstOfMonth.getDay());
+    const lastOfMonth = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
+    const gridEnd = _addDays(lastOfMonth, 6 - lastOfMonth.getDay());
+    const weeks = (_dayDiff(gridEnd, gridStart) + 1) / 7;
+    const todayStr = _today();
+    const events = _calEvents();
+
+    let html = "";
+    for (let w = 0; w < weeks; w++){
+      const weekStart = _addDays(gridStart, w * 7);
+      const weekStartStr = _ymd(weekStart);
+      const weekEndStr = _ymd(_addDays(weekStart, 6));
+
+      // Day cells (base layer).
+      let daysHtml = "";
+      for (let i = 0; i < 7; i++){
+        const d = _addDays(weekStart, i);
+        const inMonth = d.getMonth() === cur.getMonth();
+        const isToday = _ymd(d) === todayStr;
+        daysHtml += `<div class="cal-day${inMonth ? "" : " other-month"}${isToday ? " today" : ""}">` +
+          `<span class="cal-daynum">${d.getDate()}</span></div>`;
+      }
+
+      // Reservation segments overlapping this week.
+      const segs = [];
+      events.forEach(rv => {
+        const s = _parseYmd(rv.start_date), e = _parseYmd(rv.end_date);
+        if (_ymd(e) < weekStartStr || _ymd(s) > weekEndStr) return;
+        segs.push({
+          rv,
+          startCol: Math.max(0, _dayDiff(s, weekStart)),
+          endCol:   Math.min(6, _dayDiff(e, weekStart)),
+          contLeft:  _ymd(s) < weekStartStr,
+          contRight: _ymd(e) > weekEndStr,
+        });
+      });
+      // Stack into lanes so overlapping reservations don't collide.
+      segs.sort((a, b) => a.startCol - b.startCol || (b.endCol - b.startCol) - (a.endCol - a.startCol));
+      const laneEnds = [];
+      segs.forEach(seg => {
+        let lane = 0;
+        while (lane < laneEnds.length && laneEnds[lane] >= seg.startCol) lane++;
+        laneEnds[lane] = seg.endCol;
+        seg.lane = lane;
+      });
+      const lanes = Math.max(laneEnds.length, 1);
+
+      let barsHtml = "";
+      segs.forEach(seg => {
+        const rv = seg.rv;
+        const cls = rv.status || "pending";
+        const label = `${rv.client_name || ""}${rv.car_model ? " · " + rv.car_model : ""}`;
+        const text = `${seg.contLeft ? "‹ " : ""}${label}${seg.contRight ? " ›" : ""}`;
+        barsHtml += `<button type="button" class="cal-bar ${cls}" data-rv-id="${rv.id}" ` +
+          `style="grid-column:${seg.startCol + 1}/${seg.endCol + 2};grid-row:${seg.lane + 1}" ` +
+          `title="${escape(label)}">${escape(text)}</button>`;
+      });
+
+      html += `<div class="cal-week" style="--lanes:${lanes}">` +
+        `<div class="cal-week-grid">${daysHtml}</div>` +
+        `<div class="cal-week-bars">${barsHtml}</div></div>`;
+    }
+    grid.innerHTML = html;
+
+    grid.querySelectorAll(".cal-bar").forEach(bar => {
+      bar.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const rv = _data.find(r => r.id === Number(bar.dataset.rvId));
+        if (rv) _openEventPop(rv, bar);
+      });
+    });
+  }
+
+  function _closeEventPop(){
+    const pop = $("#rv-event-pop");
+    if (pop){ pop.hidden = true; pop.innerHTML = ""; }
+    document.removeEventListener("mousedown", _onDocClickPop, true);
+    document.removeEventListener("keydown", _onKeyPop, true);
+  }
+  function _onDocClickPop(e){
+    const pop = $("#rv-event-pop");
+    if (pop && !pop.contains(e.target)) _closeEventPop();
+  }
+  function _onKeyPop(e){ if (e.key === "Escape") _closeEventPop(); }
+
+  function _openEventPop(rv, anchor){
+    const pop = $("#rv-event-pop");
+    if (!pop) return;
+    const cls = rv.status || "pending";
+    const statusLabel = t(`reservations.${cls}`) || rv.status;
+    const phone = rv.client_phone
+      ? `<a href="tel:${escape(rv.client_phone)}">${escape(rv.client_phone)}</a>`
+      : "—";
+    let actions = "";
+    if (rv.status === "pending"){
+      actions += `<button type="button" class="rv-action-btn activate" data-rv-id="${rv.id}" data-action="active">${escape(t("reservations.activate"))}</button>` +
+        `<button type="button" class="rv-action-btn cancel" data-rv-id="${rv.id}" data-action="inactive">${escape(t("reservations.cancel"))}</button>`;
+    }
+    actions += `<button type="button" class="rv-action-btn delete" data-rv-id="${rv.id}" data-action="delete">${escape(t("action.delete"))}</button>`;
+
+    pop.innerHTML = `
+      <div class="rv-pop-head">
+        <h4 class="rv-pop-title">${escape(rv.client_name || "")}</h4>
+        <button type="button" class="rv-pop-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="rv-pop-row"><span class="rv-pop-ico">🚗</span><span>${escape(rv.car_model || "")}${rv.car_plate ? " — " + escape(rv.car_plate) : ""}</span></div>
+      <div class="rv-pop-row"><span class="rv-pop-ico">📅</span><span>${escape(rv.start_date || "")} → ${escape(rv.end_date || "")}</span></div>
+      <div class="rv-pop-row"><span class="rv-pop-ico">📞</span><span>${phone}</span></div>
+      ${rv.notes ? `<div class="rv-pop-row"><span class="rv-pop-ico">📝</span><span>${escape(rv.notes)}</span></div>` : ""}
+      <div class="rv-pop-row"><span class="rv-pop-ico">●</span><span class="reservation-status-badge ${cls}">${escape(statusLabel)}</span></div>
+      <div class="rv-pop-actions">${actions}</div>`;
+
+    pop.hidden = false;
+    const r = anchor.getBoundingClientRect();
+    const pw = pop.offsetWidth, ph = pop.offsetHeight;
+    let left = r.left;
+    let top = r.bottom + 6;
+    if (left + pw > window.innerWidth - 12) left = window.innerWidth - pw - 12;
+    if (left < 12) left = 12;
+    if (top + ph > window.innerHeight - 12) top = r.top - ph - 6;
+    if (top < 12) top = 12;
+    pop.style.left = left + "px";
+    pop.style.top = top + "px";
+
+    pop.querySelector(".rv-pop-close")?.addEventListener("click", _closeEventPop);
+    _wireActions(pop);
+    // Actions trigger a refresh()/re-render; close the popover once clicked.
+    pop.querySelectorAll("[data-rv-id]").forEach(b =>
+      b.addEventListener("click", () => setTimeout(_closeEventPop, 0)));
+
+    setTimeout(() => {
+      document.addEventListener("mousedown", _onDocClickPop, true);
+      document.addEventListener("keydown", _onKeyPop, true);
+    }, 0);
+  }
+
+  /* ---------- List (table) ---------- */
+  function renderList(){
     const tbl = $("#tbl-reservations");
     if (!tbl) return;
     const filtered = _getFiltered();
@@ -4884,6 +5393,19 @@ const Reservations = (() => {
     $("#rv-filter-date")?.addEventListener("change", rerender);
     $("#rv-filter-status")?.addEventListener("change", rerender);
 
+    // Calendar / List view toggle.
+    $$(".rv-view-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        _view = btn.dataset.rvView || "calendar";
+        $$(".rv-view-btn").forEach(b => b.classList.toggle("active", b === btn));
+        render();
+      });
+    });
+    // Calendar month navigation.
+    $("#cal-prev")?.addEventListener("click", () => _shiftMonth(-1));
+    $("#cal-next")?.addEventListener("click", () => _shiftMonth(1));
+    $("#cal-today")?.addEventListener("click", () => { _calCursor = _firstOfMonth(); renderCalendar(); });
+
     // Admin reservations filters — per-column dropdowns + status + date range.
     const arvIds = ["filter-arv-company", "filter-arv-client", "filter-arv-car",
                     "filter-arv-plate", "filter-arv-status", "arv-from", "arv-to"];
@@ -4950,7 +5472,7 @@ const Reservations = (() => {
     });
   }
 
-  return { refresh, refreshPickers, setup };
+  return { refresh, refreshPickers, setup, render };
 })();
 
 /* ============== CONTACT SUPPORT ============== */
@@ -4958,17 +5480,88 @@ function setupSupportForm(){
   const form = $("#form-support");
   if (!form) return;
 
+  const MAX_BYTES = 50 * 1024 * 1024; // 50 MB per image
   const fileInput = $("#support-screenshot");
-  const fileName  = $("#support-file-name");
+  const dropzone  = $("#support-dropzone");
+  const previews  = $("#support-previews");
+
+  // We can't mutate a file <input>'s FileList directly, so keep our own list.
+  let selected = [];
+
+  function renderPreviews(){
+    if (!previews) return;
+    previews.innerHTML = "";
+    selected.forEach((f, idx) => {
+      const cell = document.createElement("div");
+      cell.className = "support-preview";
+
+      const img = document.createElement("img");
+      img.src = URL.createObjectURL(f);
+      img.onload = () => URL.revokeObjectURL(img.src);
+      img.alt = f.name;
+
+      const name = document.createElement("span");
+      name.className = "support-preview-name";
+      name.textContent = f.name;
+
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "support-preview-remove";
+      rm.setAttribute("aria-label", "Remove");
+      rm.textContent = "×";
+      rm.addEventListener("click", () => {
+        selected.splice(idx, 1);
+        renderPreviews();
+      });
+
+      cell.append(img, name, rm);
+      previews.appendChild(cell);
+    });
+  }
+
+  function addFiles(fileList){
+    Array.from(fileList || []).forEach((f) => {
+      if (!f.type.startsWith("image/")){
+        toast(t("support.errType"), "error");
+        return;
+      }
+      if (f.size > MAX_BYTES){
+        toast(t("support.errSize"), "error");
+        return;
+      }
+      // Skip exact duplicates (same name + size).
+      if (selected.some((s) => s.name === f.name && s.size === f.size)) return;
+      selected.push(f);
+    });
+    renderPreviews();
+  }
+
   if (fileInput){
     fileInput.addEventListener("change", () => {
-      const f = fileInput.files[0];
-      if (f && fileName){
-        fileName.textContent = f.name;
-        fileName.hidden = false;
-      } else if (fileName){
-        fileName.hidden = true;
-      }
+      addFiles(fileInput.files);
+      fileInput.value = ""; // allow re-selecting the same file
+    });
+  }
+
+  if (dropzone){
+    dropzone.addEventListener("click", () => fileInput?.click());
+    dropzone.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " "){ e.preventDefault(); fileInput?.click(); }
+    });
+    ["dragenter", "dragover"].forEach((ev) =>
+      dropzone.addEventListener(ev, (e) => {
+        e.preventDefault();
+        dropzone.classList.add("is-dragover");
+      })
+    );
+    ["dragleave", "dragend", "drop"].forEach((ev) =>
+      dropzone.addEventListener(ev, (e) => {
+        e.preventDefault();
+        dropzone.classList.remove("is-dragover");
+      })
+    );
+    dropzone.addEventListener("drop", (e) => {
+      if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files);
     });
   }
 
@@ -4979,9 +5572,10 @@ function setupSupportForm(){
       toast(t("support.error"), "error");
       return;
     }
-    const fd = new FormData(form);
-    const screenshot = fileInput?.files[0];
-    if (screenshot) fd.append("screenshot", screenshot);
+    const fd = new FormData();
+    fd.append("message", message);
+    fd.append("email", form.querySelector('[name="email"]')?.value || "");
+    selected.forEach((f) => fd.append("screenshot", f));
 
     try {
       const r = await fetch(API.url("/api/support"), {
@@ -4994,7 +5588,8 @@ function setupSupportForm(){
         return;
       }
       form.reset();
-      if (fileName) fileName.hidden = true;
+      selected = [];
+      renderPreviews();
       toast(t("support.sent"), "success");
     } catch (err){
       toast(err.message || t("toast.error"), "error");
@@ -5057,8 +5652,7 @@ async function init(){
   rebuildCarsVinDropdown();
 
   if (AUTH.isAuthed()){
-    showApp();
-    await loadAllData();
+    await enterApp();
   } else {
     showLogin();
   }
@@ -5072,4 +5666,6 @@ document.addEventListener("lang:changed", () => {
   renderCars();
   renderClients();
   renderReport();
+  Reservations.render();
+  Returns.render();
 });
