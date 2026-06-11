@@ -34,3 +34,8 @@ Thumbs.db
 
 # Claude Code local config
 .claude/
+
+# Local-only Docker helpers (off-network dev: public images instead of the
+# corp registry). Not used by CI/prod — see Dockerfile / docker-compose.yml.
+Dockerfile.local
+docker-compose.override.yml

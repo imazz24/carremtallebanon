@@ -232,6 +232,10 @@
       <span class="sidebar-icon">👥</span><span class="sidebar-label" data-i18n="nav.addClient">Add Client</span>
     </button>
     <div class="sidebar-divider"></div>
+    <button class="sidebar-btn" data-cpanel="company-api">
+      <span class="sidebar-icon">🔑</span><span class="sidebar-label">Generate Secret Key</span>
+    </button>
+    <div class="sidebar-divider"></div>
     <button class="sidebar-btn" data-cpanel="support">
       <span class="sidebar-icon">💬</span><span class="sidebar-label" data-i18n="support.title">Support</span>
     </button>
@@ -589,6 +593,155 @@
         <span data-i18n="upload.failed">failed</span>
       </div>
       <ul id="add-car-upload-errors" class="upload-errors"></ul>
+    </div>
+
+    <hr class="addcar-divider">
+
+    <!-- Bulk add via pasted JSON → POST /api/cars/batch (company-only,
+         all-or-nothing, same validation as the single Add-Car form). -->
+    <div class="card-head">
+      <h3>Bulk add via JSON</h3>
+      <p>
+        Paste a JSON array of cars and submit. Every row runs the same checks
+        as the single Add-Car form (17-char VIN + NHTSA model/body match,
+        Lebanese plate, allowed colour, no duplicates). It's all-or-nothing —
+        if any row is rejected, nothing is saved and the bad rows are listed.
+      </p>
+    </div>
+
+    <div class="field">
+      <label for="add-car-json">Cars JSON</label>
+      <textarea id="add-car-json" rows="8" spellcheck="false"
+                style="width:100%;font-family:monospace;resize:vertical"
+                placeholder='[{"vin":"1HGCM82633A004352","type":"Sedan","model":"Honda Accord","color":"White","platenumber":"M 12345","has_gps":true}]'></textarea>
+      <div class="file-picker" style="margin-top:8px">
+        <input type="file" id="add-car-json-file" accept=".json,application/json" hidden>
+        <label for="add-car-json-file" class="file-picker-btn">
+          <span class="file-picker-icon">📁</span>
+          <span>Load a .json file…</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="upload-actions">
+      <button type="button" id="btn-add-car-json-sample" class="btn btn-ghost-dark">Insert sample</button>
+      <button type="button" id="btn-add-car-json-submit" class="btn btn-primary">Submit JSON</button>
+    </div>
+
+    <div id="add-car-json-results" class="upload-results" hidden>
+      <h4>Results</h4>
+      <p class="upload-rejected-banner">
+        Batch rejected — fix the listed rows and resubmit. Nothing was saved.
+      </p>
+      <div class="upload-summary">
+        <span class="badge yes" id="add-car-json-ok">0</span>
+        <span>inserted</span>
+        <span class="badge no" id="add-car-json-fail">0</span>
+        <span>failed</span>
+      </div>
+      <ul id="add-car-json-errors" class="upload-errors"></ul>
+    </div>
+
+  </section>
+
+  <!-- ============== GENERATE SECRET KEY / API ACCESS (company-user) ====
+       A company generates a secret key to push data to (and pull reports
+       from) the API using their own software (curl / Postman / a cron job).
+       Gated server-side: no key until the company has added some data. -->
+  <section id="company-api" class="card company-only-card" hidden>
+    <div class="card-head">
+      <h2>API access</h2>
+      <p>
+        Generate a secret key to connect your own software to our API — push
+        cars, clients and branches in, and pull reservation &amp; rental
+        reports out. You must add at least one car, client, or branch before a
+        key can be generated.
+      </p>
+    </div>
+
+    <div id="api-key-status" class="company-info-status" hidden></div>
+
+    <div class="upload-actions">
+      <button type="button" id="btn-api-key-generate" class="btn btn-primary">Generate Secret Key</button>
+      <button type="button" id="btn-api-key-revoke" class="btn btn-ghost-dark">Revoke key</button>
+    </div>
+
+    <div id="api-key-reveal" class="field" hidden style="margin-top:10px">
+      <label>Your new key (copy it now — shown only once)</label>
+      <input type="text" id="api-key-value" readonly
+             style="width:100%;font-family:monospace" onclick="this.select()">
+    </div>
+
+    <hr class="addcar-divider">
+
+    <div class="card-head">
+      <h3>How to authenticate</h3>
+      <p>
+        Send your key on every request as a header:
+        <code>Authorization: Bearer &lt;key&gt;</code>
+        (<code>X-API-Key: &lt;key&gt;</code> also works). The key is shown once —
+        store it safely; regenerating replaces the old one.
+      </p>
+    </div>
+
+    <div class="card-head">
+      <h3>All available endpoints</h3>
+      <p>
+        Base URL is this site's address (for local testing <code>http://localhost:5000</code>).
+        For an interactive reference where you can authorize with your key and
+        try every endpoint live, open the
+        <a href="/api/docs" target="_blank" rel="noopener">Swagger API docs ↗</a>.
+      </p>
+    </div>
+
+    <div class="upload-actions">
+      <a href="/api/docs" target="_blank" rel="noopener" class="btn btn-primary">Open interactive API docs (Swagger) ↗</a>
+    </div>
+
+    <div class="table-wrap">
+      <table class="data-table api-endpoints">
+        <thead>
+          <tr><th>Purpose</th><th>Method &amp; Route</th><th>Body / Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Add cars</td>
+            <td><code>POST /api/cars/batch</code></td>
+            <td><code>[ {car}, … ]</code> or <code>{"cars":[…]}</code></td>
+          </tr>
+          <tr>
+            <td>Add clients</td>
+            <td><code>POST /api/clients/batch</code></td>
+            <td><code>[ {client}, … ]</code> or <code>{"clients":[…]}</code></td>
+          </tr>
+          <tr>
+            <td>Add branches</td>
+            <td><code>POST /api/branches/batch</code></td>
+            <td><code>[ {branch}, … ]</code> or <code>{"branches":[…]}</code></td>
+          </tr>
+          <tr>
+            <td>Add everything at once</td>
+            <td><code>POST /api/batch</code></td>
+            <td><code>{"cars":[…], "clients":[…], "branches":[…]}</code> — all-or-nothing</td>
+          </tr>
+          <tr>
+            <td>Reservation report</td>
+            <td><code>GET /api/reports/reservations</code></td>
+            <td>Every reservation with client, car, dates &amp; status</td>
+          </tr>
+          <tr>
+            <td>Rental report</td>
+            <td><code>GET /api/reports/rentals</code></td>
+            <td>Every rental; optional <code>?client_id=&lt;id&gt;</code> filter</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="upload-hint">
+      <strong>Note:</strong> the report endpoints return data only after your
+      company has records in the system — an empty company gets a clear error
+      instead of an empty report. Up to 500 records per write request.
     </div>
   </section>
 

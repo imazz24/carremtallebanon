@@ -2952,6 +2952,164 @@ function setupAddCarCsv(){
   });
 }
 
+/* Bulk add cars by pasting a JSON array → POST /api/cars/batch. Company-only,
+   all-or-nothing; the per-row `errors` object is flattened for display. */
+function setupAddCarJson(){
+  const ta       = $("#add-car-json");
+  const sampleBtn= $("#btn-add-car-json-sample");
+  const submitBtn= $("#btn-add-car-json-submit");
+  const fileInp  = $("#add-car-json-file");
+  const results  = $("#add-car-json-results");
+  if (!ta) return;
+
+  // Loading a .json file just drops its text into the textarea so the user
+  // can review (and the existing Submit path handles the rest).
+  fileInp?.addEventListener("change", async () => {
+    const f = fileInp.files[0];
+    if (!f) return;
+    try {
+      ta.value = await f.text();
+      if (results){ results.hidden = true; }
+    } catch (err){
+      toast(err.message || "Could not read file", "error");
+    }
+    fileInp.value = "";  // allow re-picking the same file
+  });
+
+  sampleBtn?.addEventListener("click", () => {
+    ta.value = JSON.stringify([
+      { vin: "1HGCM82633A004352", type: "Sedan", model: "Honda Accord",
+        color: "White", platenumber: "M 12345", has_gps: true },
+      { vin: "1HGBH41JXMN109186", type: "Sedan", model: "Honda Civic",
+        color: "Black", plate_icon: "B", plate_number: "67890" },
+    ], null, 2);
+    if (results){ results.hidden = true; }
+  });
+
+  submitBtn?.addEventListener("click", async () => {
+    const text = (ta.value || "").trim();
+    if (!text){ toast("Paste a JSON array of cars first.", "error"); return; }
+
+    let body;
+    try {
+      body = JSON.parse(text);
+    } catch (e){
+      toast("Invalid JSON: " + e.message, "error");
+      return;
+    }
+
+    try {
+      const r = await fetch(API.url("/api/cars/batch"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json().catch(() => ({}));
+
+      const failed   = data.failed || [];
+      const inserted = data.inserted || 0;
+
+      $("#add-car-json-ok").textContent   = inserted;
+      $("#add-car-json-fail").textContent = failed.length;
+      // Each failure is {index, errors:{field:msg,…}} — flatten to one line.
+      $("#add-car-json-errors").innerHTML = failed.length
+        ? failed.map(e => {
+            const where = e.index === undefined ? "?" : e.index;
+            const detail = Object.entries(e.errors || {})
+              .map(([f, m]) => `${f === "_" ? "" : f + ": "}${m}`)
+              .join("; ");
+            return `<li><strong>Row ${escape(String(where))}</strong>: ${escape(detail)}</li>`;
+          }).join("")
+        : "";
+      results.classList.toggle("rejected", !r.ok);
+      results.hidden = false;
+
+      if (!r.ok){
+        toast(data.error || "Batch rejected.", "error");
+      } else if (inserted > 0){
+        toast(t("toast.added"), "success");
+        if (typeof refreshCars === "function") refreshCars();
+      }
+    } catch (err){
+      toast(err.message || t("toast.error"), "error");
+    }
+  });
+}
+
+/* API-key management for company users — generate / show status / revoke.
+   The raw key is returned once by POST /api/api-key and shown in a copyable
+   field; thereafter only the prefix is known. */
+function setupApiKey(){
+  const genBtn   = $("#btn-api-key-generate");
+  const revBtn   = $("#btn-api-key-revoke");
+  const statusEl = $("#api-key-status");
+  const reveal   = $("#api-key-reveal");
+  const valueInp = $("#api-key-value");
+  if (!genBtn) return;
+
+  const setStatus = (msg, kind) => {
+    if (!statusEl) return;
+    statusEl.hidden = false;
+    statusEl.className = "company-info-status" + (kind ? " " + kind : "");
+    statusEl.textContent = msg;
+  };
+
+  async function refreshStatus(){
+    try {
+      const r = await fetch(API.url("/api/api-key"), { headers: authHeaders() });
+      if (!r.ok) return;
+      const d = await r.json().catch(() => ({}));
+      if (d.has_key){
+        setStatus(`Key active: ${d.prefix}… (created ${String(d.created_at || "").slice(0,10)})`, "");
+      } else {
+        setStatus("No API key yet — generate one to push data from your own systems.", "");
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  genBtn.addEventListener("click", async () => {
+    try {
+      const r = await fetch(API.url("/api/api-key"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok){ toast(d.error || "Could not generate key", "error"); return; }
+      if (reveal && valueInp){
+        valueInp.value = d.api_key || "";
+        reveal.hidden = false;
+        valueInp.focus();
+        valueInp.select();
+      }
+      toast("API key generated — copy it now, it won't be shown again.", "success");
+      refreshStatus();
+    } catch (err){
+      toast(err.message || t("toast.error"), "error");
+    }
+  });
+
+  revBtn?.addEventListener("click", async () => {
+    try {
+      const r = await fetch(API.url("/api/api-key"), {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      if (r.status === 204){
+        if (reveal){ reveal.hidden = true; }
+        toast("API key revoked.", "success");
+        refreshStatus();
+      } else {
+        const d = await r.json().catch(() => ({}));
+        toast(d.error || "Could not revoke key", "error");
+      }
+    } catch (err){
+      toast(err.message || t("toast.error"), "error");
+    }
+  });
+
+  refreshStatus();
+}
+
 function setupBranchModal(){
   // The branch form is inline inside the Company Info tab. Each click of
   // "+ Add Branch" appends a fresh form instance to #branch-forms-list, so
@@ -3733,7 +3891,7 @@ function applyRoleUI(){
   }
 
   if (user.role === "company"){
-    const COMPANY_PANELS = ["report", "reservations", "company-returns", "company-info", "company-cars", "company-clients", "support"];
+    const COMPANY_PANELS = ["report", "reservations", "company-returns", "company-info", "company-cars", "company-clients", "company-api", "support"];
     let _compCurrent = "report";
 
     function showCompanyPanel(panel){
@@ -5637,6 +5795,8 @@ async function init(){
   setupBranchModal();
   setupAddCarForm();
   setupAddCarCsv();
+  setupAddCarJson();
+  setupApiKey();
   setupAddClientForm();
   setupCreateRentalForm();
   Reservations.setup();

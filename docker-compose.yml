@@ -23,6 +23,10 @@ services:
     image: registry.rnd.com/library/postgres:16-alpine
     container_name: carrental-postgres
     restart: unless-stopped
+    # Raise max_connections so many gunicorn workers (each with its own pool)
+    # have headroom. The app auto-sizes its per-worker pool from
+    # PG_MAX_CONNECTIONS below, so keep these two numbers in sync.
+    command: ["postgres", "-c", "max_connections=200"]
     environment:
       # Defaults match backend/.env so a fresh `docker compose up` works
       # against the same credentials the local Flask dev server already
@@ -72,6 +76,23 @@ services:
       DB_PASSWORD: admin
       FLASK_PORT:  "5000"
       TZ:          Asia/Beirut
+
+      # --- Scaling for many concurrent companies (see backend/gunicorn.conf.py).
+      # Tune to the host. Each value is overridable from a compose-root .env.
+      GUNICORN_WORKERS:  "${GUNICORN_WORKERS:-4}"   # request-parallel processes
+      GUNICORN_THREADS:  "${GUNICORN_THREADS:-4}"   # I/O concurrency per worker
+      # Must match postgres' max_connections above. The app derives a safe
+      # per-worker DB pool = (PG_MAX_CONNECTIONS - reserve) / workers, so
+      # workers × pool never exhausts Postgres. Leave DB_POOL_MAX UNSET to let
+      # that auto-sizing run (set it only to pin the pool manually).
+      PG_MAX_CONNECTIONS:     "${PG_MAX_CONNECTIONS:-200}"
+      PG_RESERVE_CONNECTIONS: "${PG_RESERVE_CONNECTIONS:-20}"
+
+      # VIN model/body cross-check against NHTSA. "1" = strict (default).
+      # Set "0" for trusted bulk imports / when NHTSA is unreachable — the
+      # offline VIN structure + check-digit validation always stays on.
+      NHTSA_CROSS_CHECK: "${NHTSA_CROSS_CHECK:-1}"
+      NHTSA_TIMEOUT:     "${NHTSA_TIMEOUT:-4}"
 
 volumes:
   carrental_pg:

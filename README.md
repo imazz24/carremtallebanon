@@ -60,6 +60,53 @@ Open `frontend/index.html` in a browser. The JS auto-detects and falls back to `
 | POST   | `/api/rentals`                | Create rental                              |
 | GET    | `/api/rentals/report`         | Joined report: client + car + company      |
 
+## Batch import API (for external companies)
+
+Company users can push many records at once from their own systems. These
+endpoints are **company-only** (admin is rejected), **all-or-nothing** (if any
+row fails validation, nothing is written), and accept either a JSON body or an
+uploaded `.json` file (multipart `file` field).
+
+| Method | Route                  | Body                                                   |
+|--------|------------------------|--------------------------------------------------------|
+| POST   | `/api/cars/batch`      | `[ {car}, … ]` or `{"cars":[…]}`                        |
+| POST   | `/api/clients/batch`   | `[ {client}, … ]` or `{"clients":[…]}`                 |
+| POST   | `/api/branches/batch`  | `[ {branch}, … ]` or `{"branches":[…]}`                |
+| POST   | `/api/batch`           | `{"cars":[…], "clients":[…], "branches":[…]}` (any subset, all in one transaction) |
+
+Everything is filed under the caller's own company (any `company_id` in the
+payload is ignored). The cap on combined rows per request is `MAX_BATCH` (500).
+
+### Authentication — API key
+
+Apply migration `022_api_keys.sql` (`python migrate.py`), then each company
+generates a secret key from the dashboard **API access** card (or
+`POST /api/api-key`). Send it on every batch request:
+
+```bash
+curl -X POST http://localhost:5000/api/batch \
+  -H "Authorization: Bearer crk_your_key_here" \
+  -F "file=@import.json"
+```
+
+`X-API-Key: <key>` is also accepted. The key is shown once; only its hash is
+stored, and regenerating invalidates the old one.
+
+### Validation (keeps junk out)
+
+Each car runs the full gauntlet: 17-char VIN with an enforced check digit
+(rejects typo'd / fabricated VINs), Lebanese plate format, an allowed colour,
+no duplicate VIN/plate (in the batch or the DB), and an NHTSA model/body
+cross-check. NHTSA results are cached per VIN, so repeat batches and retries
+skip the network. A rejected batch returns the offending rows:
+
+```json
+{ "error": "Batch rejected …", "inserted": 0,
+  "failed": [ { "index": 2, "errors": { "vin": "VIN '…' has an invalid check digit (typo?)" } } ] }
+```
+
+Smoke tests for all of the above: `cd backend && python test_batch.py`.
+
 ## The reporting query
 
 ```sql

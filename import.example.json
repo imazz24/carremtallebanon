@@ -1,0 +1,28 @@
+{
+  "cars": [
+    {
+      "vin": "REPLACE_WITH_REAL_17_CHAR_VIN",
+      "type": "Sedan",
+      "model": "Toyota Corolla",
+      "color": "White",
+      "platenumber": "M 12345",
+      "has_gps": false
+    }
+  ],
+  "clients": [
+    {
+      "licenseid": "L-0001",
+      "id_type": "license",
+      "name": "Full Name",
+      "phonenumber": "+961...",
+      "dateofbirth": "1990-01-31"
+    }
+  ],
+  "branches": [
+    {
+      "branchname": "Main Branch",
+      "location": "Beirut",
+      "phonenumber": "+961..."
+    }
+  ]
+}

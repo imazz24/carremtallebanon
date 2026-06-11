@@ -2,8 +2,12 @@
 import os
 import io
 import csv
+import json
+import time
 import hashlib
 import secrets
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from decimal import Decimal
 from flask import Flask, jsonify, request, send_file, send_from_directory
@@ -13,8 +17,11 @@ from dotenv import load_dotenv
 import requests
 from vininfo import Vin as _VinInfo
 
-from db import query, execute
+from psycopg2.extras import RealDictCursor, execute_values
+
+from db import query, execute, get_conn
 from pdf_gen import report_pdf, single_pdf
+from openapi import build_spec, SWAGGER_HTML
 
 load_dotenv()
 
@@ -62,10 +69,114 @@ def _required(data, *fields):
     return missing
 
 
+# Largest number of records accepted in a single batch-insert call. Keeps a
+# stray multi-thousand-row payload from holding a DB connection (and the NHTSA
+# cross-check loop) open indefinitely.
+MAX_BATCH = 500
+
+# How many car rows to validate concurrently. Each row's NHTSA model/body
+# cross-check is a network round-trip, so a thread pool collapses an
+# N×latency wait into roughly one round-trip. Override via env if needed;
+# capped against batch size and the DB pool at call time.
+BATCH_WORKERS = int(os.getenv("BATCH_WORKERS", "16"))
+
+# Process-wide ceiling on concurrent VIN-validation threads across ALL in-flight
+# batch requests. Each validation thread can hold one pooled DB connection
+# during its uniqueness checks, so without a cap several companies running big
+# batches at once could drain the Postgres pool (DB_POOL_MAX) and stall every
+# other request. The pool and this semaphore are both per-process (gunicorn
+# worker), so we size the cap a comfortable margin below the pool, leaving
+# headroom for the app's non-batch traffic. Threads that exceed the cap simply
+# wait — cheaply, holding no connection — until a slot frees.
+_DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "50"))
+VALIDATION_CONCURRENCY = max(4, min(32, _DB_POOL_MAX - 16))
+_validation_slots = threading.BoundedSemaphore(VALIDATION_CONCURRENCY)
+
+
+def _batch_rows(payload, key):
+    """Normalise a batch-insert body into a list of row dicts. Accepts either
+    a bare JSON array (``[ {...}, {...} ]``) or an object that wraps the array
+    under `key` (``{"cars": [...]}``). Returns the list, or None if the body
+    is neither shape."""
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict) and isinstance(payload.get(key), list):
+        return payload[key]
+    return None
+
+
+def _load_json_request():
+    """Parse the request body as JSON from EITHER an uploaded file (multipart
+    field ``file`` — how an external company hands us a document) OR a raw JSON
+    request body. Returns ``(payload, error)``: on success ``payload`` is the
+    parsed JSON (any shape) and ``error`` is None; on failure ``payload`` is
+    None and ``error`` is a human-readable reason for a 400."""
+    f = request.files.get("file")
+    if f is not None:
+        try:
+            text = f.read().decode("utf-8-sig")
+        except Exception:
+            return None, "Uploaded file is not valid UTF-8"
+        try:
+            return json.loads(text), None
+        except Exception as e:
+            return None, f"Uploaded file is not valid JSON: {e}"
+    payload = request.get_json(force=True, silent=True)
+    if payload is None:
+        return None, 'Send a JSON body, or upload a .json file in the "file" form field'
+    return payload, None
+
+
+def _batch_rows_from_request(key):
+    """Resolve a single-entity batch into a list of row dicts — a bare array or
+    ``{key: [...]}`` — from a JSON body or an uploaded file. Returns
+    ``(rows, error)`` (rows is None on failure)."""
+    payload, err = _load_json_request()
+    if err:
+        return None, err
+    rows = _batch_rows(payload, key)
+    if rows is None:
+        return None, f'Expected a JSON array or {{"{key}": [...]}}'
+    return rows, None
+
+
 # ----------------------- static frontend ------------------------------
 @app.route("/")
 def index():
     return send_from_directory(FRONTEND_DIR, "index.html")
+
+
+@app.get("/api/openapi.json")
+def openapi_json():
+    """Machine-readable OpenAPI 3.0 contract for the external API."""
+    return jsonify(build_spec())
+
+
+@app.get("/api/docs")
+def api_docs():
+    """Interactive Swagger UI so an external company can read the API and try
+    it out with their key. The page itself is public; calls still need a key.
+
+    Served with a strict Content-Security-Policy: every asset is same-origin
+    (self-hosted Swagger UI, no CDN), there are no inline scripts, and the only
+    network the page talks to is this server (`connect-src 'self'` for
+    Try-it-out). Style needs 'unsafe-inline' because Swagger UI injects styles
+    at runtime."""
+    resp = app.response_class(SWAGGER_HTML, mimetype="text/html")
+    resp.headers["Content-Security-Policy"] = (
+        "default-src 'none'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self'; "
+        "connect-src 'self'; "
+        "base-uri 'none'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'"
+    )
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
 
 
 @app.route("/<path:path>")
@@ -92,15 +203,46 @@ def _is_admin_request() -> bool:
     return bool(row and row.get("role") == "admin")
 
 
-def _current_user():
-    """Resolve the user named in the X-Auth-User header (or None)."""
-    name = (request.headers.get("X-Auth-User") or "").strip().lower()
-    if not name:
+API_KEY_PREFIX = "crk_"   # "car-rental key" — lets a glance tell it's one of ours
+
+
+def _extract_api_key():
+    """Pull an API key off the request: ``Authorization: Bearer <key>`` (the
+    convention external integrations expect) or an ``X-API-Key`` header.
+    Returns the raw key string, or None."""
+    auth = request.headers.get("Authorization") or ""
+    if auth[:7].lower() == "bearer ":
+        key = auth[7:].strip()
+        if key:
+            return key
+    return (request.headers.get("X-API-Key") or "").strip() or None
+
+
+def _api_key_user():
+    """Resolve the company user that owns the request's API key (or None).
+    The raw key is hashed and matched against the stored hash — we never keep
+    the plaintext, so a stolen DB row can't be replayed against the API."""
+    key = _extract_api_key()
+    if not key:
         return None
     return query(
-        "SELECT id, username, role, company_id FROM users WHERE LOWER(username) = %s",
-        (name,), one=True,
+        "SELECT id, username, role, company_id FROM users WHERE api_key_hash = %s",
+        (_sha256(key),), one=True,
     )
+
+
+def _current_user():
+    """Resolve the calling user. The in-browser app sends an X-Auth-User header
+    (no secret — trusted only because it's same-origin after a password login);
+    external integrations send a secret API key. Header wins when present so the
+    dashboard behaves exactly as before; otherwise we fall back to the key."""
+    name = (request.headers.get("X-Auth-User") or "").strip().lower()
+    if name:
+        return query(
+            "SELECT id, username, role, company_id FROM users WHERE LOWER(username) = %s",
+            (name,), one=True,
+        )
+    return _api_key_user()
 
 
 def _can_edit_company(company_id: int) -> bool:
@@ -183,6 +325,124 @@ def login():
         "must_reset_password": bool(row.get("must_reset_password")),
         "company":    company,
     }))
+
+
+# ----------------------- API KEYS (external integrations) --------------
+def _api_key_target_user():
+    """Resolve which user row an API-key request acts on. A company user
+    manages its own key; an admin may manage a company's key by passing
+    ``company_id`` in the JSON body. Returns (user_id, error_response)."""
+    u = _current_user()
+    if not u:
+        return None, (jsonify({"error": "Not authenticated"}), 401)
+    if u.get("role") == "company" and u.get("company_id"):
+        return u["id"], None
+    if u.get("role") == "admin":
+        data = request.get_json(silent=True) or {}
+        company_id = data.get("company_id") or request.args.get("company_id")
+        if not company_id:
+            return None, (jsonify({"error": "company_id required"}), 400)
+        target = query(
+            "SELECT id FROM users WHERE company_id = %s AND role = 'company' "
+            "ORDER BY id LIMIT 1",
+            (int(company_id),), one=True,
+        )
+        if not target:
+            return None, (jsonify({"error": "No company user for that company_id"}), 404)
+        return target["id"], None
+    return None, (jsonify({"error": "Not authorized"}), 403)
+
+
+def _company_has_data(company_id) -> bool:
+    """True if the company has actually put something into the system — at
+    least one car, linked client, or branch. We gate the external API on this:
+    a brand-new company with nothing added can neither generate a key nor pull
+    reports (there would be nothing to report on, and it stops empty shells
+    from probing the API)."""
+    if not company_id:
+        return False
+    row = query(
+        """SELECT
+             EXISTS(SELECT 1 FROM cars            WHERE company_id = %s) AS has_cars,
+             EXISTS(SELECT 1 FROM client_companies WHERE company_id = %s) AS has_clients,
+             EXISTS(SELECT 1 FROM branches        WHERE company_id = %s) AS has_branches""",
+        (company_id, company_id, company_id), one=True,
+    )
+    return bool(row and (row["has_cars"] or row["has_clients"] or row["has_branches"]))
+
+
+@app.get("/api/api-key")
+def api_key_info():
+    """Report whether an API key is set (prefix + created_at only — never the
+    secret). Lets the dashboard show "key active: crk_AbC12… since <date>"."""
+    user_id, err = _api_key_target_user()
+    if err:
+        return err
+    row = query(
+        "SELECT api_key_prefix, api_key_created_at FROM users WHERE id = %s",
+        (user_id,), one=True,
+    )
+    if not row or not row.get("api_key_prefix"):
+        return jsonify({"has_key": False})
+    return jsonify(_clean({
+        "has_key":    True,
+        "prefix":     row["api_key_prefix"],
+        "created_at": row["api_key_created_at"],
+    }))
+
+
+@app.post("/api/api-key")
+def api_key_generate():
+    """Generate (or rotate) the API key for a company. The raw key is returned
+    ONCE in this response and never again — only its hash is stored, and any
+    previous key stops working immediately. Company users rotate their own;
+    admins may rotate a company's by passing ``company_id``."""
+    user_id, err = _api_key_target_user()
+    if err:
+        return err
+    # Gate: no key until the company has actually added data. A company user
+    # generating its own key is blocked here; an admin generating on a
+    # company's behalf is checked against that company's data too.
+    u = _current_user() or {}
+    target_company = u.get("company_id")
+    if u.get("role") == "admin":
+        data = request.get_json(silent=True) or {}
+        target_company = data.get("company_id") or request.args.get("company_id")
+    if not _company_has_data(target_company):
+        return jsonify({
+            "error": "Add at least one car, client, or branch before generating "
+                     "an API key — there's nothing to integrate with yet.",
+        }), 403
+    raw    = API_KEY_PREFIX + secrets.token_urlsafe(32)
+    prefix = raw[:12]
+    execute(
+        """UPDATE users
+              SET api_key_hash = %s, api_key_prefix = %s, api_key_created_at = NOW()
+            WHERE id = %s""",
+        (_sha256(raw), prefix, user_id),
+    )
+    return jsonify({
+        "api_key": raw,
+        "prefix":  prefix,
+        "note":    "Store this now — it is shown only once. "
+                   "Send it as 'Authorization: Bearer <key>' on batch requests.",
+    }), 201
+
+
+@app.delete("/api/api-key")
+def api_key_revoke():
+    """Revoke the API key (clears the hash) so no key authenticates until a
+    new one is generated."""
+    user_id, err = _api_key_target_user()
+    if err:
+        return err
+    execute(
+        """UPDATE users
+              SET api_key_hash = NULL, api_key_prefix = NULL, api_key_created_at = NULL
+            WHERE id = %s""",
+        (user_id,),
+    )
+    return ("", 204)
 
 
 # Admin-only: create a company AND its login user in one step.
@@ -430,7 +690,8 @@ def soft_delete_car(car_id):
 
 
 def _validate_car_inputs(vin, type_, model, color, icon, plate, company_id,
-                         existing_vin_id=None, enforce_check_digit=True):
+                         existing_vin_id=None, enforce_check_digit=True,
+                         check_db_uniqueness=True):
     """Run the full validation gauntlet on a single car. Returns
     {ok: bool, errors: dict[field -> message]} so the frontend can show
     each error next to its field.
@@ -439,7 +700,12 @@ def _validate_car_inputs(vin, type_, model, color, icon, plate, company_id,
     valid (17 chars, legal VIN characters) but a wrong North-American
     check digit is tolerated. The single Add-Car form sets this False
     because the user deliberately edits the last 6 chars to match their
-    real car, which legitimately changes what the check digit would be."""
+    real car, which legitimately changes what the check digit would be.
+
+    check_db_uniqueness: when False, the two per-row DB lookups (VIN and plate
+    already registered?) are skipped. The batch path sets this False and does
+    those checks in bulk instead — one query for the whole batch rather than
+    two per car — which is dramatically faster for large imports."""
     errs = {}
 
     # Field presence
@@ -480,7 +746,8 @@ def _validate_car_inputs(vin, type_, model, color, icon, plate, company_id,
 
     # Combined plate-number uniqueness against the DB
     platenumber = f"{icon} {plate}".strip() if (icon and plate) else None
-    if platenumber and "plate_icon" not in errs and "plate_number" not in errs:
+    if (check_db_uniqueness and platenumber
+            and "plate_icon" not in errs and "plate_number" not in errs):
         existing = query("SELECT id FROM cars WHERE platenumber = %s",
                          (platenumber,), one=True)
         if existing:
@@ -496,7 +763,7 @@ def _validate_car_inputs(vin, type_, model, color, icon, plate, company_id,
     # VIN uniqueness against the DB (skip for the same-row update case).
     # When another company already registered this VIN, say so explicitly so
     # the company user knows it's claimed elsewhere, not just a typo.
-    if vin and "vin" not in errs:
+    if check_db_uniqueness and vin and "vin" not in errs:
         existing = query("SELECT id, company_id FROM cars WHERE vin = %s",
                          (vin,), one=True)
         if existing and (existing_vin_id is None or existing["id"] != existing_vin_id):
@@ -795,12 +1062,27 @@ def _validate_vin_offline(vin: str, enforce_check_digit: bool = True):
     return True, ""
 
 
-def _decode_vin_nhtsa(vin: str):
+# How long to wait on NHTSA per VIN. Kept short: the cross-check soft-fails when
+# NHTSA is slow/empty anyway, so a long timeout only lets a degraded NHTSA drag
+# down throughput. Override via env.
+NHTSA_TIMEOUT = int(os.getenv("NHTSA_TIMEOUT", "4"))
+
+# Master switch for the NHTSA model/body cross-check. ON by default (keeps the
+# strict "VIN must match the model you typed" behaviour). Set NHTSA_CROSS_CHECK=0
+# to skip the external call entirely — useful when NHTSA is unreachable, or when
+# load-testing the platform itself without depending on a third-party API. The
+# offline VIN structure + check-digit validation always runs regardless.
+NHTSA_CROSS_CHECK = os.getenv("NHTSA_CROSS_CHECK", "1").strip().lower() not in (
+    "0", "false", "no", "off",
+)
+
+
+def _decode_vin_nhtsa_network(vin: str):
     """Hit NHTSA's free VIN decoder. Returns (model, body_class) — either
     field may be None if the API didn't fill it. Returns (None, None) on
     network or parse errors so a transient outage doesn't block uploads."""
     try:
-        r = requests.get(NHTSA_DECODE_URL.format(vin=vin), timeout=10)
+        r = requests.get(NHTSA_DECODE_URL.format(vin=vin), timeout=NHTSA_TIMEOUT)
         if r.status_code != 200:
             return None, None
         data = r.json() or {}
@@ -812,6 +1094,41 @@ def _decode_vin_nhtsa(vin: str):
                 results.get("Body Class") or None)
     except Exception:
         return None, None
+
+
+# A VIN's NHTSA decode never changes, so caching it makes repeat batches (and
+# retries of a rejected batch) skip the network entirely — the single biggest
+# speed-up for bulk imports. Thread-safe and bounded. A positive decode is
+# cached for a long TTL; an empty/failed answer for a short one, so a transient
+# NHTSA outage can't poison the cache for a day. Keyed by VIN (already
+# upper-cased before validation).
+NHTSA_CACHE_TTL     = int(os.getenv("NHTSA_CACHE_TTL", "86400"))   # 24h for a real hit
+NHTSA_CACHE_NEG_TTL = int(os.getenv("NHTSA_CACHE_NEG_TTL", "300"))  # 5m for empty/down
+NHTSA_CACHE_MAX     = int(os.getenv("NHTSA_CACHE_MAX", "50000"))
+_nhtsa_cache = {}                       # vin -> (expires_monotonic, (model, body))
+_nhtsa_cache_lock = threading.Lock()
+
+
+def _decode_vin_nhtsa(vin: str):
+    """Cached front for `_decode_vin_nhtsa_network`. Identical return contract;
+    just answers instantly for a VIN seen recently. Returns (None, None) with no
+    network call when the cross-check is switched off."""
+    if not NHTSA_CROSS_CHECK:
+        return (None, None)
+    now = time.monotonic()
+    with _nhtsa_cache_lock:
+        hit = _nhtsa_cache.get(vin)
+        if hit and hit[0] > now:
+            return hit[1]
+    result = _decode_vin_nhtsa_network(vin)
+    ttl = NHTSA_CACHE_TTL if (result[0] or result[1]) else NHTSA_CACHE_NEG_TTL
+    with _nhtsa_cache_lock:
+        # Crude bound: if the cache is full, drop it wholesale. It's a cache —
+        # a rare full reset just means the next lookups re-fetch.
+        if len(_nhtsa_cache) >= NHTSA_CACHE_MAX:
+            _nhtsa_cache.clear()
+        _nhtsa_cache[vin] = (now + ttl, result)
+    return result
 
 
 def _loose_match(decoded: str, user_value: str) -> bool:
@@ -953,6 +1270,407 @@ def upload_cars_csv():
     return jsonify({"inserted": inserted, "failed": []}), 200
 
 
+# ----------------------- BATCH building blocks ------------------------
+# Each entity has a `_prepare_*` (pure validation → param tuples + per-row
+# errors, no writes) and an `_insert_*` (runs the writes on an already-open
+# cursor). The per-entity batch endpoints AND the unified /api/batch endpoint
+# share these, so a car validated one way is validated the same way everywhere.
+
+def _prepare_cars_batch(rows, company_id):
+    """Validate car rows for `company_id`. Returns (to_insert, errors): a list
+    of INSERT param tuples and a list of {index, errors}. The per-row NHTSA
+    cross-check runs concurrently; within-batch duplicate VIN/plate is caught."""
+    errors = []
+    parsed = []
+    for i, raw in enumerate(rows):
+        if not isinstance(raw, dict):
+            errors.append({"index": i, "errors": {"_": "Row must be a JSON object"}}); continue
+        # Plate may arrive pre-joined ("M 12345") or split into icon + number.
+        raw_plate = (raw.get("platenumber") or "").strip()
+        if raw_plate:
+            parts = raw_plate.split(maxsplit=1)
+            icon, plate = (parts[0], parts[1]) if len(parts) == 2 else ("", raw_plate)
+        else:
+            icon  = (raw.get("plate_icon") or raw.get("icon") or "").strip()
+            plate = (raw.get("plate_number") or raw.get("plate") or "").strip()
+        parsed.append({
+            "i":     i, "raw": raw,
+            "vin":   (raw.get("vin") or "").strip().upper(),
+            "type":  (raw.get("type") or "").strip(),
+            "model": (raw.get("model") or "").strip(),
+            "color": (raw.get("color") or "").strip(),
+            "icon":  icon, "plate": plate,
+        })
+
+    # NHTSA model/body check is a per-row network round-trip — fan it out so N
+    # rows cost ~ceil(N / workers) round-trips, not N. Check digit tolerated
+    # exactly like the single Add-Car form (user may hand-edit the last 6).
+    def _validate(p):
+        # Hold a global slot only while actually validating, so the number of
+        # threads touching the DB pool / NHTSA at once stays under the cap no
+        # matter how many batches are running concurrently.
+        with _validation_slots:
+            return p["i"], _validate_car_inputs(
+                vin=p["vin"], type_=p["type"], model=p["model"], color=p["color"],
+                icon=p["icon"], plate=p["plate"], company_id=company_id,
+                # Unlike the single Add-Car form (where a user hand-edits the
+                # last 6 chars), a bulk import carries real fleet VINs — so we
+                # enforce the check digit to keep typo'd / fabricated VINs out.
+                enforce_check_digit=True,
+                # Per-row DB uniqueness is skipped here and done in ONE bulk
+                # query below — two lookups per car would be the bottleneck on
+                # a large import.
+                check_db_uniqueness=False,
+            )
+
+    results = {}
+    if parsed:
+        workers = max(1, min(BATCH_WORKERS, len(parsed)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for idx, result in pool.map(_validate, parsed):
+                results[idx] = result
+
+    # Bulk uniqueness: collect the VINs/plates of rows that passed field
+    # validation, then ask the DB about all of them in two queries (not two
+    # per row). ANY(%s) hits the same VIN/plate indexes the per-row lookups did.
+    ok_parsed = [p for p in parsed if results[p["i"]]["ok"]]
+    cand_vins   = [p["vin"] for p in ok_parsed]
+    cand_plates = [results[p["i"]]["platenumber"] for p in ok_parsed]
+    existing_vins = {}
+    existing_plates = set()
+    if cand_vins:
+        for r in (query("SELECT vin, company_id FROM cars WHERE vin = ANY(%s)",
+                        (cand_vins,)) or []):
+            existing_vins[r["vin"]] = r.get("company_id")
+    if cand_plates:
+        for r in (query("SELECT platenumber FROM cars WHERE platenumber = ANY(%s)",
+                        (cand_plates,)) or []):
+            existing_plates.add(r["platenumber"])
+
+    seen_vins = {}      # vin -> first index it appeared at
+    seen_plates = {}    # platenumber -> first index
+    to_insert = []
+    for p in parsed:
+        i, vin = p["i"], p["vin"]
+        result = results[i]
+        if not result["ok"]:
+            errors.append({"index": i, "errors": result["errors"]}); continue
+        if vin in seen_vins:
+            errors.append({"index": i, "errors": {
+                "vin": f"Duplicate VIN '{vin}' — also at index {seen_vins[vin]} in this batch"}}); continue
+        plate_key = result["platenumber"]
+        if plate_key in seen_plates:
+            errors.append({"index": i, "errors": {
+                "plate_number": f"Duplicate plate '{plate_key}' — also at index {seen_plates[plate_key]} in this batch"}}); continue
+        # Already in the DB? (bulk-fetched sets above)
+        if vin in existing_vins:
+            if company_id and existing_vins[vin] != int(company_id):
+                errors.append({"index": i, "errors": {
+                    "vin": "this vin car already use by another rental companies"}}); continue
+            errors.append({"index": i, "errors": {
+                "vin": f"VIN '{vin}' is already registered"}}); continue
+        if plate_key in existing_plates:
+            errors.append({"index": i, "errors": {
+                "plate_number": f"Plate '{plate_key}' is already registered"}}); continue
+        seen_vins[vin] = i
+        seen_plates[plate_key] = i
+        to_insert.append((
+            vin, p["type"], p["model"], result["color"], result["platenumber"],
+            bool(p["raw"].get("has_gps", False)), company_id,
+        ))
+
+    errors.sort(key=lambda e: e["index"])
+    return to_insert, errors
+
+
+def _insert_cars(cur, to_insert):
+    """Bulk-insert prepared car tuples in a SINGLE multi-row statement and
+    return the inserted rows. One round-trip for the whole batch instead of one
+    per car. Raises on a UNIQUE violation so the caller can roll back."""
+    if not to_insert:
+        return []
+    return execute_values(
+        cur,
+        """INSERT INTO cars
+             (vin, type, model, color, platenumber, has_gps, company_id)
+           VALUES %s
+        RETURNING *""",
+        to_insert,
+        page_size=len(to_insert),   # one statement for the entire batch
+        fetch=True,
+    )
+
+
+def _prepare_branches_batch(rows, company_id):
+    """Validate branch rows for `company_id`. Returns (to_insert, errors)."""
+    to_insert = []
+    errors = []
+    for i, raw in enumerate(rows):
+        if not isinstance(raw, dict):
+            errors.append({"index": i, "errors": {"_": "Row must be a JSON object"}}); continue
+        branchname = _none_if_blank(raw.get("branchname"))
+        location   = _none_if_blank(raw.get("location"))
+        row_errs = {}
+        if not branchname:
+            row_errs["branchname"] = "branchname is required"
+        if not location:
+            row_errs["location"] = "location is required"
+        if row_errs:
+            errors.append({"index": i, "errors": row_errs}); continue
+        to_insert.append((
+            company_id, branchname, location,
+            _none_if_blank(raw.get("phonenumber")),
+            _none_if_blank(raw.get("x")), _none_if_blank(raw.get("y")),
+        ))
+    return to_insert, errors
+
+
+def _insert_branches(cur, to_insert):
+    """Bulk-insert prepared branch tuples in a SINGLE multi-row statement and
+    return the rows."""
+    if not to_insert:
+        return []
+    return execute_values(
+        cur,
+        """INSERT INTO branches
+             (company_id, branchname, location, phonenumber, x, y)
+           VALUES %s
+        RETURNING *""",
+        to_insert,
+        page_size=len(to_insert),
+        fetch=True,
+    )
+
+
+def _prepare_clients_batch(rows, company_id):
+    """Validate client rows for `company_id`, resolving each into a plan:
+    "insert" (new client) or "link" (existing client → attach this company),
+    mirroring the single Add-Client endpoint. Returns (plans, errors)."""
+    # ---- Pass 1: field validation + within-batch dedup (no DB yet) ----
+    seen = {}        # (personid, licenseid) -> first index
+    cands = []       # rows that passed field checks, awaiting DB resolution
+    plans = []
+    errors = []
+    for i, raw in enumerate(rows):
+        if not isinstance(raw, dict):
+            errors.append({"index": i, "errors": {"_": "Row must be a JSON object"}}); continue
+
+        licenseid = _none_if_blank(raw.get("licenseid"))
+        if not licenseid:
+            errors.append({"index": i, "errors": {"licenseid": "licenseid is required"}}); continue
+
+        id_type  = _norm_id_type(raw.get("id_type"))
+        personid = _none_if_blank(raw.get("personid"))
+        if id_type in ("passport", "national_id") and not personid:
+            errors.append({"index": i, "errors": {
+                "personid": "personid required for passport / national ID"}}); continue
+
+        key = (personid or "", licenseid)
+        if key in seen:
+            errors.append({"index": i, "errors": {
+                "licenseid": f"Duplicate client (personid+licenseid) — also at index {seen[key]} in this batch"}}); continue
+        seen[key] = i
+        cands.append({"i": i, "raw": raw, "licenseid": licenseid,
+                      "personid": personid, "id_type": id_type})
+
+    # ---- Bulk-fetch every existing client touching this batch (1 query) ----
+    # Replaces the previous two lookups PER ROW. Index the results by licenseid
+    # and personid so the link/insert/conflict decision is pure in-memory.
+    lics = list({c["licenseid"] for c in cands})
+    pids = list({c["personid"] for c in cands if c["personid"]})
+    by_lic, by_pid = {}, {}
+    if lics or pids:
+        for r in (query("SELECT * FROM clients WHERE licenseid = ANY(%s) OR personid = ANY(%s)",
+                        (lics, pids)) or []):
+            by_lic.setdefault(r.get("licenseid"), []).append(r)
+            if r.get("personid"):
+                by_pid.setdefault(r.get("personid"), []).append(r)
+
+    # ---- Pass 2: resolve each candidate against the fetched snapshot ----
+    for c in cands:
+        i, licenseid, personid = c["i"], c["licenseid"], c["personid"]
+        # An exact existing client → link this company to it.
+        if personid:
+            existing = next((r for r in by_pid.get(personid, [])
+                             if r.get("licenseid") == licenseid), None)
+        else:
+            existing = next((r for r in by_lic.get(licenseid, [])
+                             if r.get("personid") is None), None)
+        if existing:
+            plans.append({"action": "link", "index": i,
+                          "existing": existing, "company_id": company_id})
+            continue
+        # Only one of personid/licenseid taken by a different client → conflict.
+        if personid:
+            partial = bool(by_pid.get(personid)) or bool(by_lic.get(licenseid))
+        else:
+            partial = bool(by_lic.get(licenseid))
+        if partial:
+            errors.append({"index": i, "errors": {
+                "licenseid": "personid or licenseid is already used by a different client"}}); continue
+
+        raw = c["raw"]
+        plans.append({
+            "action": "insert", "index": i, "company_id": company_id,
+            "params": (
+                personid,
+                _none_if_blank(raw.get("name")),
+                _none_if_blank(raw.get("fathername")),
+                _none_if_blank(raw.get("mothername")),
+                _none_if_blank(raw.get("nationality")),
+                _none_if_blank(raw.get("phonenumber")),
+                _none_if_blank(raw.get("dateofbirth")),
+                licenseid,
+                _none_if_blank(raw.get("startdatelicense")),
+                _none_if_blank(raw.get("enddatelicense")),
+                int(company_id) if company_id else None,
+                _none_if_blank(raw.get("photo")),
+                c["id_type"],
+            ),
+        })
+    errors.sort(key=lambda e: e["index"])
+    return plans, errors
+
+
+def _insert_clients(cur, plans):
+    """Run client insert/link plans via an open cursor using bulk statements.
+    Returns (results, log_rows): `results` is the per-row outcome list;
+    `log_rows` is [(company_id, label)] for the activity log of newly-inserted
+    clients.
+
+    Instead of 1-2 statements PER row, this runs at most a handful for the
+    whole batch: one bulk reactivate, one bulk INSERT of all new clients, and
+    one bulk INSERT of all company links."""
+    # --- Bulk-reactivate any inactive existing clients we're linking to ---
+    reactivate_ids = [p["existing"]["id"] for p in plans
+                      if p["action"] == "link" and not p["existing"].get("is_active")]
+    if reactivate_ids:
+        cur.execute("UPDATE clients SET is_active = TRUE WHERE id = ANY(%s)",
+                    (reactivate_ids,))
+
+    # --- Bulk-insert every brand-new client in ONE statement, RETURNING ids.
+    # personid (params[0]) + licenseid (params[7]) is unique within the batch
+    # (deduped in _prepare_clients_batch), so we map returned rows back by it. ---
+    insert_plans = [p for p in plans if p["action"] == "insert"]
+    new_by_key = {}
+    if insert_plans:
+        new_rows = execute_values(
+            cur,
+            """INSERT INTO clients
+                 (personid, name, fathername, mothername, nationality,
+                  phonenumber, dateofbirth, licenseid,
+                  startdatelicense, enddatelicense, company_id, photo, id_type)
+               VALUES %s
+            RETURNING id, personid, licenseid, name""",
+            [p["params"] for p in insert_plans],
+            page_size=len(insert_plans),
+            fetch=True,
+        )
+        for r in new_rows:
+            new_by_key[(r.get("personid") or "", r.get("licenseid"))] = r
+
+    # --- Build per-row results + the full list of company links to write ---
+    results = []
+    log_rows = []
+    link_values = []   # (client_id, company_id) for both linked and inserted
+    for p in plans:
+        cid = int(p["company_id"]) if p["company_id"] else None
+        if p["action"] == "link":
+            ex = p["existing"]
+            if cid:
+                link_values.append((ex["id"], cid))
+            results.append({"index": p["index"], "action": "linked", "id": ex["id"]})
+        else:
+            new = new_by_key.get((p["params"][0] or "", p["params"][7]))
+            new_id = new["id"] if new else None
+            if cid and new_id:
+                link_values.append((new_id, cid))
+            results.append({"index": p["index"], "action": "inserted", "id": new_id})
+            label = (new.get("name") if new else None) or p["params"][7]
+            log_rows.append((cid, label))
+
+    # --- One bulk INSERT for all client→company links ---
+    if link_values:
+        execute_values(
+            cur,
+            """INSERT INTO client_companies (client_id, company_id)
+               VALUES %s ON CONFLICT DO NOTHING""",
+            link_values,
+            page_size=len(link_values),
+        )
+
+    results.sort(key=lambda r: r["index"])
+    return results, log_rows
+
+
+@app.post("/api/cars/batch")
+def create_cars_batch():
+    """Bulk-add cars from a JSON array (all-or-nothing). The payload may be a
+    JSON request body OR an uploaded .json file (multipart ``file`` field), and
+    in either case a bare array or ``{"cars": [...]}``. Each row runs the exact
+    same validation
+    gauntlet as the single Add-Car form — 17-char VIN, vininfo structure,
+    Lebanese plate, curated colour, DB uniqueness, and the NHTSA model/body
+    cross-check — plus a within-batch duplicate VIN/plate check. If ANY row
+    fails, nothing is written and the full per-row error list is returned so
+    the caller can fix and resubmit.
+
+    This is the external (curl / Postman) bulk path for COMPANY users only —
+    admin cannot create cars here, only view the resulting rows and activity
+    logs. Every car is filed under the caller's own company; any ``company_id``
+    in the payload is ignored."""
+    u = _current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    if u.get("role") != "company" or not u.get("company_id"):
+        return jsonify({"error": "Only company users can batch-add cars"}), 403
+    company_id = int(u["company_id"])
+
+    rows, err = _batch_rows_from_request("cars")
+    if err:
+        return jsonify({"error": err}), 400
+    if not rows:
+        return jsonify({"error": "No cars provided"}), 400
+    if len(rows) > MAX_BATCH:
+        return jsonify({"error": f"Too many rows ({len(rows)}); max {MAX_BATCH} per batch"}), 400
+
+    to_insert, errors = _prepare_cars_batch(rows, company_id)
+    if errors:
+        return jsonify({
+            "error":    "Batch rejected — fix the listed rows and resubmit.",
+            "inserted": 0,
+            "failed":   errors,
+        }), 400
+
+    # Every row is valid → insert in a single transaction so a late failure
+    # rolls back the whole batch (true all-or-nothing).
+    inserted = []
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                inserted = _insert_cars(cur, to_insert)
+    except Exception as e:
+        # A UNIQUE(vin)/UNIQUE(platenumber) violation that slipped past the
+        # checks above (e.g. a concurrent add) — clean 409, nothing saved.
+        msg = str(e).lower()
+        if "vin" in msg:
+            field = "vin"
+        elif "plate" in msg:
+            field = "plate_number"
+        else:
+            field = "_"
+        return jsonify({
+            "error":    "Insert failed mid-batch — nothing was saved.",
+            "inserted": 0,
+            "failed":   [{"index": "?", "errors": {field: str(e)}}],
+        }), 409
+
+    for row in inserted:
+        _log_activity(row.get("company_id"), "create", "car",
+                      f'{row.get("model") or ""} · {row.get("platenumber") or ""}'.strip(" ·"))
+    return jsonify({"inserted": len(inserted), "cars": _clean(inserted), "failed": []}), 201
+
+
 # ----------------------- BRANCHES -------------------------------------
 @app.get("/api/branches")
 def list_branches():
@@ -1000,6 +1718,53 @@ def create_branch():
         returning=True,
     )
     return jsonify(_clean(row)), 201
+
+
+@app.post("/api/branches/batch")
+def create_branches_batch():
+    """Bulk-add branches from a JSON array (all-or-nothing). The payload may be
+    a JSON request body OR an uploaded .json file (multipart ``file`` field),
+    as a bare array or ``{"branches": [...]}``. Each row needs branchname and
+    location; phonenumber/x/y are optional. COMPANY users only — admin cannot
+    create branches here, only view them and the activity logs. Every branch
+    is filed under the caller's own company; any ``company_id`` in the payload
+    is ignored. If ANY row fails validation, nothing is written."""
+    u = _current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    if u.get("role") != "company" or not u.get("company_id"):
+        return jsonify({"error": "Only company users can batch-add branches"}), 403
+    company_id = int(u["company_id"])
+
+    rows, err = _batch_rows_from_request("branches")
+    if err:
+        return jsonify({"error": err}), 400
+    if not rows:
+        return jsonify({"error": "No branches provided"}), 400
+    if len(rows) > MAX_BATCH:
+        return jsonify({"error": f"Too many rows ({len(rows)}); max {MAX_BATCH} per batch"}), 400
+
+    to_insert, errors = _prepare_branches_batch(rows, company_id)
+    if errors:
+        return jsonify({
+            "error":    "Batch rejected — fix the listed rows and resubmit.",
+            "inserted": 0,
+            "failed":   errors,
+        }), 400
+
+    inserted = []
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                inserted = _insert_branches(cur, to_insert)
+    except Exception as e:
+        return jsonify({
+            "error":    "Insert failed mid-batch — nothing was saved.",
+            "inserted": 0,
+            "failed":   [{"index": "?", "errors": {"_": str(e)}}],
+        }), 409
+
+    return jsonify({"inserted": len(inserted), "branches": _clean(inserted), "failed": []}), 201
 
 
 @app.put("/api/branches/<int:branch_id>")
@@ -1343,6 +2108,170 @@ def create_client():
         _log_activity(int(company_id) if company_id else None, "create", "client",
                       row.get("name") or row.get("licenseid"))
     return jsonify(_attach_linked_companies(_clean(row))), 201
+
+
+@app.post("/api/clients/batch")
+def create_clients_batch():
+    """Bulk-add clients from a JSON array (all-or-nothing). The payload may be a
+    JSON request body OR an uploaded .json file (multipart ``file`` field), as a
+    bare array or ``{"clients": [...]}``. Each row carries the same rules as the
+    single Add-Client form:
+
+      * licenseid is always required; personid is required only for passport /
+        national-ID clients.
+      * If a row matches an existing client (personid + licenseid, or
+        licenseid-only for license-only clients) it is treated as a *link* —
+        the caller's company is attached to the canonical record and the typed
+        fields are ignored — exactly like the single endpoint.
+      * If only one of personid / licenseid collides with a different client,
+        the row is rejected (contradicts an existing record).
+
+    Validation runs over the whole batch first; if ANY row is rejected nothing
+    is written. The valid rows (a mix of inserts and links) are then committed
+    in a single transaction.
+
+    COMPANY users only — admin cannot create clients here, only view them and
+    the activity logs. Every client is linked to the caller's own company; any
+    ``company_id`` in the payload is ignored."""
+    u = _current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    if u.get("role") != "company" or not u.get("company_id"):
+        return jsonify({"error": "Only company users can batch-add clients"}), 403
+    company_id = int(u["company_id"])
+
+    rows, err = _batch_rows_from_request("clients")
+    if err:
+        return jsonify({"error": err}), 400
+    if not rows:
+        return jsonify({"error": "No clients provided"}), 400
+    if len(rows) > MAX_BATCH:
+        return jsonify({"error": f"Too many rows ({len(rows)}); max {MAX_BATCH} per batch"}), 400
+
+    plans, errors = _prepare_clients_batch(rows, company_id)
+    if errors:
+        return jsonify({
+            "error":    "Batch rejected — fix the listed rows and resubmit.",
+            "inserted": 0,
+            "failed":   errors,
+        }), 400
+
+    # Commit every insert + link in one transaction (true all-or-nothing).
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                results, log_rows = _insert_clients(cur, plans)
+    except Exception as e:
+        return jsonify({
+            "error":    "Insert failed mid-batch — nothing was saved.",
+            "inserted": 0,
+            "failed":   [{"index": "?", "errors": {"_": str(e)}}],
+        }), 409
+
+    for cid, label in log_rows:
+        _log_activity(cid, "create", "client", label)
+
+    n_inserted = sum(1 for r in results if r["action"] == "inserted")
+    n_linked   = sum(1 for r in results if r["action"] == "linked")
+    return jsonify({
+        "inserted": n_inserted,
+        "linked":   n_linked,
+        "results":  results,
+        "failed":   [],
+    }), 201
+
+
+@app.post("/api/batch")
+def create_batch_all():
+    """ONE endpoint to import cars, clients, and branches together. The payload
+    is a single JSON object (request body OR uploaded .json file) with any of
+    these arrays::
+
+        {
+          "cars":     [ { ...car... },    ... ],
+          "clients":  [ { ...client... }, ... ],
+          "branches": [ { ...branch... }, ... ]
+        }
+
+    Each section is validated by the exact same rules as its dedicated batch
+    endpoint. It is all-or-nothing across EVERYTHING: if any row in any section
+    fails, nothing at all is written and the per-section error lists come back.
+    On success all three sections commit in a single transaction.
+
+    COMPANY users only — admin cannot create here, only view the rows and the
+    activity logs. Everything is filed under the caller's own company; any
+    ``company_id`` in the payload is ignored. The ``MAX_BATCH`` cap applies to
+    the combined row count across all sections."""
+    u = _current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    if u.get("role") != "company" or not u.get("company_id"):
+        return jsonify({"error": "Only company users can batch-import data"}), 403
+    company_id = int(u["company_id"])
+
+    payload, err = _load_json_request()
+    if err:
+        return jsonify({"error": err}), 400
+    if not isinstance(payload, dict):
+        return jsonify({"error": 'Body must be a JSON object with "cars" / '
+                                 '"clients" / "branches" arrays'}), 400
+
+    sections = {}
+    for key in ("cars", "clients", "branches"):
+        val = payload.get(key)
+        if val is None:
+            val = []
+        if not isinstance(val, list):
+            return jsonify({"error": f'"{key}" must be a JSON array'}), 400
+        sections[key] = val
+
+    total = sum(len(v) for v in sections.values())
+    if total == 0:
+        return jsonify({"error": "No data provided — include at least one of "
+                                 "cars / clients / branches"}), 400
+    if total > MAX_BATCH:
+        return jsonify({"error": f"Too many rows ({total}); max {MAX_BATCH} per batch"}), 400
+
+    # Validate everything first (no writes). Car validation fans out the NHTSA
+    # checks internally; client validation does read-only DB lookups.
+    car_inserts,    car_errors    = _prepare_cars_batch(sections["cars"], company_id)
+    client_plans,   client_errors = _prepare_clients_batch(sections["clients"], company_id)
+    branch_inserts, branch_errors = _prepare_branches_batch(sections["branches"], company_id)
+
+    if car_errors or client_errors or branch_errors:
+        return jsonify({
+            "error":  "Batch rejected — fix the listed rows and resubmit. Nothing was saved.",
+            "failed": {"cars": car_errors, "clients": client_errors, "branches": branch_errors},
+        }), 400
+
+    # All clean → one transaction for all three entities. A failure anywhere
+    # rolls the whole import back.
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                inserted_branches = _insert_branches(cur, branch_inserts)
+                inserted_cars     = _insert_cars(cur, car_inserts)
+                client_results, client_logs = _insert_clients(cur, client_plans)
+    except Exception as e:
+        return jsonify({
+            "error":  "Insert failed mid-batch — nothing was saved.",
+            "detail": str(e),
+        }), 409
+
+    for row in inserted_cars:
+        _log_activity(row.get("company_id"), "create", "car",
+                      f'{row.get("model") or ""} · {row.get("platenumber") or ""}'.strip(" ·"))
+    for cid, label in client_logs:
+        _log_activity(cid, "create", "client", label)
+
+    n_cli_ins  = sum(1 for r in client_results if r["action"] == "inserted")
+    n_cli_link = sum(1 for r in client_results if r["action"] == "linked")
+    return jsonify({
+        "cars":     {"inserted": len(inserted_cars),     "rows": _clean(inserted_cars)},
+        "clients":  {"inserted": n_cli_ins, "linked": n_cli_link, "results": client_results},
+        "branches": {"inserted": len(inserted_branches), "rows": _clean(inserted_branches)},
+        "failed":   {"cars": [], "clients": [], "branches": []},
+    }), 201
 
 
 # ----------------------- PASSWORD CHANGE --------------------------------
@@ -1784,6 +2713,76 @@ def rentals_report():
             "SELECT * FROM v_client_rentals WHERE TRUE" + scope_sql +
             " ORDER BY client_name, start_date DESC",
             scope_val,
+        )
+    return jsonify(_clean(rows))
+
+
+# ----------------------- EXTERNAL REPORTS (API-key read access) -------
+def _report_company(require_data=True):
+    """Resolve the company a report request is scoped to and enforce the
+    external-API gate. Returns (company_id, error_response). Company users
+    (header or API key) read their own data; admins may pass ``company_id``."""
+    u = _current_user()
+    if not u:
+        return None, (jsonify({"error": "Not authenticated"}), 401)
+    if u.get("role") == "company" and u.get("company_id"):
+        company_id = u["company_id"]
+    elif u.get("role") == "admin":
+        company_id = request.args.get("company_id")
+        if not company_id:
+            return None, (jsonify({"error": "company_id required"}), 400)
+    else:
+        return None, (jsonify({"error": "Not authorized"}), 403)
+    if require_data and not _company_has_data(company_id):
+        return None, (jsonify({
+            "error": "No data for this company yet — add cars, clients, or "
+                     "branches before requesting reports.",
+        }), 403)
+    return company_id, None
+
+
+@app.get("/api/reports/reservations")
+def reservations_report():
+    """Reservation report for the calling company — every reservation with its
+    client, car, dates and status. Read-only; usable with an API key."""
+    company_id, err = _report_company()
+    if err:
+        return err
+    rows = query(
+        """SELECT rv.id, rv.car_vin, rv.client_id, rv.start_date, rv.end_date,
+                  rv.status, rv.created_at,
+                  c.name  AS client_name, c.phonenumber AS client_phone,
+                  ca.model AS car_model, ca.platenumber AS car_plate
+             FROM reservations rv
+             JOIN clients c  ON c.id = rv.client_id
+             JOIN cars    ca ON ca.vin = rv.car_vin
+            WHERE rv.company_id = %s
+            ORDER BY rv.created_at DESC""",
+        (company_id,),
+    )
+    return jsonify(_clean(rows))
+
+
+@app.get("/api/reports/rentals")
+def external_rentals_report():
+    """Rental report for the calling company — every rental with its client,
+    car and dates. Read-only; usable with an API key. Optional ``client_id``
+    filters to one client."""
+    company_id, err = _report_company()
+    if err:
+        return err
+    client_id = request.args.get("client_id")
+    if client_id:
+        rows = query(
+            "SELECT * FROM v_client_rentals WHERE company_id = %s AND client_id = %s "
+            "ORDER BY start_date DESC",
+            (company_id, client_id),
+        )
+    else:
+        rows = query(
+            "SELECT * FROM v_client_rentals WHERE company_id = %s "
+            "ORDER BY client_name, start_date DESC",
+            (company_id,),
         )
     return jsonify(_clean(rows))
 

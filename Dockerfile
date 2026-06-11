@@ -41,12 +41,12 @@ EXPOSE 5000
 
 WORKDIR /app/backend
 
-# Two workers is plenty for an internal app — bump --workers if
-# you start seeing requests queue. --access-logfile - prints
-# requests on stdout so `docker compose logs` shows them.
-CMD ["gunicorn", \
-     "--bind", "0.0.0.0:5000", \
-     "--workers", "2", \
-     "--timeout", "60", \
-     "--access-logfile", "-", \
-     "app:app"]
+# Worker/thread counts, timeout, and a Postgres-safe DB pool size are all
+# computed in gunicorn.conf.py from the box's CPUs and env overrides
+# (GUNICORN_WORKERS, GUNICORN_THREADS, PG_MAX_CONNECTIONS, DB_POOL_MAX, …).
+# This scales to many concurrent companies without exhausting DB connections.
+#
+# entrypoint.sh applies pending DB migrations (idempotent) before launching
+# gunicorn, so a fresh volume or a redeploy always gets a current schema
+# without a manual `python migrate.py` step.
+CMD ["sh", "entrypoint.sh"]
