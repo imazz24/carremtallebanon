@@ -3816,7 +3816,7 @@ function renderReportCompanyHead(){
   meta.innerHTML = bits.join(" · ");
 }
 function showLogin(){
-  $("#login-overlay").style.display = "grid";
+  $("#login-overlay").style.display = "flex";
   $("#login-error").hidden = true;
   $("#form-login").reset();
   document.body.style.overflow = "hidden";
@@ -5783,8 +5783,73 @@ async function loadAllData(){
   }
 }
 
+/* Mobile nav drawer: the header hamburger slides the role sidebar in/out on
+   phones. A backdrop dims the page; tapping it, picking a destination, or
+   pressing Escape closes the drawer. Inert on desktop/iPad (the hamburger is
+   hidden by CSS, so `nav-open` is never set there). */
+function setupMobileNav(){
+  const toggle   = $("#mobile-nav-toggle");
+  const backdrop = $("#mobile-nav-backdrop");
+  if (!toggle) return;
+
+  const isOpen = () => document.body.classList.contains("nav-open");
+  const open = () => {
+    if (backdrop) backdrop.hidden = false;
+    document.body.classList.add("nav-open");
+    toggle.setAttribute("aria-expanded", "true");
+  };
+  const close = () => {
+    document.body.classList.remove("nav-open");
+    toggle.setAttribute("aria-expanded", "false");
+    // Let the fade-out animation finish before removing the backdrop.
+    if (backdrop) setTimeout(() => { if (!isOpen()) backdrop.hidden = true; }, 320);
+  };
+
+  toggle.addEventListener("click", () => (isOpen() ? close() : open()));
+  if (backdrop) backdrop.addEventListener("click", close);
+
+  // Choosing a destination in the drawer closes it.
+  document.addEventListener("click", (e) => {
+    if (isOpen() && e.target.closest(".sidebar-btn")) close();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && isOpen()) close();
+  });
+}
+
+/* Responsive tables: on phones every table is shown as a stack of cards
+   (one per row). For that the CSS needs each <td> to know its column name,
+   so we copy the matching <th> text onto each cell as data-label. This runs
+   generically for every table — no per-render wiring — by watching each
+   <tbody> for changes and re-labeling, plus a pass on language switches. */
+function setupResponsiveTables(){
+  const labelTable = (table) => {
+    const heads = $$("thead th", table).map(th => th.textContent.trim());
+    if (!heads.length) return;
+    $$("tbody tr", table).forEach(tr => {
+      if (tr.classList.contains("empty-row")) return;
+      Array.from(tr.children).forEach((td, i) => {
+        if (td.tagName === "TD" && heads[i]) td.setAttribute("data-label", heads[i]);
+      });
+    });
+  };
+  const tables = $$("table");
+  tables.forEach(table => {
+    labelTable(table);
+    const tb = table.tBodies[0];
+    if (!tb) return;
+    new MutationObserver(() => labelTable(table)).observe(tb, { childList: true });
+  });
+  // Header text changes with language — re-label after the re-render settles.
+  document.addEventListener("lang:changed", () => {
+    setTimeout(() => tables.forEach(labelTable), 0);
+  });
+}
+
 async function init(){
   setupAuth();
+  setupMobileNav();
+  setupResponsiveTables();
   setupCompanyForm();
   setupCarForm();
   setupClientForm();

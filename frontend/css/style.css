@@ -172,7 +172,10 @@ img{ max-width:100%; }
 .grid-form .btn{ height: 44px; }
 
 /* =================== MAIN / CARDS =================== */
-.main{ padding: 2rem 0 3rem; display: grid; gap: 1.5rem; }
+/* minmax(0,1fr) lets the single grid column shrink below its content's
+   intrinsic width — without it a wide table (min-width:640px) forces the
+   whole page to scroll sideways instead of scrolling inside .table-wrap. */
+.main{ padding: 2rem 0 3rem; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
 .card{
   background: var(--surface);
   border: 1px solid var(--line);
@@ -180,6 +183,7 @@ img{ max-width:100%; }
   padding: 1.6rem 1.6rem 1.8rem;
   box-shadow: var(--shadow);
   transition: box-shadow .3s;
+  min-width: 0;                  /* allow the card (and its tables) to shrink */
 }
 .card:hover{ box-shadow: var(--shadow-md); }
 .card.highlight{
@@ -466,7 +470,10 @@ html[dir="rtl"] .leaflet-host{ direction: ltr; }
     radial-gradient(ellipse 60% 50% at 25% 75%, rgba(99,102,241,.30) 0%, transparent 50%),
     radial-gradient(ellipse 40% 60% at 80% 20%, rgba(245,158,11,.12) 0%, transparent 50%),
     linear-gradient(145deg, #0c0a1d 0%, #1e1b4b 35%, #312e81 65%, #4f46e5 100%);
-  display: grid; place-items: center; padding: 1.5rem;
+  /* flex + margin:auto centers the card when it fits, but still lets the
+     overlay scroll (and reach the top) when the card is taller than the
+     screen — e.g. on short/landscape phones or with the keyboard open. */
+  display: flex; overflow-y: auto; padding: 1.5rem;
 }
 .login-overlay::before{
   content: ""; position: absolute; inset: 0;
@@ -475,6 +482,8 @@ html[dir="rtl"] .leaflet-host{ direction: ltr; }
 }
 .login-card{
   width: min(400px, 100%);
+  margin: auto;                  /* centers, yet stays scrollable when tall */
+  flex: 0 0 auto;
   background: var(--surface);
   border-radius: 20px;
   padding: 2.2rem 1.8rem 1.8rem;
@@ -738,23 +747,51 @@ html[dir="rtl"] body.role-admin.sidebar-collapsed .site-footer{
   margin-left: 0; margin-right: 62px;
 }
 
-/* Mobile */
-@media (max-width: 900px){
-  .admin-sidebar{ width: 62px; }
-  .sidebar-brand-text, .sidebar-label{ opacity: 0; width: 0; }
-  .sidebar-top{ justify-content: center; }
-  .sidebar-brand{ display: none; }
+/* Tablet / iPad (721–1024px) keeps the full labeled sidebar — the base
+   230px layout already handles it, so no override is needed here.
+
+   Phones (≤720px): the sidebar becomes an off-canvas drawer toggled by the
+   header hamburger. Content uses the full width; a backdrop dims the page. */
+@media (max-width: 720px){
+  .admin-sidebar,
+  .admin-sidebar.collapsed{
+    width: 270px;
+    transform: translateX(-100%);
+    transition: transform .28s cubic-bezier(.4,0,.2,1);
+    box-shadow: none;
+    z-index: 60;                 /* above the sticky header (50) + backdrop */
+  }
+  html[dir="rtl"] .admin-sidebar{ transform: translateX(100%); }
+  body.nav-open .admin-sidebar{
+    transform: translateX(0);
+    box-shadow: 0 0 50px rgba(0,0,0,.55);
+  }
+
+  /* The drawer always shows full brand + labels, even if it was collapsed
+     on desktop before the viewport shrank. */
+  .admin-sidebar.collapsed .sidebar-brand-text,
+  .admin-sidebar.collapsed .sidebar-label{ opacity: 1; width: auto; }
+  .admin-sidebar.collapsed .sidebar-brand{ display: flex; }
+  .admin-sidebar.collapsed .sidebar-top{ justify-content: space-between; }
+  .admin-sidebar.collapsed .sidebar-btn{ justify-content: flex-start; padding: .6rem .7rem; }
+  .admin-sidebar.collapsed .sidebar-btn::before{ display: block; }
   .sidebar-collapse-btn{ display: none; }
-  .sidebar-btn{ justify-content: center; padding: .6rem .4rem; }
-  .sidebar-btn::before{ display: none; }
-  .sidebar-nav{ padding: .2rem .3rem .6rem; }
-  .sidebar-divider{ margin: .2rem .3rem; }
+
+  /* Content takes the full width — no sidebar offset on phones. */
   body.role-admin .site-header,
   body.role-admin .main,
-  body.role-admin .site-footer{ margin-left: 62px; }
+  body.role-admin .site-footer,
+  body.role-company .site-header,
+  body.role-company .main,
+  body.role-company .site-footer{ margin-left: 0; margin-right: 0; }
   html[dir="rtl"] body.role-admin .site-header,
   html[dir="rtl"] body.role-admin .main,
-  html[dir="rtl"] body.role-admin .site-footer{ margin-left: 0; margin-right: 62px; }
+  html[dir="rtl"] body.role-admin .site-footer,
+  html[dir="rtl"] body.role-company .site-header,
+  html[dir="rtl"] body.role-company .main,
+  html[dir="rtl"] body.role-company .site-footer{ margin-left: 0; margin-right: 0; }
+
+  body.nav-open{ overflow: hidden; }
 }
 
 /* =================== ROLE VISIBILITY =================== */
@@ -824,13 +861,15 @@ html[dir="rtl"] body.role-company.sidebar-collapsed .site-footer{
   margin-left: 0; margin-right: 62px;
 }
 
-@media (max-width: 900px){
+/* Company content goes full-width on phones (drawer handles the nav).
+   On iPad/tablet the base 230px sidebar layout applies unchanged. */
+@media (max-width: 720px){
   body.role-company .site-header,
   body.role-company .main,
-  body.role-company .site-footer{ margin-left: 62px; }
+  body.role-company .site-footer{ margin-left: 0; margin-right: 0; }
   html[dir="rtl"] body.role-company .site-header,
   html[dir="rtl"] body.role-company .main,
-  html[dir="rtl"] body.role-company .site-footer{ margin-left: 0; margin-right: 62px; }
+  html[dir="rtl"] body.role-company .site-footer{ margin-left: 0; margin-right: 0; }
 }
 
 /* =================== SECTION-SPECIFIC =================== */
@@ -3135,4 +3174,203 @@ body.role-admin .dash-panel-warn .alert-list{ padding: .5rem .8rem .7rem; }
 }
 @media (max-width: 420px){
   body.role-admin .stats-grid{ grid-template-columns: 1fr; }
+}
+
+/* =====================================================
+   MOBILE & TABLET — drawer nav, backdrop, touch polish
+   Makes the full platform usable on phones and iPads
+   with every desktop feature intact.
+===================================================== */
+
+/* ---- Hamburger button (header) ---- */
+.mobile-nav-toggle{
+  display: none;                 /* shown only on phones, for signed-in roles */
+  flex: 0 0 auto;
+  width: 42px; height: 42px;
+  align-items: center; justify-content: center;
+  flex-direction: column; gap: 5px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: var(--radius-xs);
+  cursor: pointer; padding: 0;
+  transition: background .15s, border-color .15s;
+}
+.mobile-nav-toggle:hover{ border-color: var(--primary); }
+.mobile-nav-toggle .mnt-bar{
+  display: block; width: 20px; height: 2px; border-radius: 2px;
+  background: var(--ink);
+  transition: transform .26s cubic-bezier(.4,0,.2,1), opacity .2s;
+}
+body.nav-open .mobile-nav-toggle .mnt-bar:nth-child(1){ transform: translateY(7px) rotate(45deg); }
+body.nav-open .mobile-nav-toggle .mnt-bar:nth-child(2){ opacity: 0; }
+body.nav-open .mobile-nav-toggle .mnt-bar:nth-child(3){ transform: translateY(-7px) rotate(-45deg); }
+
+/* Signed-in dark header → light bars on the hamburger */
+body:is(.role-company, .role-admin) .mobile-nav-toggle{
+  background: rgba(255,255,255,.06);
+  border-color: rgba(148,163,184,.25);
+}
+body:is(.role-company, .role-admin) .mobile-nav-toggle .mnt-bar{ background: #e9ecff; }
+
+/* ---- Drawer backdrop ---- */
+.mobile-nav-backdrop{
+  position: fixed; inset: 0; z-index: 44;
+  background: rgba(8,11,22,.55);
+  -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+  opacity: 0; pointer-events: none;
+  transition: opacity .28s ease;
+}
+.mobile-nav-backdrop[hidden]{ display: none; }
+body.nav-open .mobile-nav-backdrop{ opacity: 1; pointer-events: auto; }
+
+@media (max-width: 720px){
+  /* Reveal the hamburger only for the two signed-in roles (the public
+     login page has no nav drawer). */
+  body:is(.role-company, .role-admin) .mobile-nav-toggle{ display: inline-flex; }
+
+  /* Backdrop sits above the sticky header so the whole page dims behind the
+     drawer; the drawer (z 60) still paints on top of it. */
+  .mobile-nav-backdrop{ z-index: 55; }
+
+  /* Tighter header spacing on small screens */
+  .header-inner{ gap: .6rem; padding: .6rem 0; }
+  .header-actions{ gap: .5rem; }
+  .main{ padding: 1.2rem 0 2rem; gap: 1rem; }
+  .card{ padding: 1.1rem 1rem 1.3rem; }
+
+  /* Prevent iOS Safari from zooming when a field is focused (needs ≥16px) */
+  input, select, textarea,
+  .field input, .field select, .field textarea{ font-size: 16px; }
+
+  /* Comfortable touch targets */
+  .btn, .sidebar-btn, .lang-btn, .pager-btn,
+  .file-picker-btn, .rv-view-btn{ min-height: 42px; }
+
+  /* Toolbars / filter rows stack into a single column */
+  .table-toolbar,
+  .report-toolbar,
+  .rv-filter-bar,
+  .upload-grid,
+  .upload-actions{ flex-direction: column; align-items: stretch; }
+  .table-search-field,
+  .report-search-field,
+  .report-date-field,
+  .rv-date-field{ width: 100%; max-width: none; min-width: 0; }
+  .upload-actions .btn,
+  .rv-filter-bar .btn{ width: 100%; }
+
+  /* ---- Professional stacked-card tables (no horizontal scrolling) ----
+     Each row becomes a self-contained card; each cell shows its column name
+     (from data-label, set in JS) beside the value. */
+  .table-wrap{
+    border: 0; background: transparent; overflow: visible;
+    border-radius: 0; box-shadow: none;
+  }
+  .table-wrap table{ min-width: 0; display: block; }
+  .table-wrap thead{
+    position: absolute; width: 1px; height: 1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  .table-wrap tbody{ display: block; }
+  .table-wrap tbody tr{
+    display: block;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-xs);
+    padding: .25rem .9rem;
+    margin-bottom: .75rem;
+    overflow: hidden;
+  }
+  .table-wrap tbody tr:hover{ background: var(--surface); }
+  .table-wrap tbody td{
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 1rem; text-align: end;
+    padding: .6rem 0;
+    border: 0; border-bottom: 1px solid var(--line-soft);
+    font-size: .9rem; white-space: normal; min-height: 0;
+  }
+  .table-wrap tbody td:last-child{ border-bottom: 0; }
+  .table-wrap tbody td::before{
+    content: attr(data-label);
+    flex: 0 0 40%;
+    text-align: start;
+    font-size: .68rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--ink-soft);
+  }
+  /* Drop the row-number column in card view — it's just visual noise here. */
+  .table-wrap tbody td[data-label="#"]{ display: none; }
+  /* Cells with no label just right-align their value (no blank label gap). */
+  .table-wrap tbody td:not([data-label]){ justify-content: flex-end; }
+  .table-wrap tbody td:not([data-label])::before{ display: none; }
+  .table-wrap tbody td::before{ word-break: break-word; }
+
+  /* Action buttons get their own full-width row at the card foot. */
+  .table-wrap tbody td .row-actions{ justify-content: flex-end; flex-wrap: wrap; }
+  .table-wrap tbody td .row-actions .row-btn{ flex: 1 1 auto; min-height: 40px; }
+
+  /* Empty-state row stays a simple centered message, not a card. */
+  .table-wrap tbody tr.empty-row{
+    border: 1px dashed var(--line); box-shadow: none; text-align: center;
+  }
+  .table-wrap tbody tr.empty-row td{
+    display: block; text-align: center; border: 0;
+    color: var(--muted); padding: 1rem .5rem;
+  }
+  .table-wrap tbody tr.empty-row td::before{ display: none; }
+
+  /* Images inside cells (logos / photos) keep a tidy fixed size. */
+  .table-wrap tbody td img{ max-width: 56px; height: auto; border-radius: 8px; }
+
+  /* The pager controls sit comfortably under the card list. */
+  .pager-wrap{ justify-content: center; }
+
+  /* Modals: let the whole overlay scroll (flex + margin:auto) so the card
+     centers when it fits and the top stays reachable when it's tall — the
+     same robust pattern as the login card. */
+  .modal{ display: flex; overflow-y: auto; padding: .6rem; }
+  .modal-card{
+    width: 100%; max-width: 100%;
+    max-height: none; margin: auto;
+    border-radius: 14px;
+  }
+  .detail-body{ max-height: none; }
+  .map-host-wrap, .leaflet-host, .leaflet-host .leaflet-container{ min-height: 260px; }
+  .modal-foot{ flex-direction: column; align-items: stretch; gap: .6rem; }
+  .modal-foot .btn,
+  .modal-actions{ width: 100%; }
+  .modal-actions{ display: flex; }
+  .modal-actions .btn{ flex: 1 1 auto; }
+
+  /* Rent preview + report header stack */
+  .preview-grid{ grid-template-columns: 1fr; }
+  .report-company-head{ flex-direction: column; align-items: flex-start; gap: .6rem; }
+
+  /* Returns KPI cards: 3-up stays readable, otherwise wrap */
+  .returns-stats{ gap: .5rem; }
+
+  /* Login: keep the card centered and small enough to fit the screen so the
+     user never has to scroll to reach it. */
+  .login-overlay{ align-items: center; justify-content: center; padding: 1rem; }
+  .login-card{
+    padding: 1.5rem 1.3rem 1.4rem;
+    gap: .55rem;
+    border-radius: 16px;
+  }
+  .login-brand{ font-size: .98rem; }
+  .login-card h2{ font-size: 1.3rem; }
+  .login-card > p{ font-size: .84rem; margin-bottom: .1rem; line-height: 1.4; }
+  .login-card .field{ gap: .25rem; }
+  .login-card .field input{ height: 44px; }
+  .login-btn{ height: 44px; margin-top: .2rem; }
+}
+
+/* Smaller / shorter phones: compress the login card further so it still fits
+   without scrolling (short landscape screens included). */
+@media (max-width: 380px), (max-height: 560px){
+  .login-overlay{ padding: .8rem; }
+  .login-card{ padding: 1.1rem 1.1rem 1.2rem; gap: .45rem; }
+  .login-card h2{ font-size: 1.2rem; }
+  .login-card > p{ font-size: .8rem; }
+  .brand-text{ font-size: .95rem; }
 }
