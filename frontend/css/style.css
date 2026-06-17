@@ -175,7 +175,11 @@ img{ max-width:100%; }
 /* minmax(0,1fr) lets the single grid column shrink below its content's
    intrinsic width — without it a wide table (min-width:640px) forces the
    whole page to scroll sideways instead of scrolling inside .table-wrap. */
-.main{ padding: 2rem 0 3rem; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
+/* overflow-x:clip is a safety net so the page only ever scrolls vertically —
+   even when the open sidebar narrows the content area. `clip` (not `hidden`)
+   avoids creating a scroll container, so sticky table headers and
+   fixed-position modals keep working. */
+.main{ padding: 2rem 0 3rem; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; overflow-x: clip; }
 .card{
   background: var(--surface);
   border: 1px solid var(--line);
@@ -258,7 +262,10 @@ html[dir="rtl"] .card-head{
   border: 1px solid var(--line); border-radius: var(--radius-sm);
   overflow: auto; background: var(--surface);
 }
-table{ width:100%; border-collapse: collapse; min-width: 640px; }
+/* min-width:0 lets the table always fit its container width — content wraps
+   and the row grows taller (vertical scroll) instead of forcing the whole
+   table to scroll sideways. */
+table{ width:100%; border-collapse: collapse; min-width: 0; table-layout: auto; }
 thead th{
   position: sticky; top: 0; z-index: 2;
   background: var(--surface-2);
@@ -266,11 +273,15 @@ thead th{
   font-size: .72rem; text-transform: uppercase; letter-spacing: .07em;
   font-weight: 700; padding: .75rem .9rem;
   border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere; word-break: break-word;
 }
 tbody td{
   padding: .7rem .9rem;
   border-bottom: 1px solid var(--line-soft);
   font-size: .88rem; color: var(--ink);
+  /* Wrap long unbroken values (VINs, plates, emails) so a cell never forces
+     the table wider than its container — keeps scrolling vertical, not sideways. */
+  overflow-wrap: anywhere; word-break: break-word;
 }
 tbody tr:last-child td{ border-bottom: 0; }
 tbody tr{ transition: background .1s; }
@@ -341,7 +352,7 @@ tbody tr.report-row:hover{ background: rgba(99,102,241,.06); }
 .map-loc-status.empty .dot{ display: none; }
 
 /* =================== TABLE ACTIONS =================== */
-.row-actions{ display: inline-flex; gap: .3rem; align-items: center; }
+.row-actions{ display: inline-flex; gap: .3rem; align-items: center; flex-wrap: wrap; }
 .row-btn{
   font: inherit; border: 1px solid var(--line); background: var(--surface);
   color: var(--ink-soft); padding: .3rem .6rem; border-radius: 6px;
@@ -1398,7 +1409,9 @@ html[dir="rtl"] .dash-hero-mark{ right: auto; left: 1.6rem; transform: rotate(8d
 /* Stat cards */
 .stats-grid{
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* minmax(0,1fr) (not 1fr) lets the four cards shrink when the open sidebar
+     narrows the content area, instead of overflowing sideways. */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: .7rem;
 }
 .stat-card{
@@ -1444,7 +1457,7 @@ html[dir="rtl"] .dash-hero-mark{ right: auto; left: 1.6rem; transform: rotate(8d
 /* Two-column panels */
 .dash-columns{
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 1rem;
   align-items: start;
 }
