@@ -677,6 +677,46 @@ def update_car(car_id):
     return jsonify(_clean(row))
 
 
+@app.post("/api/cars/<vin>/gps")
+def ingest_car_gps(vin):
+    """Ingest a live GPS fix for a car — what an in-car tracker (or a
+    company's telematics integration) POSTs as the car moves. Body:
+    {"lat": <number>, "lng": <number>}. Admin may update any car; a
+    company user only its own. Stores the fix + a fresh timestamp so the
+    fleet map can plot where a rented car actually is."""
+    u = _current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    car = query(
+        "SELECT vin, company_id FROM cars WHERE vin = %s AND is_active = TRUE",
+        (vin,), one=True,
+    )
+    if not car:
+        return jsonify({"error": "Car not found"}), 404
+    if u.get("role") == "company" and u.get("company_id") != car["company_id"]:
+        return jsonify({"error": "Not authorized"}), 403
+
+    data = request.get_json(silent=True) or {}
+    try:
+        lat = float(data["lat"])
+        lng = float(data["lng"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "lat and lng are required numbers"}), 400
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lng <= 180.0):
+        return jsonify({"error": "lat/lng out of range"}), 400
+
+    row = execute(
+        """UPDATE cars
+              SET gps_lat = %s, gps_lng = %s, gps_updated_at = NOW()
+            WHERE vin = %s AND is_active = TRUE
+        RETURNING vin, gps_lat, gps_lng, gps_updated_at""",
+        (lat, lng, vin),
+        returning=True,
+    )
+    return jsonify(_clean(row))
+
+
 @app.delete("/api/cars/<int:car_id>")
 def soft_delete_car(car_id):
     row = execute(

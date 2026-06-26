@@ -113,6 +113,8 @@ const Pager = (() => {
               <select class="pager-size-select">
                 <option value="10" ${info.size === 10 ? "selected" : ""}>10</option>
                 <option value="25" ${info.size === 25 ? "selected" : ""}>25</option>
+                <option value="50" ${info.size === 50 ? "selected" : ""}>50</option>
+                <option value="100" ${info.size === 100 ? "selected" : ""}>100</option>
               </select>
               <span class="pager-size-label">${escape(t("pager.perPage"))}</span>
             </div>
@@ -340,7 +342,7 @@ function renderCompanies(){
     const phone = formatPhonesCell(c.phonenumber);
     const logo = c.logo
       ? `<img src="${escape(c.logo)}" alt="${escape(c.companyname)}" class="company-logo-thumb">`
-      : `<span class="company-logo-thumb company-logo-thumb-empty">${escape((c.companyname||"?").charAt(0).toUpperCase())}</span>`;
+      : `<span class="company-logo-thumb company-logo-thumb-empty" style="background:${_avatarColor(c.companyname)}">${escape(_initials(c.companyname))}</span>`;
 
     // Main company row
     const owner = c.owner_name ? escape(c.owner_name) : `<span class="badge no">—</span>`;
@@ -476,11 +478,11 @@ function renderClients(){
   const cell = (v) => v ? escape(v) : dash;
   const photo = (p, name) => p
     ? `<img src="${escape(p)}" alt="${escape(name||"")}" class="client-photo-thumb">`
-    : `<span class="client-photo-thumb client-photo-thumb-empty">${escape((name||"?").charAt(0).toUpperCase())}</span>`;
+    : `<span class="client-photo-thumb client-photo-thumb-empty" style="background:${_avatarColor(name)}">${escape(_initials(name))}</span>`;
   tbl.tBodies[0].innerHTML = info.rows.map((c,i) => `
     <tr>
       <td>${(info.page - 1) * info.size + i + 1}</td>
-      <td>${photo(c.photo, c.firstname || c.name)}</td>
+      <td>${photo(c.photo, [c.firstname, c.lastname].filter(Boolean).join(" ") || c.name)}</td>
       <td>${cell(c.personid)}</td>
       <td>${cell(c.firstname)}</td>
       <td>${cell(c.lastname)}</td>
@@ -548,37 +550,105 @@ function getReportRows(){
   return rows;
 }
 
+/* First-letters avatar fallback, e.g. "Ahmad Khalil" → "AK". */
+function _initials(name){
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  return ((parts[0][0] || "") + (parts[1]?.[0] || "")).toUpperCase();
+}
+/* Deterministic avatar background from a name (stable per person). */
+function _avatarColor(s){
+  let h = 0;
+  for (const ch of String(s || "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return RA_PALETTE[h % RA_PALETTE.length];
+}
+/* Whole-day span between two ISO dates (inclusive of the start day). */
+function _daysBetween(a, b){
+  if (!a || !b) return null;
+  const d1 = new Date(String(a).slice(0, 10)), d2 = new Date(String(b).slice(0, 10));
+  if (isNaN(d1) || isNaN(d2)) return null;
+  return Math.max(0, Math.round((d2 - d1) / 86400000));
+}
+
 function renderReport(){
   const tbl = $("#tbl-report");
   const rows = getReportRows();
+  renderReportAnalytics(rows);
   if (!rows.length){
     const pt = $("#pager-top-report"); if (pt) pt.hidden = true;
     const pb = $("#pager-report"); if (pb) pb.hidden = true;
-    return emptyRow(tbl, 13);
+    return emptyRow(tbl, 7);
   }
 
   const info = Pager.slice("report", rows);
+  const today = _raToday();
+  // The admin report is a comprehensive, premium grid: every column groups a
+  // bold primary value with muted, optionally-labelled sub-lines, so the whole
+  // client + company + vehicle + rental record is on screen without the page
+  // ever scrolling sideways. Atomic Latin tokens (dates, phones, IDs, VIN) are
+  // LTR-isolated so they read correctly even when the UI is Arabic/RTL.
+  const ltr = (v) => `<span class="ltr">${escape(v)}</span>`;
+  // A labelled sub-line: tiny muted key + value. `lt` = wrap value LTR.
+  const meta = (key, v, lt) => v
+    ? `<span class="gt-sub">${key ? `<span class="gt-k">${escape(t(key))}</span>` : ""}<span class="${lt ? "ltr" : ""}">${escape(v)}</span></span>`
+    : "";
+  const join = (...parts) => parts.filter(Boolean).map(escape).join(" · ");
+
   tbl.tBodies[0].innerHTML = info.rows.map((r, i) => {
-    const cphone = r.company_phone
-      ? `<a href="tel:${escape(r.company_phone)}">${escape(r.company_phone)}</a>`
-      : `<span class="badge no">—</span>`;
+    const idx = (info.page - 1) * info.size + i;
+    const st  = _raStatus(r, today);   // active | overdue | returned
+    const statusBadge = `<span class="status-pill status-${st}">${escape(t("analytics.kpi." + st))}</span>`;
+    const gps = r.car_has_gps ? `<span class="gt-chip gt-chip-gps">GPS</span>` : "";
+
+    // Avatar: the client's photo if present, else colored initials.
+    const initials = _initials(r.client_name);
+    const avatar = r.client_photo
+      ? `<span class="gt-avatar"><img src="${escape(r.client_photo)}" alt=""></span>`
+      : `<span class="gt-avatar gt-avatar-initials" style="background:${_avatarColor(r.client_name)}">${escape(initials)}</span>`;
+
+    const parents = join(r.client_father, r.client_mother);
+    const days    = _daysBetween(r.start_date, r.end_date);
+
     return `
-    <tr data-row="${(info.page - 1) * info.size + i}" class="report-row">
-      <td><strong>${escape(r.client_name)}</strong></td>
-      <td>${escape(r.client_father)}</td>
-      <td>${escape(r.client_phone)}</td>
-      <td><code>${escape(r.client_licenseid)}</code></td>
-      <td>${escape(r.company_name)}</td>
-      <td>${cphone}</td>
-      <td>${escape(r.company_location)}</td>
-      <td>${escape(r.car_model)} <span style="color:#94a3b8">(${escape(r.car_type)})</span></td>
-      <td>${escape(r.car_plate)}</td>
-      <td>${r.car_has_gps ? `<span class="badge yes">${t("yes")}</span>` : `<span class="badge no">${t("no")}</span>`}</td>
-      <td>${escape(r.start_date)}</td>
-      <td>${escape(r.end_date)}</td>
-      <td>
+    <tr data-row="${idx}" class="report-row">
+      <td data-col="client">
+        <div class="gt-client">
+          ${avatar}
+          <div class="gt-client-text">
+            <span class="gt-primary">${escape(r.client_name) || "—"}</span>
+            ${meta("report.parents", parents)}
+            ${meta(null, join(r.client_nationality, r.client_dob), false)}
+          </div>
+        </div>
+      </td>
+      <td data-col="contact">
+        ${r.client_phone
+          ? `<a href="tel:${escape(r.client_phone)}" class="gt-primary gt-phone ltr">${escape(r.client_phone)}</a>`
+          : `<span class="gt-primary cell-dash">—</span>`}
+        ${meta("report.idNo", r.client_personid, true)}
+        ${meta("report.license", r.client_licenseid, true)}
+      </td>
+      <td data-col="company">
+        <span class="gt-primary">${escape(r.company_name) || "—"}</span>
+        ${meta("report.code", r.company_code, true)}
+        ${meta(null, r.company_location, false)}
+        ${meta(null, r.company_phone, true)}
+      </td>
+      <td data-col="vehicle">
+        <span class="gt-primary">${escape(r.car_model) || "—"} ${gps}</span>
+        ${meta(null, join(r.car_type, r.car_color), false)}
+        ${meta("report.plate", r.car_plate, true)}
+        ${meta("report.vin", r.car_vin, true)}
+      </td>
+      <td data-col="period">
+        <span class="gt-period">${ltr(r.start_date)}<span class="gt-arrow">→</span>${ltr(r.end_date)}</span>
+        ${days != null ? `<span class="gt-sub">${days} ${escape(t("report.days"))}</span>` : ""}
+        ${r.returned_at ? meta("report.returned", String(r.returned_at).slice(0, 10), true) : ""}
+      </td>
+      <td data-col="status">${statusBadge}</td>
+      <td data-col="actions">
         <div class="row-actions">
-          <button type="button" class="row-btn pdf" data-detail="${(info.page - 1) * info.size + i}">${escape(t("action.open"))}</button>
+          <button type="button" class="row-btn pdf" data-detail="${idx}">${escape(t("action.open"))}</button>
         </div>
       </td>
     </tr>`;
@@ -592,6 +662,174 @@ function renderReport(){
     });
   });
   Pager.render("report", "#pager-top-report", "#pager-report", info, renderReport);
+}
+
+/* ============== ADMIN ANALYTICS (Report tab) ==================
+   A dependency-free visual summary of everything the companies have
+   entered. All charts are drawn from the same report rows the table
+   uses (already filtered by the admin toolbar), so they react live to
+   the company / client / license / date filters. SVG donuts + CSS bars
+   keep it lightweight and theme-aware (colors come from the rows, the
+   chrome from the dark admin tokens). Re-runs on every renderReport(),
+   which also fires on language change — so EN/AR stay in sync. */
+const RA_PALETTE = [
+  "#818cf8", "#34d399", "#fbbf24", "#f87171", "#22d3ee",
+  "#a78bfa", "#fb923c", "#4ade80", "#f472b6", "#60a5fa",
+];
+
+/* The car-rental day count for a row, clamped to >= 1. Used nowhere
+   critical — just a friendly KPI. */
+function _raToday(){
+  const d = new Date();
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/* Classify a rental row into one bucket: returned / overdue / active.
+   returned_at is the source of truth for "back in stock"; an out car
+   whose end_date has passed is overdue; everything else is active. */
+function _raStatus(r, today){
+  if (r.returned_at) return "returned";
+  if (r.end_date && String(r.end_date).slice(0, 10) < today) return "overdue";
+  return "active";
+}
+
+/* Tally rows by a key function → sorted [{label, value}] desc. */
+function _raCountBy(rows, keyFn){
+  const m = new Map();
+  rows.forEach(r => {
+    const k = keyFn(r);
+    if (k == null || k === "") return;
+    m.set(k, (m.get(k) || 0) + 1);
+  });
+  return [...m.entries()]
+    .map(([label, value]) => ({ label, value }))
+    .sort((a, b) => b.value - a.value);
+}
+
+/* Keep the top N, roll the rest into a single "Other" slice. */
+function _raTopN(items, n){
+  if (items.length <= n) return items;
+  const top = items.slice(0, n);
+  const rest = items.slice(n).reduce((s, i) => s + i.value, 0);
+  if (rest > 0) top.push({ label: t("analytics.other"), value: rest, _other: true });
+  return top;
+}
+
+/* Build one donut (SVG) + legend from segments [{label,value,color}].
+   Uses the classic circumference-100 trick (r = 15.915) so percentages
+   map straight to stroke-dasharray. */
+function _raDonut(host, segments, centerValue, centerLabel){
+  const total = segments.reduce((s, x) => s + x.value, 0);
+  if (!total){
+    host.innerHTML = `<p class="ra-empty">${escape(t("analytics.noData"))}</p>`;
+    return;
+  }
+  const R = 15.91549431;
+  let cum = 0;
+  const arcs = segments.map(s => {
+    const pct = s.value / total * 100;
+    const dash = `${pct.toFixed(3)} ${(100 - pct).toFixed(3)}`;
+    const off = (25 - cum + 100) % 100;   // start segment at 12 o'clock, walk clockwise
+    cum += pct;
+    return `<circle class="ra-seg" cx="21" cy="21" r="${R}" fill="none"
+            stroke="${s.color}" stroke-width="4.5"
+            stroke-dasharray="${dash}" stroke-dashoffset="${off.toFixed(3)}"></circle>`;
+  }).join("");
+
+  const legend = segments.map(s => {
+    const pct = Math.round(s.value / total * 100);
+    return `
+    <li class="ra-leg-item">
+      <span class="ra-leg-dot" style="background:${s.color}"></span>
+      <span class="ra-leg-name" title="${escape(s.label)}">${escape(s.label)}</span>
+      <span class="ra-leg-val">${s.value}</span>
+      <span class="ra-leg-pct">${pct}%</span>
+    </li>`;
+  }).join("");
+
+  host.innerHTML = `
+    <div class="ra-donut">
+      <svg viewBox="0 0 42 42" class="ra-donut-svg" role="img" aria-hidden="true">
+        <circle cx="21" cy="21" r="${R}" fill="none" stroke="var(--line)" stroke-width="4.5"></circle>
+        ${arcs}
+      </svg>
+      <div class="ra-donut-center">
+        <span class="ra-donut-num">${centerValue}</span>
+        <span class="ra-donut-cap">${escape(centerLabel)}</span>
+      </div>
+    </div>
+    <ul class="ra-legend">${legend}</ul>`;
+}
+
+let _raKpiAnimated = false;
+function renderReportAnalytics(rows){
+  const wrap = $("#report-analytics");
+  if (!wrap) return;
+  // Admin-only feature; the container is display:none for company users,
+  // but skip the work entirely to be safe.
+  if ((AUTH.user()?.role) !== "admin") return;
+
+  rows = rows || [];
+  const today = _raToday();
+
+  // ---- KPI tiles ----
+  const uniq = (fn) => new Set(rows.map(fn).filter(v => v != null && v !== "")).size;
+  const byStatus = { active: 0, overdue: 0, returned: 0 };
+  rows.forEach(r => { byStatus[_raStatus(r, today)]++; });
+
+  const kpis = [
+    { k: "analytics.kpi.total",     v: rows.length,                       cls: "ra-kpi-total" },
+    { k: "analytics.kpi.active",    v: byStatus.active,                   cls: "ra-kpi-active" },
+    { k: "analytics.kpi.overdue",   v: byStatus.overdue,                  cls: "ra-kpi-overdue" },
+    { k: "analytics.kpi.returned",  v: byStatus.returned,                 cls: "ra-kpi-returned" },
+    { k: "analytics.kpi.companies", v: uniq(r => r.company_id),           cls: "ra-kpi-companies" },
+    { k: "analytics.kpi.cars",      v: uniq(r => r.car_vin),              cls: "ra-kpi-cars" },
+    { k: "analytics.kpi.clients",   v: uniq(r => r.client_id ?? r.client_licenseid ?? r.client_name), cls: "ra-kpi-clients" },
+    { k: "analytics.kpi.gps",       v: rows.filter(r => r.car_has_gps).length, cls: "ra-kpi-gps" },
+  ];
+  const kpiHost = $("#ra-kpis");
+  if (kpiHost){
+    kpiHost.innerHTML = kpis.map(c => `
+      <div class="ra-kpi ${c.cls}">
+        <span class="ra-kpi-val" data-count="${c.v}">${c.v}</span>
+        <span class="ra-kpi-cap">${escape(t(c.k))}</span>
+      </div>`).join("");
+    // Count-up once per session land (kept subtle; re-renders just set values).
+    if (!_raKpiAnimated){
+      _raKpiAnimated = true;
+      _raCountUp(kpiHost);
+    }
+  }
+
+  // ---- Donut 1: status ----
+  const statusSegs = [
+    { label: t("analytics.kpi.active"),   value: byStatus.active,   color: "#34d399" },
+    { label: t("analytics.kpi.overdue"),  value: byStatus.overdue,  color: "#f87171" },
+    { label: t("analytics.kpi.returned"), value: byStatus.returned, color: "#94a3b8" },
+  ].filter(s => s.value > 0);
+  _raDonut($("#ra-status"), statusSegs, rows.length, t("analytics.kpi.total"));
+
+  // ---- Donut 2: by company (top 6 + Other) ----
+  const compSegs = _raTopN(_raCountBy(rows, r => r.company_name), 6)
+    .map((s, i) => ({ ...s, color: s._other ? "#64748b" : RA_PALETTE[i % RA_PALETTE.length] }));
+  _raDonut($("#ra-company"), compSegs, uniq(r => r.company_id), t("analytics.kpi.companies"));
+}
+
+/* Tiny count-up for the KPI tiles — eased, ~700ms, integer steps. */
+function _raCountUp(host){
+  host.querySelectorAll("[data-count]").forEach(el => {
+    const target = Number(el.dataset.count) || 0;
+    if (target <= 0){ el.textContent = "0"; return; }
+    const dur = 700, start = performance.now();
+    const step = (now) => {
+      const p = Math.min(1, (now - start) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      el.textContent = Math.round(target * eased).toLocaleString();
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
 }
 
 /* ============== RETURNS DUE (company-user tab) ==============
@@ -3670,6 +3908,7 @@ const DashboardLive = (() => {
           break;
         case "companies":         await refreshCompanies(); break;
         case "cars":              await refreshCars();      break;
+        case "car-gps":           await refreshCars(); CarGps.populate(); break;
         case "clients":           await refreshClients();   break;
         case "report":            await refreshReport();    break;
         case "admin-reservations":await Reservations.refresh(); break;
@@ -3827,7 +4066,7 @@ function showLogin(){
 /* ----- role-based UI gate ----- */
 /* ============== ADMIN SIDEBAR PANEL TOGGLE ============== */
 const AdminSidebar = (() => {
-  const PANELS = ["dashboard", "companies", "cars", "clients", "admin-reservations", "report", "support"];
+  const PANELS = ["dashboard", "companies", "cars", "car-gps", "clients", "admin-reservations", "report", "support"];
   let _current = "dashboard";
 
   function show(panel){
@@ -3851,6 +4090,9 @@ const AdminSidebar = (() => {
     $$(".sidebar-btn").forEach(btn => {
       btn.classList.toggle("active", btn.dataset.panel === panel);
     });
+    // The GPS/map tab needs a nudge once it's visible: Leaflet can only size
+    // itself against a laid-out container.
+    if (panel === "car-gps" && typeof CarGps !== "undefined") CarGps.onShow();
   }
 
   function setup(){
@@ -5049,6 +5291,216 @@ const MapPicker = (() => {
   return { setup, openPick, openView };
 })();
 
+/* ============== CAR GPS / MAP (admin) ==============
+   Admin picks a car and sees it on an inline Leaflet map plus a full
+   detail panel. Cars don't carry their own live coordinates, so the
+   shown position is the car's registered location — the coordinates of
+   the company that owns it (companies.x / .y). Cars whose company has no
+   coordinates are still selectable; the panel explains there's no point
+   to plot. Its own Leaflet instance, separate from the MapPicker modal. */
+const CarGps = (() => {
+  const CENTER = [33.8547, 35.8623];   // Lebanon
+  let map = null, marker = null, selectedVin = null, wired = false;
+
+  function _cars(){
+    // Admin dataset; newest companies first is irrelevant — sort by a stable,
+    // readable key (company, then model).
+    const list = (state.cars || []).slice();
+    const gpsOnly = $("#cargps-gpsonly")?.checked;
+    return (gpsOnly ? list.filter(c => c.has_gps) : list)
+      .sort((a, b) => (a.companyname || "").localeCompare(b.companyname || "")
+                   || (a.model || "").localeCompare(b.model || ""));
+  }
+
+  function _companyOf(car){
+    if (!car) return null;
+    return (state.companies || []).find(co => co.id === car.company_id) || null;
+  }
+
+  function _label(c){
+    const plate = c.platenumber ? ` · ${c.platenumber}` : "";
+    return `${c.companyname} — ${c.model}${plate}`;
+  }
+
+  function populate(){
+    const sel = $("#cargps-car");
+    if (!sel) return;
+    const prev = selectedVin;
+    const cars = _cars();
+    const ph = `<option value="" disabled ${prev ? "" : "selected"} hidden>${escape(t("carGps.placeholder"))}</option>`;
+    sel.innerHTML = ph + cars.map(c =>
+      `<option value="${escape(c.vin)}" ${c.vin === prev ? "selected" : ""}>${escape(_label(c))}${c.has_gps ? " ✦" : ""}</option>`
+    ).join("");
+    // SearchSelect (data-ss-prefix) re-syncs on innerHTML mutation, but force a
+    // label refresh in case the selected value changed.
+    if (sel._ss) sel._ss.sync();
+  }
+
+  function ensureMap(){
+    if (map || typeof L === "undefined") return;
+    map = L.map("cargps-map", { zoomControl: true }).setView(CENTER, 8);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18, minZoom: 6,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(map);
+  }
+
+  // The rental that currently has this car out (no return logged yet and it
+  // has started). Drives the "who's driving it" panel for a tracked car.
+  function _activeRentalFor(vin){
+    const today = _raToday();
+    return (state.report || []).find(r =>
+      r.car_vin === vin && !r.returned_at && String(r.start_date).slice(0, 10) <= today
+    ) || null;
+  }
+
+  // "4 min ago" / "2 h ago" / "3 d ago" from a fix timestamp.
+  function _agoText(ts){
+    if (!ts) return "";
+    const d = new Date(String(ts).replace(" ", "T"));
+    if (isNaN(d)) return "";
+    const mins = Math.max(0, Math.round((Date.now() - d.getTime()) / 60000));
+    if (mins < 60) return `${mins} ${t("carGps.minAgo")}`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs} ${t("carGps.hrAgo")}`;
+    return `${Math.round(hrs / 24)} ${t("carGps.dayAgo")}`;
+  }
+
+  // A distinct, pulsing marker for a live-tracked car vs the plain pin used
+  // for a car shown at its registered (company) location.
+  function _liveIcon(){
+    return L.divIcon({
+      className: "car-live-icon",
+      html: '<span class="clm-pulse"></span><span class="clm-dot"></span>',
+      iconSize: [22, 22], iconAnchor: [11, 11],
+    });
+  }
+
+  function _detailHtml(ctx){
+    const { car, co, live, rental } = ctx;
+    const row = (k, v, ltr) => v
+      ? `<div class="cgd-row"><dt>${escape(t(k))}</dt><dd${ltr ? ' class="ltr"' : ""}>${escape(v)}</dd></div>`
+      : "";
+    const gpsPill = car.has_gps
+      ? `<span class="status-pill status-active">${escape(t("carGps.gpsOn"))}</span>`
+      : `<span class="status-pill status-returned">${escape(t("carGps.gpsOff"))}</span>`;
+
+    // Location banner: live tracking / registered / awaiting signal.
+    let banner;
+    if (live){
+      banner = `<div class="cgd-banner cgd-banner-live">
+          <span class="cgd-live-badge"><span class="cgd-live-dot"></span>${escape(t("carGps.live"))}</span>
+          <span class="cgd-updated">${escape(t("carGps.updated"))}: ${escape(_agoText(car.gps_updated_at))}</span>
+        </div>`;
+    } else if (car.has_gps){
+      banner = `<div class="cgd-banner cgd-banner-wait">${escape(t("carGps.awaiting"))}</div>`;
+    } else {
+      banner = `<div class="cgd-banner cgd-banner-reg">${escape(t("carGps.registered"))}</div>`;
+    }
+
+    // Rental status.
+    const rentalRows = rental
+      ? `<div class="cgd-row"><dt>${escape(t("carGps.rentedTo"))}</dt><dd>${escape(rental.client_name)}</dd></div>
+         <div class="cgd-row"><dt>${escape(t("report.period"))}</dt><dd class="ltr">${escape(String(rental.start_date).slice(0,10))} → ${escape(String(rental.end_date).slice(0,10))}</dd></div>`
+      : `<div class="cgd-row"><dt>${escape(t("carGps.rental"))}</dt><dd class="cgd-idle">${escape(t("carGps.notRented"))}</dd></div>`;
+
+    const plotted = live
+      ? `${Number(car.gps_lat).toFixed(5)}, ${Number(car.gps_lng).toFixed(5)}`
+      : (co && co.y != null ? `${Number(co.y).toFixed(5)}, ${Number(co.x).toFixed(5)}` : "");
+
+    return `
+      <div class="cgd-head">
+        <h3>${escape(car.model)}</h3>
+        ${gpsPill}
+      </div>
+      ${banner}
+      <dl class="cgd-grid">
+        ${rentalRows}
+        ${row("report.vehicle", `${car.type || ""}${car.color ? " · " + car.color : ""}`)}
+        ${row("report.plate", car.platenumber, true)}
+        ${row("report.vin", car.vin, true)}
+        ${row("report.company", car.companyname)}
+        ${row("report.location", co ? co.location : "", false)}
+        ${row("report.cphone", co ? co.phonenumber : "", true)}
+        ${row(live ? "carGps.liveCoords" : "carGps.coords", plotted, true)}
+      </dl>
+      ${(!live && !(co && co.y != null)) ? `<p class="cgd-nocoords">${escape(t("carGps.noCoords"))}</p>` : ""}`;
+  }
+
+  function select(vin){
+    selectedVin = vin;
+    const car = (state.cars || []).find(c => c.vin === vin);
+    const detail = $("#cargps-detail");
+    if (!car){ if (detail){ detail.hidden = true; } return; }
+
+    const co = _companyOf(car);
+    const live = !!(car.has_gps && car.gps_lat != null && car.gps_lng != null
+                    && !isNaN(car.gps_lat) && !isNaN(car.gps_lng));
+    const hasReg = !!(co && co.x != null && co.y != null && !isNaN(co.x) && !isNaN(co.y));
+    const rental = _activeRentalFor(vin);
+
+    if (detail){
+      detail.hidden = false;
+      detail.innerHTML = _detailHtml({ car, co, live, rental });
+    }
+    ensureMap();
+    const emptyEl = $("#cargps-map-empty");
+    if (emptyEl) emptyEl.hidden = true;
+
+    if (map){
+      if (marker){ map.removeLayer(marker); marker = null; }
+      // Live fix wins; otherwise fall back to the registered company location.
+      const pos = live ? [Number(car.gps_lat), Number(car.gps_lng)]
+                       : (hasReg ? [Number(co.y), Number(co.x)] : null);
+      if (pos){
+        const tag = live
+          ? `<span class="map-live-tag">● ${escape(t("carGps.live"))}</span>`
+          : `<span class="map-reg-tag">${escape(t("carGps.registered"))}</span>`;
+        const who = rental ? `<br>${escape(t("carGps.rentedTo"))}: ${escape(rental.client_name)}` : "";
+        const popup = `<strong>${escape(car.model)}</strong> · ${escape(car.platenumber || "")}<br>${tag}${who}`;
+        marker = (live ? L.marker(pos, { icon: _liveIcon() }) : L.marker(pos)).addTo(map)
+          .bindPopup(popup).openPopup();
+        map.setView(pos, live ? 14 : 13);
+      } else {
+        map.setView(CENTER, 8);
+      }
+      setTimeout(() => map.invalidateSize(true), 60);
+    }
+  }
+
+  // Called whenever the tab becomes visible: (re)populate from the freshest
+  // car/company data and size the map.
+  function onShow(){
+    populate();
+    ensureMap();
+    if (map) setTimeout(() => map.invalidateSize(true), 80);
+  }
+
+  function setup(){
+    if (wired) return;
+    wired = true;
+    const sel = $("#cargps-car");
+    sel?.addEventListener("change", () => { if (sel.value) select(sel.value); });
+    $("#cargps-gpsonly")?.addEventListener("change", () => {
+      // Re-filter; keep the current pick if it survives the filter.
+      const keep = selectedVin && _cars().some(c => c.vin === selectedVin) ? selectedVin : null;
+      selectedVin = keep;
+      populate();
+      if (!keep){
+        const d = $("#cargps-detail"); if (d) d.hidden = true;
+        const e = $("#cargps-map-empty"); if (e) e.hidden = false;
+        if (marker && map){ map.removeLayer(marker); marker = null; }
+      }
+    });
+    document.addEventListener("lang:changed", () => {
+      populate();
+      if (selectedVin) select(selectedVin);
+    });
+  }
+
+  return { setup, onShow, populate };
+})();
+
 /* ============== RESERVATIONS ============== */
 const Reservations = (() => {
   let _data = [];
@@ -5130,27 +5582,39 @@ const Reservations = (() => {
     if (!rows.length){
       const pt = $("#pager-top-admin-reservations"); if (pt) pt.hidden = true;
       const pb = $("#pager-admin-reservations"); if (pb) pb.hidden = true;
-      return emptyRow(tbl, 10);
+      return emptyRow(tbl, 6);
     }
-    const dash = `<span class="badge no">—</span>`;
     const today = _today();
     const info = Pager.slice("admin-reservations", rows);
-    tbl.tBodies[0].innerHTML = info.rows.map((rv, i) => {
+    const sub  = (v) => v ? `<span class="gt-sub">${escape(v)}</span>` : "";
+    const subL = (v) => v ? `<span class="gt-sub ltr">${escape(v)}</span>` : "";
+    tbl.tBodies[0].innerHTML = info.rows.map((rv) => {
       const statusCls = rv.status || "pending";
       const statusLabel = t(`reservations.${statusCls}`) || rv.status;
       // Highlight reservations booked today so the newest stand out.
       const isToday = (rv.created_at || "").slice(0, 10) === today;
+      const phone = rv.client_phone
+        ? `<a href="tel:${escape(rv.client_phone)}" class="gt-sub ltr">${escape(rv.client_phone)}</a>` : "";
       return `<tr${isToday ? ' class="rv-row-today"' : ""}>
-        <td>${(info.page - 1) * info.size + i + 1}</td>
-        <td>${escape(rv.companyname || "")}</td>
-        <td>${escape(rv.client_name || "")}</td>
-        <td>${rv.client_phone ? `<a href="tel:${escape(rv.client_phone)}">${escape(rv.client_phone)}</a>` : dash}</td>
-        <td>${escape(rv.car_model || "")}</td>
-        <td>${escape(rv.car_plate || "")}</td>
-        <td>${escape(rv.start_date || "")}</td>
-        <td>${escape(rv.end_date || "")}</td>
-        <td>${rv.created_at ? escape(_fmtBooked(rv.created_at)) : dash}</td>
-        <td><span class="reservation-status-badge ${statusCls}">${escape(statusLabel)}</span></td>
+        <td data-col="company">
+          <div class="gt-client">
+            <span class="gt-avatar gt-avatar-initials" style="background:${_avatarColor(rv.companyname)}">${escape(_initials(rv.companyname))}</span>
+            <div class="gt-client-text"><span class="gt-primary">${escape(rv.companyname || "—")}</span></div>
+          </div>
+        </td>
+        <td data-col="client">
+          <span class="gt-primary">${escape(rv.client_name || "—")}</span>
+          ${phone}
+        </td>
+        <td data-col="vehicle">
+          <span class="gt-primary">${escape(rv.car_model || "—")}</span>
+          ${subL(rv.car_plate)}
+        </td>
+        <td data-col="period">
+          <span class="gt-period"><span class="ltr">${escape(rv.start_date || "")}</span><span class="gt-arrow">→</span><span class="ltr">${escape(rv.end_date || "")}</span></span>
+        </td>
+        <td data-col="booked">${rv.created_at ? subL(_fmtBooked(rv.created_at)) : `<span class="cell-dash">—</span>`}</td>
+        <td data-col="status"><span class="reservation-status-badge ${statusCls}">${escape(statusLabel)}</span></td>
       </tr>`;
     }).join("");
     Pager.render("admin-reservations", "#pager-top-admin-reservations",
@@ -5869,6 +6333,7 @@ async function init(){
   setupSupportForm();
   setupReportSearch();
   MapPicker.setup();
+  CarGps.setup();
   setupReportPdf();
 
   // Enhance every <select> on the page with a searchable dropdown.

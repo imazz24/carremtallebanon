@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="css/style.css?v=24" />
+  <link rel="stylesheet" href="css/style.css?v=27" />
 </head>
 <body>
 
@@ -185,6 +185,9 @@
     </button>
     <button class="sidebar-btn" data-panel="cars">
       <span class="sidebar-icon">🚗</span><span class="sidebar-label" data-i18n="nav.cars">Cars</span>
+    </button>
+    <button class="sidebar-btn" data-panel="car-gps">
+      <span class="sidebar-icon">🛰️</span><span class="sidebar-label" data-i18n="nav.carGps">Car GPS</span>
     </button>
     <button class="sidebar-btn" data-panel="clients">
       <span class="sidebar-icon">👥</span><span class="sidebar-label" data-i18n="nav.clients">Clients</span>
@@ -1046,6 +1049,38 @@
     <div id="pager-cars" class="pager-wrap" hidden></div>
   </section>
 
+  <!-- ============== CAR GPS / MAP (admin) ============== -->
+  <section id="car-gps" class="card admin-only-show" hidden>
+    <div class="card-head">
+      <h2 data-i18n="carGps.title">Car GPS &amp; Map</h2>
+      <p data-i18n="carGps.subtitle">Pick a car to locate it on the map and review its full details.</p>
+    </div>
+
+    <div class="cargps-toolbar">
+      <div class="field cargps-select-field">
+        <label for="cargps-car" data-i18n="carGps.select">Select a car</label>
+        <select id="cargps-car" data-ss-prefix="2">
+          <option value="" disabled selected hidden data-i18n="carGps.placeholder">— Choose a car —</option>
+        </select>
+      </div>
+      <label class="cargps-gpsonly">
+        <input type="checkbox" id="cargps-gpsonly">
+        <span data-i18n="carGps.gpsOnly">GPS-equipped only</span>
+      </label>
+    </div>
+
+    <div class="cargps-layout">
+      <div class="cargps-map-wrap">
+        <div id="cargps-map" class="cargps-map"></div>
+        <div id="cargps-map-empty" class="cargps-map-empty">
+          <span class="cargps-empty-icon">🛰️</span>
+          <p data-i18n="carGps.empty">Select a car above to see it on the map.</p>
+        </div>
+      </div>
+      <aside id="cargps-detail" class="cargps-detail" hidden></aside>
+    </div>
+  </section>
+
   <!-- ============== CLIENTS ============== -->
   <section id="clients" class="card">
     <div class="card-head">
@@ -1302,6 +1337,31 @@
               data-i18n="report.export">Export PDF</button>
     </div>
 
+    <!-- ===== Admin analytics: visual summary of everything the companies
+         have entered. Charts are drawn client-side from the same report
+         rows and react to the filters below. Admin-only. ===== -->
+    <section id="report-analytics" class="report-analytics admin-only-show">
+      <div class="ra-head">
+        <div>
+          <h3 data-i18n="analytics.title">Data Insights</h3>
+          <p class="ra-sub" data-i18n="analytics.subtitle">A live visual summary of all the data entered by your companies. Updates with the filters below.</p>
+        </div>
+      </div>
+
+      <div class="ra-kpis" id="ra-kpis"></div>
+
+      <div class="ra-charts">
+        <div class="ra-card">
+          <div class="ra-card-head"><h4 data-i18n="analytics.byStatus">Rentals by status</h4></div>
+          <div id="ra-status" class="ra-chart-host"></div>
+        </div>
+        <div class="ra-card">
+          <div class="ra-card-head"><h4 data-i18n="analytics.byCompany">Rentals by company</h4></div>
+          <div id="ra-company" class="ra-chart-host"></div>
+        </div>
+      </div>
+    </section>
+
     <div class="report-toolbar admin-only-show">
       <div class="field report-search-field">
         <label for="filter-report-company" data-i18n="filter.byCompany">Filter by company</label>
@@ -1360,22 +1420,16 @@
     </div>
 
     <div id="pager-top-report" class="pager-wrap" hidden></div>
-    <div class="table-wrap">
-      <table id="tbl-report">
+    <div class="table-wrap report-grid">
+      <table id="tbl-report" class="grouped-table">
         <thead>
           <tr>
             <th data-i18n="report.client">Client</th>
-            <th data-i18n="report.father">Father</th>
-            <th data-i18n="report.phone">Phone</th>
-            <th data-i18n="report.license">License</th>
+            <th data-i18n="report.contact">Contact &amp; ID</th>
             <th data-i18n="report.company">Company</th>
-            <th data-i18n="report.cphone">Company phone</th>
-            <th data-i18n="report.location">Location</th>
-            <th data-i18n="report.car">Car</th>
-            <th data-i18n="report.plate">Plate</th>
-            <th data-i18n="report.gps">GPS</th>
-            <th data-i18n="report.start">Start</th>
-            <th data-i18n="report.end">End</th>
+            <th data-i18n="report.vehicle">Vehicle</th>
+            <th data-i18n="report.period">Rental period</th>
+            <th data-i18n="report.status">Status</th>
             <th data-i18n="actions">Actions</th>
           </tr>
         </thead>
@@ -1440,17 +1494,13 @@
 
     <div id="pager-top-admin-reservations" class="pager-wrap" hidden></div>
     <div class="table-wrap">
-      <table id="tbl-admin-reservations">
+      <table id="tbl-admin-reservations" class="grouped-table">
         <thead>
           <tr>
-            <th>#</th>
             <th data-i18n="report.company">Company</th>
             <th data-i18n="report.client">Client</th>
-            <th data-i18n="report.phone">Phone</th>
-            <th data-i18n="report.car">Car</th>
-            <th data-i18n="report.plate">Plate</th>
-            <th data-i18n="report.start">Start</th>
-            <th data-i18n="report.end">End</th>
+            <th data-i18n="report.vehicle">Vehicle</th>
+            <th data-i18n="report.period">Rental period</th>
             <th data-i18n="reservations.bookedOn">Booked on</th>
             <th data-i18n="reservations.status">Status</th>
           </tr>

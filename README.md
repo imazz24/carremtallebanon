@@ -1,4 +1,4 @@
-# Car Rental — Full Stack Project
+Car Rental — Full Stack Project
 
 A bilingual (English / Arabic) car-rental management app.
 

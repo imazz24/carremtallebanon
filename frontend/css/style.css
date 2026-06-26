@@ -269,25 +269,73 @@ table{ width:100%; border-collapse: collapse; min-width: 0; table-layout: auto; 
 thead th{
   position: sticky; top: 0; z-index: 2;
   background: var(--surface-2);
-  color: var(--ink-soft); text-align: start;
+  color: var(--ink-soft); text-align: start; vertical-align: bottom;
   font-size: .72rem; text-transform: uppercase; letter-spacing: .07em;
-  font-weight: 700; padding: .75rem .9rem;
-  border-bottom: 1px solid var(--line);
-  overflow-wrap: anywhere; word-break: break-word;
+  font-weight: 700; padding: .7rem .9rem;
+  border-bottom: 2px solid var(--line);
+  overflow-wrap: break-word;
+  line-height: 1.25;
 }
 tbody td{
-  padding: .7rem .9rem;
+  padding: .72rem .9rem;
   border-bottom: 1px solid var(--line-soft);
   font-size: .88rem; color: var(--ink);
-  /* Wrap long unbroken values (VINs, plates, emails) so a cell never forces
-     the table wider than its container — keeps scrolling vertical, not sideways. */
-  overflow-wrap: anywhere; word-break: break-word;
+  vertical-align: middle; line-height: 1.45;
+  /* Break a genuinely long unbreakable token (VIN, email) only when it would
+     overflow — but never break ordinary words. `overflow-wrap: break-word`
+     (unlike `anywhere`) does NOT shrink the column's min-content width, so a
+     name like "Ahmad" can never collapse into one-letter-per-line wrapping. */
+  overflow-wrap: break-word;
+}
+/* A few columns hold long unbreakable identifiers (VIN). Let those wrap
+   character-by-character so they never push the table sideways. */
+#tbl-cars tbody td:nth-child(3){ overflow-wrap: anywhere; }
+/* Light-theme zebra for scanning wide rows. The signed-in admin/company dark
+   themes define their own (richer) striping + hover on the row, so this is the
+   public/light fallback only. Skip helper rows so they keep their own look. */
+tbody tr:nth-child(even):not(.empty-row):not(.company-branch-row){
+  background: color-mix(in srgb, var(--surface-2) 45%, transparent);
 }
 tbody tr:last-child td{ border-bottom: 0; }
-tbody tr{ transition: background .1s; }
+tbody tr{ transition: background .12s; }
 tbody tr:hover{ background: var(--primary-lt); }
 tbody tr.report-row{ cursor: pointer; }
 tbody tr.report-row:hover{ background: rgba(99,102,241,.06); }
+/* The leading row-number column is reference noise — keep it tight and muted
+   so the eye lands on the real data, not the counter. */
+#tbl-companies tbody td:first-child,
+#tbl-cars tbody td:first-child,
+#tbl-clients tbody td:first-child{
+  width: 1%; white-space: nowrap;
+  color: var(--ink-soft); font-variant-numeric: tabular-nums;
+}
+/* The trailing actions column hugs its buttons instead of stretching. */
+#tbl-companies tbody td:last-child,
+#tbl-cars tbody td:last-child,
+#tbl-clients tbody td:last-child,
+#tbl-report tbody td:last-child{ width: 1%; white-space: nowrap; }
+/* Atomic values — phone numbers, dates, plates, license IDs — are single
+   tokens that must never break across lines. The global "wrap anywhere" rule
+   was splitting them mid-value (e.g. a phone over two lines), which reads as
+   garbage. Pin those columns (header + cells) to one line per table so they
+   stay scannable. Indices match each table's <thead> column order. */
+/* Clients (admin): 9 Phone · 10 License ID · 11 License end */
+#tbl-clients thead th:nth-child(9),   #tbl-clients tbody td:nth-child(9),
+#tbl-clients thead th:nth-child(10),  #tbl-clients tbody td:nth-child(10),
+#tbl-clients thead th:nth-child(11),  #tbl-clients tbody td:nth-child(11),
+/* (The report table now uses grouped multi-line cells — see .grouped-table.) */
+/* Reservations (company): 3 Phone · 5 Plate · 6 Start · 7 End */
+#tbl-reservations thead th:nth-child(3),  #tbl-reservations tbody td:nth-child(3),
+#tbl-reservations thead th:nth-child(5),  #tbl-reservations tbody td:nth-child(5),
+#tbl-reservations thead th:nth-child(6),  #tbl-reservations tbody td:nth-child(6),
+#tbl-reservations thead th:nth-child(7),  #tbl-reservations tbody td:nth-child(7),
+/* Returns (company): 3 Phone · 5 Plate · 6 Return date */
+#tbl-returns thead th:nth-child(3),   #tbl-returns tbody td:nth-child(3),
+#tbl-returns thead th:nth-child(5),   #tbl-returns tbody td:nth-child(5),
+#tbl-returns thead th:nth-child(6),   #tbl-returns tbody td:nth-child(6){
+  white-space: nowrap; overflow-wrap: normal; word-break: normal;
+}
+/* (The admin Reservations table now uses grouped multi-line cells.) */
 .empty-row td{
   text-align:center; color: var(--muted); padding: 2.5rem 1rem;
   font-size: .9rem;
@@ -352,7 +400,7 @@ tbody tr.report-row:hover{ background: rgba(99,102,241,.06); }
 .map-loc-status.empty .dot{ display: none; }
 
 /* =================== TABLE ACTIONS =================== */
-.row-actions{ display: inline-flex; gap: .3rem; align-items: center; flex-wrap: wrap; }
+.row-actions{ display: inline-flex; gap: .3rem; align-items: center; flex-wrap: nowrap; }
 .row-btn{
   font: inherit; border: 1px solid var(--line); background: var(--surface);
   color: var(--ink-soft); padding: .3rem .6rem; border-radius: 6px;
@@ -730,6 +778,7 @@ body.role-admin .hero{ display: none !important; }
 /* Admin sections: toggled by JS */
 body.role-admin #companies,
 body.role-admin #cars,
+body.role-admin #car-gps,
 body.role-admin #clients,
 body.role-admin #report,
 body.role-admin #admin-reservations,
@@ -1154,8 +1203,8 @@ body.role-admin .media-remove{ display: none; }
 }
 .client-photo-thumb-empty{
   display: inline-grid; place-items: center;
-  background: var(--surface-2); color: var(--ink-soft);
-  font-weight: 700; font-size: .8rem;
+  color: #fff; border: 0; box-shadow: var(--shadow-xs);
+  font-weight: 800; font-size: .78rem;
 }
 
 /* Branch rows */
@@ -1182,7 +1231,8 @@ body.role-admin .media-remove{ display: none; }
 }
 .company-logo-thumb-empty{
   display: inline-grid; place-items: center;
-  background: var(--surface-2); color: var(--ink-soft); font-weight: 700;
+  color: #fff; font-weight: 800; font-size: .82rem; border: 0;
+  box-shadow: var(--shadow-xs);
 }
 
 /* Upload */
@@ -3285,7 +3335,9 @@ body.nav-open .mobile-nav-backdrop{ opacity: 1; pointer-events: auto; }
     overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
   }
   .table-wrap tbody{ display: block; }
-  .table-wrap tbody tr{
+  /* Every row is a uniform card — override any desktop/theme zebra tint. */
+  .table-wrap tbody tr,
+  .table-wrap tbody tr:nth-child(even){
     display: block;
     background: var(--surface);
     border: 1px solid var(--line);
@@ -3301,7 +3353,9 @@ body.nav-open .mobile-nav-backdrop{ opacity: 1; pointer-events: auto; }
     gap: 1rem; text-align: end;
     padding: .6rem 0;
     border: 0; border-bottom: 1px solid var(--line-soft);
-    font-size: .9rem; white-space: normal; min-height: 0;
+    font-size: .9rem; font-weight: 500; white-space: normal; min-height: 0;
+    /* In card view each row is its own block, so reset the desktop zebra tint. */
+    background: transparent !important;
   }
   .table-wrap tbody td:last-child{ border-bottom: 0; }
   .table-wrap tbody td::before{
@@ -3387,3 +3441,424 @@ body.nav-open .mobile-nav-backdrop{ opacity: 1; pointer-events: auto; }
   .login-card > p{ font-size: .8rem; }
   .brand-text{ font-size: .95rem; }
 }
+
+/* =====================================================
+   ADMIN ANALYTICS — visual summary on the Report tab.
+   Dependency-free SVG donuts + CSS bars, theme-aware via
+   the dark admin tokens. Admin-only (hidden for company users
+   by the .admin-only-show rule).
+   ===================================================== */
+.report-analytics{
+  margin: .4rem 0 1.6rem;
+  padding: 0 0 1.4rem;
+  border-bottom: 1px solid var(--line);
+}
+.ra-head{ margin: 0 0 1rem; }
+.ra-head h3{
+  margin: 0; font-size: 1.12rem; font-weight: 800; letter-spacing: -.01em;
+  display: flex; align-items: center; gap: .55rem; color: var(--ink);
+}
+.ra-head h3::before{
+  content: ""; width: 6px; height: 18px; border-radius: 4px;
+  background: linear-gradient(180deg, var(--primary), #a78bfa);
+}
+.ra-sub{ margin: .35rem 0 0; font-size: .85rem; color: var(--muted); }
+
+/* ---- KPI tiles ---- */
+.ra-kpis{
+  display: grid; gap: .75rem; margin: 0 0 1.1rem;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+}
+.ra-kpi{
+  position: relative; overflow: hidden;
+  padding: .85rem .9rem; border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: .15rem;
+  transition: transform .18s, box-shadow .18s, border-color .18s;
+}
+.ra-kpi::before{
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 3px;
+  background: var(--primary);
+}
+html[dir="rtl"] .ra-kpi::before{ inset: 0 0 0 auto; }
+.ra-kpi:hover{ transform: translateY(-2px); box-shadow: var(--shadow-md); border-color: rgba(129,140,248,.35); }
+.ra-kpi-val{ font-size: 1.5rem; font-weight: 800; line-height: 1.05; color: var(--ink); font-variant-numeric: tabular-nums; }
+.ra-kpi-cap{ font-size: .73rem; font-weight: 600; color: var(--muted); }
+.ra-kpi-active::before{   background: #34d399; }
+.ra-kpi-overdue::before{  background: #f87171; }
+.ra-kpi-returned::before{ background: #94a3b8; }
+.ra-kpi-companies::before{background: #a78bfa; }
+.ra-kpi-cars::before{     background: #22d3ee; }
+.ra-kpi-clients::before{  background: #fbbf24; }
+.ra-kpi-gps::before{      background: #4ade80; }
+
+/* ---- chart cards ---- */
+.ra-charts{
+  display: grid; gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ra-card{
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 1rem 1.05rem 1.1rem;
+  min-width: 0;
+}
+.ra-card-wide{ grid-column: 1 / -1; }
+.ra-card-head h4{
+  margin: 0 0 .85rem; font-size: .9rem; font-weight: 700; color: var(--ink-soft);
+}
+.ra-chart-host{ min-height: 60px; }
+.ra-empty{ color: var(--muted); font-size: .85rem; text-align: center; padding: 1.4rem 0; }
+
+/* ---- donut ---- */
+.ra-donut{
+  display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap;
+}
+.ra-donut-svg{ width: 122px; height: 122px; flex: 0 0 auto; }
+.ra-seg{ transition: stroke-dasharray .6s ease; }
+.ra-donut{ position: relative; }
+.ra-donut-center{
+  position: absolute; left: 61px; top: 50%;
+  transform: translate(-50%, -50%); text-align: center; pointer-events: none;
+}
+html[dir="rtl"] .ra-donut-center{ left: auto; right: 61px; transform: translate(50%, -50%); }
+.ra-donut-num{ display: block; font-size: 1.5rem; font-weight: 800; color: var(--ink); line-height: 1; font-variant-numeric: tabular-nums; }
+.ra-donut-cap{ display: block; font-size: .66rem; color: var(--muted); margin-top: .15rem; max-width: 90px; }
+.ra-legend{
+  list-style: none; margin: 0; padding: 0; flex: 1 1 130px; min-width: 130px;
+  display: flex; flex-direction: column; gap: .4rem;
+}
+.ra-leg-item{ display: flex; align-items: center; gap: .5rem; font-size: .82rem; }
+.ra-leg-dot{ width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
+.ra-leg-name{ color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+.ra-leg-val{ color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.ra-leg-pct{
+  flex: 0 0 auto; min-width: 3.2ch; text-align: end;
+  font-size: .74rem; font-weight: 700; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  background: var(--surface-3); border-radius: 999px; padding: .05rem .45rem;
+}
+
+/* ---- horizontal bars ---- */
+.ra-bars{ display: flex; flex-direction: column; gap: .6rem; }
+.ra-bar-row{ display: grid; grid-template-columns: minmax(70px, 30%) 1fr auto; align-items: center; gap: .7rem; }
+.ra-bar-label{ font-size: .8rem; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ra-bar-track{ height: 9px; border-radius: 6px; background: var(--surface-3); overflow: hidden; }
+.ra-bar-fill{ display: block; height: 100%; border-radius: 6px; min-width: 3px; transition: width .6s ease; }
+.ra-bar-val{ font-size: .82rem; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; min-width: 1.5ch; text-align: end; }
+
+/* ---- responsive ---- */
+@media (max-width: 1100px){
+  .ra-kpis{ grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 720px){
+  .ra-kpis{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ra-charts{ grid-template-columns: 1fr; }
+  .ra-card-wide{ grid-column: auto; }
+  .ra-donut{ justify-content: center; }
+}
+
+/* =====================================================
+   REPORT DATA GRID — professional, readable handling of
+   hundreds of rows. Bilingual (EN/AR) + RTL safe.
+   ===================================================== */
+
+/* Atomic Latin tokens (dates, phones, plates, license, VIN) must read
+   left-to-right even inside an Arabic RTL row — isolate so digits and
+   hyphens never reorder, while the cell still aligns to the row's start. */
+.ltr{ unicode-bidi: isolate; direction: ltr; }
+.cell-dash{ color: var(--muted); }
+.cell-muted{ color: var(--muted); font-size: .82em; }
+
+/* Arabic is cursive: letter-spacing + uppercase break the joins and read
+   as broken glyphs. Neutralize them on table headers in RTL. */
+html[dir="rtl"] thead th{ text-transform: none; letter-spacing: 0; }
+
+/* Status pill — same color language as the analytics donut. */
+.status-pill{
+  display: inline-flex; align-items: center; gap: .45ch;
+  padding: .2rem .6rem; border-radius: 999px;
+  font-size: .73rem; font-weight: 700; white-space: nowrap; line-height: 1.5;
+  border: 1px solid transparent;
+}
+.status-pill::before{
+  content: ""; width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor; flex: 0 0 auto;
+}
+.status-active{   color: #059669; background: rgba(16,185,129,.12);  border-color: rgba(16,185,129,.30); }
+.status-overdue{  color: #dc2626; background: rgba(239,68,68,.12);   border-color: rgba(239,68,68,.30); }
+.status-returned{ color: #64748b; background: rgba(100,116,139,.12); border-color: rgba(100,116,139,.28); }
+body:is(.role-company,.role-admin) .status-active{   color: #34d399; background: rgba(52,211,153,.14); }
+body:is(.role-company,.role-admin) .status-overdue{  color: #f87171; background: rgba(248,113,113,.14); }
+body:is(.role-company,.role-admin) .status-returned{ color: #94a3b8; background: rgba(148,163,184,.14); }
+
+/* ---- grouped multi-line cells (Client / Contact / Company / Vehicle / Period) ---- */
+.grouped-table tbody td{ vertical-align: top; }
+/* Company users see only their own company — hide the redundant column. */
+body.role-company #tbl-report thead th:nth-child(3),
+body.role-company #tbl-report tbody td:nth-child(3){ display: none; }
+.gt-primary{
+  display: block; font-weight: 650; color: var(--ink);
+  line-height: 1.35; overflow-wrap: anywhere;
+}
+.gt-sub{
+  display: flex; align-items: baseline; gap: .35rem; flex-wrap: wrap;
+  font-size: .78rem; color: var(--muted);
+  line-height: 1.4; margin-top: .12rem; overflow-wrap: anywhere;
+}
+.gt-sub > .ltr{ font-variant-numeric: tabular-nums; }
+/* Tiny uppercase field key in front of a value (ID, VIN, CODE, LIC…). */
+.gt-k{
+  display: inline-block; font-size: .6rem; font-weight: 800; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--ink-soft); opacity: .7;
+  border: 1px solid var(--line); border-radius: 4px; padding: 0 .3rem;
+  line-height: 1.5; flex: 0 0 auto;
+}
+html[dir="rtl"] .gt-k{ letter-spacing: 0; }
+
+/* Client identity block: avatar + stacked text. */
+.gt-client{ display: flex; align-items: flex-start; gap: .6rem; }
+.gt-client-text{ min-width: 0; }
+.gt-avatar{
+  flex: 0 0 auto; width: 38px; height: 38px; border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center;
+  overflow: hidden; font-weight: 800; font-size: .82rem; color: #fff;
+  box-shadow: var(--shadow-xs); margin-top: .1rem;
+}
+.gt-avatar img{ width: 100%; height: 100%; object-fit: cover; }
+.gt-phone{ font-variant-numeric: tabular-nums; }
+.gt-period{ display: inline-flex; align-items: center; gap: .45rem; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.gt-arrow{ color: var(--muted); }
+html[dir="rtl"] .gt-arrow{ transform: scaleX(-1); display: inline-block; }
+.gt-chip{
+  display: inline-block; vertical-align: middle; margin-inline-start: .35rem;
+  padding: .05rem .4rem; border-radius: 6px; font-size: .62rem; font-weight: 800;
+  letter-spacing: .04em; line-height: 1.5;
+}
+.gt-chip-gps{ color: #059669; background: rgba(16,185,129,.14); }
+body:is(.role-company,.role-admin) .gt-chip-gps{ color: #34d399; background: rgba(52,211,153,.16); }
+
+/* ---- the scroll frame + column rhythm (desktop / tablet only) ---- */
+@media (min-width: 721px){
+  /* Internal vertical scroll keeps the sticky header pinned in a clean
+     frame, so the analytics + filters above stay in view while the admin
+     pages through hundreds of records. */
+  .report-grid{ max-height: 72vh; overflow: auto; }
+  .report-grid thead th{
+    top: 0;
+    background: var(--surface-2);
+    box-shadow: 0 1px 0 var(--line), 0 6px 10px -8px rgba(0,0,0,.45);
+  }
+  #tbl-report tbody td{ padding: .7rem .85rem; }
+  /* Fixed layout with explicit column shares so nothing cramps and the wide
+     grouped columns (Client / Company / Car) breathe. */
+  #tbl-report{ table-layout: fixed; }
+  #tbl-report thead th:nth-child(1){ width: 21%; }   /* Client       */
+  #tbl-report thead th:nth-child(2){ width: 15%; }   /* Contact & ID */
+  #tbl-report thead th:nth-child(3){ width: 18%; }   /* Company      */
+  #tbl-report thead th:nth-child(4){ width: 19%; }   /* Vehicle      */
+  #tbl-report thead th:nth-child(5){ width: 13%; }   /* Period       */
+  #tbl-report thead th:nth-child(6){ width: 8%; white-space: nowrap; }  /* Status */
+  #tbl-report thead th:nth-child(7),
+  #tbl-report tbody td:nth-child(7){ width: 6%; white-space: nowrap; text-align: center; }
+
+  /* Company users only ever see their own company (it's already in the
+     report header), so drop the redundant Company column and let the
+     remaining columns breathe. */
+  body.role-company #tbl-report thead th:nth-child(1){ width: 26%; }
+  body.role-company #tbl-report thead th:nth-child(2){ width: 19%; }
+  body.role-company #tbl-report thead th:nth-child(4){ width: 25%; }
+  body.role-company #tbl-report thead th:nth-child(5){ width: 14%; }
+  body.role-company #tbl-report thead th:nth-child(6){ width: 9%; }
+  body.role-company #tbl-report thead th:nth-child(7){ width: 7%; }
+
+  /* Admin Reservations — grouped columns. */
+  #tbl-admin-reservations{ table-layout: fixed; }
+  #tbl-admin-reservations tbody td{ padding: .7rem .85rem; }
+  #tbl-admin-reservations thead th:nth-child(1){ width: 20%; }  /* Company */
+  #tbl-admin-reservations thead th:nth-child(2){ width: 19%; }  /* Client  */
+  #tbl-admin-reservations thead th:nth-child(3){ width: 18%; }  /* Vehicle */
+  #tbl-admin-reservations thead th:nth-child(4){ width: 15%; }  /* Period  */
+  #tbl-admin-reservations thead th:nth-child(5){ width: 16%; }  /* Booked  */
+  #tbl-admin-reservations thead th:nth-child(6){ width: 12%; white-space: nowrap; }  /* Status */
+}
+
+/* =====================================================
+   CAR GPS / MAP tab (admin)
+   ===================================================== */
+.cargps-toolbar{
+  display: flex; align-items: flex-end; gap: 1.2rem; flex-wrap: wrap;
+  margin: .2rem 0 1.1rem;
+}
+.cargps-select-field{ flex: 1 1 320px; max-width: 480px; }
+.cargps-gpsonly{
+  display: inline-flex; align-items: center; gap: .5rem;
+  font-size: .85rem; color: var(--ink-soft); font-weight: 600;
+  padding-bottom: .55rem; cursor: pointer; user-select: none;
+}
+.cargps-gpsonly input{ width: 16px; height: 16px; accent-color: var(--primary); }
+
+.cargps-layout{
+  display: grid; gap: 1.1rem;
+  grid-template-columns: 1.6fr 1fr;
+}
+.cargps-map-wrap{ position: relative; min-height: 440px; }
+.cargps-map{
+  width: 100%; height: 100%; min-height: 440px;
+  border-radius: var(--radius-sm); overflow: hidden;
+  border: 1px solid var(--line); background: var(--surface-2);
+}
+.cargps-map-empty{
+  position: absolute; inset: 0; z-index: 500;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: .6rem; text-align: center; color: var(--muted);
+  background: var(--surface-2); border-radius: var(--radius-sm);
+  border: 1px dashed var(--line);
+}
+.cargps-map-empty[hidden]{ display: none; }
+.cargps-empty-icon{ font-size: 2.4rem; opacity: .8; }
+
+/* Detail panel */
+.cargps-detail{
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 1.1rem 1.2rem; align-self: start;
+}
+.cargps-detail[hidden]{ display: none; }
+.cgd-head{ display: flex; align-items: center; justify-content: space-between; gap: .6rem; margin-bottom: .9rem; }
+.cgd-head h3{ margin: 0; font-size: 1.05rem; font-weight: 800; color: var(--ink); }
+.cgd-grid{ margin: 0; display: flex; flex-direction: column; gap: .55rem; }
+.cgd-row{ display: grid; grid-template-columns: 38% 1fr; gap: .6rem; align-items: baseline; }
+.cgd-row dt{ margin: 0; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+html[dir="rtl"] .cgd-row dt{ letter-spacing: 0; }
+.cgd-row dd{ margin: 0; font-size: .88rem; color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.cgd-nocoords{
+  margin: .9rem 0 0; padding: .6rem .8rem; font-size: .82rem;
+  color: var(--accent); background: var(--accent-lt);
+  border-radius: var(--radius-xs); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* Location banner (live / registered / awaiting). */
+.cgd-banner{
+  margin: 0 0 .9rem; padding: .55rem .8rem; border-radius: var(--radius-xs);
+  font-size: .82rem; font-weight: 600; display: flex; align-items: center;
+  justify-content: space-between; gap: .6rem; flex-wrap: wrap;
+}
+.cgd-banner-live{ color: #059669; background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.3); }
+body:is(.role-company,.role-admin) .cgd-banner-live{ color: #34d399; }
+.cgd-banner-reg{ color: var(--ink-soft); background: var(--surface-3); border: 1px solid var(--line); }
+.cgd-banner-wait{ color: var(--accent); background: var(--accent-lt); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.cgd-live-badge{ display: inline-flex; align-items: center; gap: .4rem; font-weight: 800; letter-spacing: .02em; }
+.cgd-live-dot{ width: 9px; height: 9px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 0 currentColor; animation: cgdPulse 1.6s ease-out infinite; }
+.cgd-updated{ font-weight: 600; opacity: .85; font-variant-numeric: tabular-nums; }
+.cgd-idle{ color: var(--muted) !important; font-weight: 600; }
+@keyframes cgdPulse{
+  0%   { box-shadow: 0 0 0 0 rgba(52,211,153,.5); }
+  70%  { box-shadow: 0 0 0 7px rgba(52,211,153,0); }
+  100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+}
+
+/* Pulsing live map marker (Leaflet divIcon). */
+.car-live-icon{ position: relative; }
+.car-live-icon .clm-dot{
+  position: absolute; inset: 0; margin: auto; width: 12px; height: 12px;
+  border-radius: 50%; background: #10b981; border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.4);
+}
+.car-live-icon .clm-pulse{
+  position: absolute; inset: 0; margin: auto; width: 12px; height: 12px;
+  border-radius: 50%; background: rgba(16,185,129,.55);
+  animation: clmPulse 1.6s ease-out infinite;
+}
+@keyframes clmPulse{
+  0%   { transform: scale(1);   opacity: .7; }
+  100% { transform: scale(2.6); opacity: 0;  }
+}
+.map-live-tag{ color: #059669; font-weight: 800; }
+.map-reg-tag{ color: #64748b; font-weight: 700; }
+
+@media (max-width: 880px){
+  .cargps-layout{ grid-template-columns: 1fr; }
+  .cargps-map-wrap, .cargps-map{ min-height: 340px; }
+}
+
+/* =====================================================
+   SIGNED-IN PROFESSIONAL POLISH (admin + company)
+   A single cohesive design language so every tab — Dashboard,
+   Companies, Cars, Car GPS, Clients, Reservations, Report — reads
+   and behaves as one premium product.
+   ===================================================== */
+
+/* ---- Section header: gradient accent bar + crisp title ---- */
+body:is(.role-company,.role-admin) .card-head{
+  border-left: 0 !important; border-right: 0 !important;
+  padding-left: 1rem; position: relative;
+}
+html[dir="rtl"] body:is(.role-company,.role-admin) .card-head{
+  padding-left: 0; padding-right: 1rem;
+}
+body:is(.role-company,.role-admin) .card-head::before{
+  content: ""; position: absolute; inset-inline-start: 0; top: .12rem; bottom: .12rem;
+  width: 4px; border-radius: 4px;
+  background: linear-gradient(180deg, var(--primary), #a78bfa);
+}
+body:is(.role-company,.role-admin) .card-head h2{ font-size: 1.42rem; letter-spacing: -.015em; }
+
+/* ---- Cards: a touch more depth + lift on hover ---- */
+body:is(.role-company,.role-admin) .card{
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+/* ---- Tables: refined header, smooth scannable rows ---- */
+body:is(.role-company,.role-admin) .table-wrap{ box-shadow: var(--shadow-xs); }
+body:is(.role-company,.role-admin) thead th{
+  background: linear-gradient(180deg,
+              color-mix(in srgb, var(--surface-2) 90%, var(--primary) 10%),
+              var(--surface-2));
+  font-size: .69rem; letter-spacing: .07em; color: var(--ink-soft);
+  border-bottom: 1px solid var(--line);
+}
+body:is(.role-company,.role-admin) tbody tr{ transition: background .14s; }
+body:is(.role-company,.role-admin) tbody tr:hover{ background: var(--primary-lt); }
+/* Leading row-number column reads as quiet reference, not data. */
+body:is(.role-company,.role-admin) #tbl-companies tbody td:first-child,
+body:is(.role-company,.role-admin) #tbl-cars tbody td:first-child,
+body:is(.role-company,.role-admin) #tbl-clients tbody td:first-child{
+  color: var(--muted); font-weight: 600;
+}
+
+/* ---- Premium empty state ---- */
+body:is(.role-company,.role-admin) .empty-row td{
+  padding: 3rem 1rem; color: var(--muted); font-size: .95rem; letter-spacing: .01em;
+}
+
+/* ---- Reservation status badges → unify with the report status pills ---- */
+.reservation-status-badge{
+  display: inline-flex; align-items: center; gap: .4ch;
+  padding: .2rem .6rem; border-radius: 999px;
+  font-size: .73rem; font-weight: 700; white-space: nowrap; line-height: 1.5;
+  border: 1px solid transparent;
+}
+.reservation-status-badge::before{
+  content: ""; width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor; flex: 0 0 auto;
+}
+.reservation-status-badge.pending{  color: #d97706; background: rgba(245,158,11,.13); border-color: rgba(245,158,11,.3); }
+.reservation-status-badge.active{   color: #059669; background: rgba(16,185,129,.13); border-color: rgba(16,185,129,.3); }
+.reservation-status-badge.inactive{ color: #64748b; background: rgba(100,116,139,.13); border-color: rgba(100,116,139,.28); }
+body:is(.role-company,.role-admin) .reservation-status-badge.pending{  color: #fbbf24; }
+body:is(.role-company,.role-admin) .reservation-status-badge.active{   color: #34d399; }
+body:is(.role-company,.role-admin) .reservation-status-badge.inactive{ color: #94a3b8; }
+
+/* ---- Coordinates link in the Companies table → a tidy map chip ---- */
+body:is(.role-company,.role-admin) .company-coord-link{
+  display: inline-flex; align-items: center; gap: .35rem;
+  text-decoration: none; font-weight: 600;
+}
+body:is(.role-company,.role-admin) .company-coord-link code{
+  font-size: .76rem; color: var(--primary);
+  background: var(--primary-lt); padding: .15rem .5rem; border-radius: 6px;
+}
+body:is(.role-company,.role-admin) .company-coord-link:hover code{ background: var(--primary-glow); color: #fff; }
