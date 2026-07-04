@@ -1139,14 +1139,41 @@
         <input name="notes" placeholder="Optional notes…" data-i18n-placeholder="special.f.notes.ph">
       </div>
 
-      <button type="submit" class="btn btn-primary" data-i18n="special.action">Save record</button>
+      <button type="submit" class="btn btn-primary" id="special-submit" data-i18n="special.action">Save record</button>
+      <button type="button" class="btn btn-ghost-dark" id="special-cancel-edit" hidden data-i18n="action.cancel">Cancel</button>
     </form>
 
     <hr class="addcar-divider">
 
     <div class="card-head">
       <h3 data-i18n="special.list.title">Recorded companies</h3>
+      <p class="my-cars-hint" data-i18n="special.list.hint">Review the records below. You can edit each record up to twice, in case something was typed wrong.</p>
     </div>
+
+    <div class="report-toolbar">
+      <div class="field report-search-field">
+        <label for="filter-sr-company" data-i18n="filter.byCompany">Filter by company</label>
+        <select id="filter-sr-company" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field report-search-field">
+        <label for="filter-sr-car" data-i18n="filter.byCar">Filter by car</label>
+        <select id="filter-sr-car" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field report-date-field">
+        <label for="filter-sr-from" data-i18n="report.from">From</label>
+        <input type="date" id="filter-sr-from">
+      </div>
+      <div class="field report-date-field">
+        <label for="filter-sr-to" data-i18n="report.to">To</label>
+        <input type="date" id="filter-sr-to">
+      </div>
+      <button type="button" id="filter-sr-reset" class="btn btn-ghost-dark report-reset" data-i18n="report.reset">Reset filters</button>
+    </div>
+
     <div class="table-wrap">
       <table class="data-table" id="tbl-special">
         <thead>
@@ -1160,6 +1187,7 @@
             <th data-i18n="special.th.gps">GPS</th>
             <th data-i18n="special.th.from">From</th>
             <th data-i18n="special.th.to">To</th>
+            <th data-i18n="addClient.editsLeft">Edits left</th>
             <th aria-hidden="true"></th>
           </tr>
         </thead>
@@ -2518,8 +2546,8 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="js/i18n.js?v=40"></script>
+<script src="js/i18n.js?v=41"></script>
 <script src="js/searchselect.js?v=7"></script>
-<script src="js/app.js?v=47"></script>
+<script src="js/app.js?v=48"></script>
 </body>
 </html>

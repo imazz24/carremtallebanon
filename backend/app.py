@@ -2051,6 +2051,65 @@ def create_special_rental():
     return jsonify(_clean(row)), 201
 
 
+@app.put("/api/special-rentals/<int:rental_id>")
+def update_special_rental(rental_id):
+    u, err = _require_company_user()
+    if err:
+        return err
+    data = request.get_json(force=True) or {}
+    miss = _required(data, "company_name")
+    if miss:
+        return jsonify({"error": f"Missing: {miss}"}), 400
+
+    # Only the company that recorded it may edit it, and only twice (typo
+    # fixes); after that the record is locked.
+    rec = query(
+        "SELECT company_id, edit_count FROM special_company_rentals WHERE id = %s",
+        (rental_id,), one=True,
+    )
+    if not rec:
+        return jsonify({"error": "Not found"}), 404
+    if int(rec["company_id"]) != int(u["company_id"]):
+        return jsonify({"error": "Not authorized"}), 403
+    if int(rec.get("edit_count") or 0) >= 2:
+        return jsonify({"error": "This record has reached its edit limit (2)."}), 403
+
+    def _csv(value):
+        if isinstance(value, list):
+            return ",".join(str(v).strip() for v in value if str(v).strip())
+        return value
+
+    car_vin = _none_if_blank(data.get("car_vin"))
+    row = execute(
+        """UPDATE special_company_rentals
+              SET company_name = %s, owner_name = %s, location = %s,
+                  x = %s, y = %s, phones = %s, branches = %s,
+                  car_vin = %s, car_vins = %s,
+                  start_date = %s, end_date = %s, notes = %s,
+                  edit_count = edit_count + 1
+            WHERE id = %s AND company_id = %s
+        RETURNING *""",
+        (
+            data["company_name"],
+            _none_if_blank(data.get("owner_name")),
+            _none_if_blank(data.get("location")),
+            _none_if_blank(data.get("x")), _none_if_blank(data.get("y")),
+            _none_if_blank(_csv(data.get("phones"))),
+            _none_if_blank(_csv(data.get("branches"))),
+            car_vin, car_vin,
+            _none_if_blank(data.get("start_date")),
+            _none_if_blank(data.get("end_date")),
+            _none_if_blank(data.get("notes")),
+            rental_id, u["company_id"],
+        ),
+        returning=True,
+    )
+    if not row:
+        return jsonify({"error": "Not found"}), 404
+    _log_activity(u["company_id"], "update", "special_rental", data["company_name"])
+    return jsonify(_clean(row))
+
+
 @app.delete("/api/special-rentals/<int:rental_id>")
 def delete_special_rental(rental_id):
     existing = query(

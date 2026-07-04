@@ -32,6 +32,7 @@ const API = (() => {
     listSpecialRentals: () => fetch(url("/api/special-rentals"), { headers: authHeaders() }).then(json),
     listAdminSpecialRentals: () => fetch(url("/api/admin/special-rentals"), { headers: authHeaders() }).then(json),
     addSpecialRental:   (b) => fetch(url("/api/special-rentals"), { method:"POST", headers:{ "Content-Type":"application/json", ...authHeaders() }, body: JSON.stringify(b)}).then(json),
+    updSpecialRental:   (id, b) => fetch(url(`/api/special-rentals/${id}`), { method:"PUT", headers:{ "Content-Type":"application/json", ...authHeaders() }, body: JSON.stringify(b)}).then(json),
     delSpecialRental:   (id) => fetch(url(`/api/special-rentals/${id}`), { method:"DELETE", headers: authHeaders() }),
   };
 })();
@@ -6998,6 +6999,7 @@ function setupResponsiveTables(){
 const SpecialRentals = (() => {
   let _cars = [];      // the enterprise's own cars (VIN → full detail)
   let _records = [];   // saved special-company records
+  let _editId = null;  // id of the record being edited (null = add mode)
 
   const setStatus = (msg, kind) => {
     const el = $("#special-status");
@@ -7077,11 +7079,51 @@ const SpecialRentals = (() => {
     return (first || "").trim();
   }
 
+  // "Model — Plate" label used by the "Filter by car" dropdown.
+  function carFilterLabel(c){
+    if (!c || !c.model) return "";
+    return c.platenumber ? `${c.model} — ${c.platenumber}` : c.model;
+  }
+
+  // Fill the filter dropdowns from the currently-loaded records. Called on
+  // refresh only (not on every re-render) so the picked filter value survives.
+  function populateFilters(){
+    if (typeof populateFilterSelect !== "function") return;
+    const carByVin = {};
+    _cars.forEach(c => { carByVin[c.vin] = c; });
+    populateFilterSelect($("#filter-sr-company"), _records.map(r => r.company_name));
+    populateFilterSelect($("#filter-sr-car"),
+      _records.map(r => carFilterLabel(carByVin[recordVin(r)])));
+  }
+
+  // Apply the toolbar filters. Dates use the same overlap rule as the reports:
+  // From keeps rows still running on/after it, To keeps rows that started on/before it.
+  function getFiltered(){
+    const carByVin = {};
+    _cars.forEach(c => { carByVin[c.vin] = c; });
+    let rows = _records.slice();
+    const company = $("#filter-sr-company")?.value || "";
+    const car     = $("#filter-sr-car")?.value     || "";
+    const from    = ($("#filter-sr-from")?.value || "").trim();
+    const to      = ($("#filter-sr-to")?.value   || "").trim();
+    const d = (v) => v ? String(v).slice(0, 10) : "";
+    if (company) rows = rows.filter(r => r.company_name === company);
+    if (car)     rows = rows.filter(r => carFilterLabel(carByVin[recordVin(r)]) === car);
+    if (from)    rows = rows.filter(r => r.end_date   && d(r.end_date)   >= from);
+    if (to)      rows = rows.filter(r => r.start_date && d(r.start_date) <= to);
+    return rows;
+  }
+
   function renderRecords(){
     const tb = $("#special-rows");
     if (!tb) return;
     if (!_records.length){
-      tb.innerHTML = `<tr class="empty-row"><td colspan="10">${escape(t("special.empty"))}</td></tr>`;
+      tb.innerHTML = `<tr class="empty-row"><td colspan="11">${escape(t("special.empty"))}</td></tr>`;
+      return;
+    }
+    const rows = getFiltered();
+    if (!rows.length){
+      tb.innerHTML = `<tr class="empty-row"><td colspan="11">${escape(t("special.noMatch"))}</td></tr>`;
       return;
     }
     const carByVin = {};
@@ -7091,7 +7133,7 @@ const SpecialRentals = (() => {
     const ltr = (v) => `<span class="ltr">${escape(v)}</span>`;
     const day = (d) => d ? ltr(String(d).slice(0, 10)) : dash;
 
-    tb.innerHTML = _records.map((r, i) => {
+    tb.innerHTML = rows.map((r) => {
       const phones = r.phones ? splitCsv(r.phones) : [r.phone, r.extra_phone].filter(Boolean);
       const phoneHtml = phones.length
         ? phones.map(p => `<a href="tel:${escape(p)}" class="ltr">${escape(p)}</a>`).join(" · ")
@@ -7100,6 +7142,11 @@ const SpecialRentals = (() => {
       const gps = c.has_gps
         ? `<span class="badge yes">${escape(t("yes"))}</span>`
         : `<span class="badge no">${escape(t("no"))}</span>`;
+      // Company users may correct a record at most twice; then it's locked.
+      const left = Math.max(0, 2 - Number(r.edit_count || 0));
+      const action = left > 0
+        ? `<button type="button" class="row-btn special-edit" data-id="${r.id}">✎ ${escape(t("action.edit"))}</button>`
+        : `<span class="badge no">${escape(t("addClient.noEditsLeft"))}</span>`;
 
       return `<tr>
         <td data-col="company"><strong>${escape(r.company_name)}</strong></td>
@@ -7111,10 +7158,8 @@ const SpecialRentals = (() => {
         <td data-col="gps">${gps}</td>
         <td data-col="from">${day(r.start_date)}</td>
         <td data-col="to">${day(r.end_date)}</td>
-        <td data-col="view">
-          <button type="button" class="row-btn special-view" data-idx="${i}"
-                  title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">👁</button>
-        </td>
+        <td data-col="edits"><span class="badge ${left > 0 ? "yes" : "no"}">${left}</span></td>
+        <td data-col="action" class="my-car-action">${action}</td>
       </tr>`;
     }).join("");
     if (typeof applyTranslations === "function") applyTranslations();
@@ -7132,6 +7177,44 @@ const SpecialRentals = (() => {
     if (ms){ ms.classList.add("empty"); ms.classList.remove("filled"); ms.textContent = t("companies.maploc.empty"); }
   }
 
+  // ---- Edit an existing record (typo correction, max 2×) ----
+  function enterEditMode(rec){
+    const form = $("#form-special-rental");
+    if (!form) return;
+    _editId = rec.id;
+    const setVal = (name, val) => { const el = form.querySelector(`[name="${name}"]`); if (el) el.value = val || ""; };
+    setVal("company_name", rec.company_name);
+    setVal("owner_name",   rec.owner_name);
+    setVal("location",     rec.location);
+    setVal("notes",        rec.notes);
+    setVal("start_date",   (rec.start_date || "").slice(0, 10));
+    setVal("end_date",     (rec.end_date   || "").slice(0, 10));
+    PhoneList.setPhones("#special-phones", rec.phones || "");
+    setBranches(rec.branches || "");
+    populateCarSelect(recordVin(rec));
+    $("#special-x").value = rec.x != null ? rec.x : "";
+    $("#special-y").value = rec.y != null ? rec.y : "";
+    const ms = $("#special-map-loc-status");
+    if (rec.x != null && rec.x !== "" && rec.y != null && rec.y !== ""){
+      setMapStatusOn("#special-map-loc-status", rec.y, rec.x);   // y = lat, x = lng
+    } else if (ms){
+      ms.classList.add("empty"); ms.classList.remove("filled"); ms.textContent = t("companies.maploc.empty");
+    }
+    const btn = $("#special-submit");
+    if (btn){ btn.removeAttribute("data-i18n"); btn.textContent = t("special.update"); }
+    const cancel = $("#special-cancel-edit"); if (cancel) cancel.hidden = false;
+    setStatus(t("special.editingNow").replace("{company}", rec.company_name || ""));
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function exitEditMode(){
+    _editId = null;
+    const btn = $("#special-submit");
+    if (btn){ btn.setAttribute("data-i18n", "special.action"); btn.textContent = t("special.action"); }
+    const cancel = $("#special-cancel-edit"); if (cancel) cancel.hidden = true;
+    setStatus("");
+  }
+
   async function refresh(){
     const u = (typeof AUTH !== "undefined") ? AUTH.user() : null;
     if (!u || u.role !== "company" || !u.company_id) return;
@@ -7139,6 +7222,7 @@ const SpecialRentals = (() => {
     try { _records = await API.listSpecialRentals(); } catch (e){ _records = []; }
     // Refresh the car dropdown with the current car list, keeping the pick.
     populateCarSelect(getCarVin());
+    populateFilters();
     renderRecords();
   }
 
@@ -7169,8 +7253,14 @@ const SpecialRentals = (() => {
       end_date:   (fd.get("end_date") || "").toString().trim(),
     };
     try {
-      await API.addSpecialRental(body);
-      toast(t("special.saved"), "success");
+      if (_editId != null){
+        await API.updSpecialRental(_editId, body);
+        toast(t("special.updated"), "success");
+      } else {
+        await API.addSpecialRental(body);
+        toast(t("special.saved"), "success");
+      }
+      exitEditMode();
       resetForm();
       await refresh();
     } catch (err){
@@ -7212,13 +7302,29 @@ const SpecialRentals = (() => {
       MapPicker.openPick({ xSel: "#special-x", ySel: "#special-y", statusSel: "#special-map-loc-status" });
     });
 
-    // View a recorded rental (eye icon) → detail modal with car photos/videos.
-    // Records are view-only here: no delete.
+    // Edit a recorded rental (✎) → repopulate the form in edit mode. Company
+    // users may correct a record at most twice; the backend enforces the limit.
     $("#special-rows")?.addEventListener("click", (e) => {
-      const btn = e.target.closest(".special-view");
+      const btn = e.target.closest(".special-edit");
       if (!btn) return;
-      const rec = _records[Number(btn.dataset.idx)];
-      if (rec) SpecialDetail.open(rec, _cars);
+      const rec = _records.find(x => String(x.id) === btn.dataset.id);
+      if (rec) enterEditMode(rec);
+    });
+
+    // Cancel an in-progress edit → back to a blank "add" form.
+    $("#special-cancel-edit")?.addEventListener("click", () => { exitEditMode(); resetForm(); });
+
+    // Filters: any change re-renders the already-loaded records (no re-fetch).
+    ["#filter-sr-company", "#filter-sr-car", "#filter-sr-from", "#filter-sr-to"].forEach(sel => {
+      $(sel)?.addEventListener("change", renderRecords);
+    });
+    $("#filter-sr-reset")?.addEventListener("click", () => {
+      ["#filter-sr-company", "#filter-sr-car"].forEach(sel => {
+        const el = $(sel); if (el){ el.value = ""; el._ss?.sync?.(); }
+      });
+      const f = $("#filter-sr-from"); if (f) f.value = "";
+      const tt = $("#filter-sr-to");  if (tt) tt.value = "";
+      renderRecords();
     });
   }
 
