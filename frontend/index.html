@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="css/style.css?v=27" />
+  <link rel="stylesheet" href="css/style.css?v=52" />
 </head>
 <body>
 
@@ -141,6 +141,11 @@
         <span id="user-profile-fallback" class="user-profile-fallback"></span>
         <span id="user-profile-name" class="user-profile-name"></span>
       </div>
+      <button id="btn-theme-toggle" class="theme-toggle" type="button"
+              title="Toggle light / dark" aria-label="Toggle light / dark">
+        <span class="theme-toggle-icon">☀️</span>
+        <span class="theme-toggle-label" data-i18n="theme.light">Light</span>
+      </button>
       <div class="lang-switch">
         <button id="btn-en" class="lang-btn active">EN</button>
         <button id="btn-ar" class="lang-btn">عربي</button>
@@ -256,8 +261,260 @@
 
 <main class="container main">
 
+  <!-- ============== ENTERPRISE HOME (card-based navigation) ============== -->
+  <section id="company-home" class="company-only-card ent-home">
+    <div class="ent-home-hero">
+      <div class="ent-home-orb ent-home-orb-1"></div>
+      <div class="ent-home-orb ent-home-orb-2"></div>
+      <div class="ent-home-hero-content">
+        <h1 class="ent-home-title" id="ent-home-title" data-i18n="ent.home.title">Car Rental System</h1>
+        <p class="ent-home-sub" data-i18n="ent.home.subtitle">Everything you need to run your fleet — pick a section to get started.</p>
+      </div>
+    </div>
+
+    <div class="ent-card-grid">
+      <button type="button" class="ent-card ent-card-cars" data-cgo="company-cars">
+        <span class="ent-card-icon">🚗</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="ent.card.cars.title">Add Cars</span>
+          <span class="ent-card-desc" data-i18n="ent.card.cars.desc">Register vehicles into your fleet — one by one or via CSV.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-clients" data-cgo="company-clients">
+        <span class="ent-card-icon">👥</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="ent.card.clients.title">Add Clients</span>
+          <span class="ent-card-desc" data-i18n="ent.card.clients.desc">Add customers with photos, documents and contact details.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-reservation" data-cgo="reservations">
+        <span class="ent-card-icon">📅</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="ent.card.reservation.title">Add Reservation</span>
+          <span class="ent-card-desc" data-i18n="ent.card.reservation.desc">Book a car for a client and manage reservations.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-branch" data-cgo="company-info">
+        <span class="ent-card-icon">🏢</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="ent.card.branch.title">Branches</span>
+          <span class="ent-card-desc" data-i18n="ent.card.branch.desc">Manage your enterprise details and branch offices.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-special" data-cgo="company-special">
+        <span class="ent-card-icon">🏬</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="ent.card.special.title">Cars Rented to Companies</span>
+          <span class="ent-card-desc" data-i18n="ent.card.special.desc">Record a company you rent your cars to and track which cars they hold.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-report" data-cgo="report">
+        <span class="ent-card-icon">📋</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="ent.card.report.title">Cars Rented by Clients</span>
+          <span class="ent-card-desc" data-i18n="ent.card.report.desc">Create client rentals and see your recent rental report.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-key" data-cgo="company-api">
+        <span class="ent-card-icon">🔑</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="ent.card.key.title">Generate Secret Key</span>
+          <span class="ent-card-desc" data-i18n="ent.card.key.desc">Create an API key to connect your own software.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <a class="ent-card ent-card-docs" href="/api/docs" target="_blank" rel="noopener">
+        <span class="ent-card-icon">📊</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="ent.card.docs.title">API Docs (Swagger)</span>
+          <span class="ent-card-desc" data-i18n="ent.card.docs.desc">Open the interactive technical API reference.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">↗</span>
+      </a>
+    </div>
+  </section>
+
+  <!-- ============== ADMIN HOME (card-based navigation) ============== -->
+  <section id="admin-home" class="admin-only-show ent-home">
+    <div class="ent-home-hero">
+      <div class="ent-home-orb ent-home-orb-1"></div>
+      <div class="ent-home-orb ent-home-orb-2"></div>
+      <div class="ent-home-hero-content">
+        <span class="ent-home-eyebrow" data-i18n="admin.home.eyebrow">Admin console</span>
+        <h1 class="ent-home-title" data-i18n="admin.home.title">Car Rental System</h1>
+        <p class="ent-home-sub" data-i18n="admin.home.subtitle">Oversee companies, fleet and clients — pick a section to get started.</p>
+      </div>
+    </div>
+
+    <div class="ent-card-grid">
+      <button type="button" class="ent-card ent-card-dashboard" data-ago="dashboard">
+        <span class="ent-card-icon">📊</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="nav.dashboard">Dashboard</span>
+          <span class="ent-card-desc" data-i18n="admin.card.dashboard.desc">Live stats, activity feed and inactive-company alerts.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-companies" data-ago="companies">
+        <span class="ent-card-icon">🏢</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="nav.companies">Companies</span>
+          <span class="ent-card-desc" data-i18n="admin.card.companies.desc">Browse every company and its branches.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-cars" data-ago="cars">
+        <span class="ent-card-icon">🚗</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="nav.cars">Cars</span>
+          <span class="ent-card-desc" data-i18n="admin.card.cars.desc">View the whole fleet across all companies.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-gps" data-ago="car-gps">
+        <span class="ent-card-icon">🛰️</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="nav.carGps">Car GPS</span>
+          <span class="ent-card-desc" data-i18n="admin.card.gps.desc">Locate any car on the live map.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-clients" data-ago="clients">
+        <span class="ent-card-icon">👥</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="nav.clients">Clients</span>
+          <span class="ent-card-desc" data-i18n="admin.card.clients.desc">All clients and the companies they rent from.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-reservation" data-ago="admin-reservations">
+        <span class="ent-card-icon">📅</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="nav.reservations">Reservations</span>
+          <span class="ent-card-desc" data-i18n="admin.card.reservations.desc">Every reservation across all companies.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-report" data-ago="report">
+        <span class="ent-card-icon">📋</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="nav.report">Report</span>
+          <span class="ent-card-desc" data-i18n="admin.card.report.desc">Rental report with full search and filters.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-special" data-ago="admin-special">
+        <span class="ent-card-icon">🤝</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="admin.card.special">Rented to Companies</span>
+          <span class="ent-card-desc" data-i18n="admin.card.special.desc">Cars companies rent out to other companies (B2B).</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-register" data-ago="register-modal">
+        <span class="ent-card-icon">➕</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="nav.register">Register</span>
+          <span class="ent-card-desc" data-i18n="admin.card.register.desc">Create a new company account.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <button type="button" class="ent-card ent-card-support" data-ago="support">
+        <span class="ent-card-icon">💬</span>
+        <span class="ent-card-body">
+          <span class="ent-card-title" data-i18n="support.title">Support</span>
+          <span class="ent-card-desc" data-i18n="admin.card.support.desc">Get help and contact information.</span>
+        </span>
+        <span class="ent-card-arrow" aria-hidden="true">→</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- ====== ADMIN: CARS RENTED BY COMPANIES (B2B report) ====== -->
+  <section id="admin-special" class="card admin-only-show" hidden>
+    <button type="button" class="ent-back admin-only-show" data-ahome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
+    <div class="card-head">
+      <h2 data-i18n="adminSpecial.title">Cars Rented by Companies</h2>
+      <p  data-i18n="adminSpecial.subtitle">Every B2B rental recorded by companies — the cars they rent out to other businesses.</p>
+    </div>
+
+    <div class="report-toolbar">
+      <div class="field report-search-field">
+        <label for="filter-special-company" data-i18n="filter.byCompany">Filter by company</label>
+        <select id="filter-special-company" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field report-search-field">
+        <label for="filter-special-car" data-i18n="filter.byCar">Filter by car</label>
+        <select id="filter-special-car" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field report-date-field">
+        <label for="special-from" data-i18n="report.from">From</label>
+        <input type="date" id="special-from">
+      </div>
+      <div class="field report-date-field">
+        <label for="special-to" data-i18n="report.to">To</label>
+        <input type="date" id="special-to">
+      </div>
+      <button type="button" id="special-reset" class="btn btn-ghost-dark report-reset"
+              data-i18n="report.reset">Reset filters</button>
+    </div>
+
+    <div id="pager-top-admin-special" class="pager-wrap" hidden></div>
+    <div class="table-wrap">
+      <table class="data-table" id="tbl-admin-special">
+        <thead>
+          <tr>
+            <th data-i18n="special.th.company">Company</th>
+            <th data-i18n="special.th.owner">Owner</th>
+            <th data-i18n="special.th.phone">Phone</th>
+            <th data-i18n="special.th.model">Model</th>
+            <th data-i18n="special.th.color">Color</th>
+            <th data-i18n="special.th.plate">Plate</th>
+            <th data-i18n="special.th.from">From</th>
+            <th data-i18n="special.th.to">To</th>
+            <th data-i18n="special.th.gps">GPS</th>
+            <th aria-hidden="true"></th>
+          </tr>
+        </thead>
+        <tbody id="admin-special-rows"></tbody>
+      </table>
+    </div>
+    <div id="pager-admin-special" class="pager-wrap" hidden></div>
+  </section>
+
   <!-- ============== ADMIN DASHBOARD ============== -->
   <section id="stats-dashboard" class="admin-only-show dash" hidden>
+    <button type="button" class="ent-back admin-only-show" data-ahome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
 
     <!-- Row 1: hero welcome banner -->
     <div class="dash-hero">
@@ -367,8 +624,11 @@
 
   <!-- ============== COMPANY INFO (company-user tab #1) ============== -->
   <section id="company-info" class="card company-only-card" hidden>
+    <button type="button" class="ent-back" data-chome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
     <div class="card-head">
-      <h2 data-i18n="companyInfo.title">My Company</h2>
+      <h2 data-i18n="companyInfo.title">My Enterprise</h2>
       <p  data-i18n="companyInfo.subtitle">
         Manage your company's details and branches. Your company name comes from your username and can't be changed here.
       </p>
@@ -474,6 +734,9 @@
 
   <!-- ============== ADD CAR (company-user tab #2) ============== -->
   <section id="company-cars" class="card company-only-card" hidden>
+    <button type="button" class="ent-back" data-chome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
     <div class="card-head">
       <h2 data-i18n="addCar.title">Add a Car</h2>
       <p  data-i18n="addCar.subtitle">Each car you add belongs to your company.</p>
@@ -484,13 +747,25 @@
     <form id="form-add-car" class="grid-form" novalidate>
       <div class="field" style="grid-column: 1 / -1;">
         <label data-i18n="cars.f.vin">VIN</label>
-        <!-- Full VIN input (default mode) -->
-        <div class="vin-input-wrap" id="vin-full-mode">
-          <input name="vin" minlength="17" maxlength="17" required
-                 list="known-vins-list" autocomplete="off"
+        <!-- Picker mode (default): searchable dropdown of known VINs. Type the
+             first 3+ letters of a model to filter. Picking one locks the VIN
+             prefix and lets you edit just the serial number below. -->
+        <div class="vin-picker-wrap" id="vin-picker-mode">
+          <select id="add-car-vin-select" data-ss-prefix="3">
+            <option value="" disabled selected hidden data-i18n="addCar.vin.pick">— Search &amp; pick a VIN —</option>
+          </select>
+          <button type="button" id="vin-custom-btn" class="vin-custom-btn"
+                  data-i18n="addCar.vin.custom">Enter a VIN not listed</button>
+        </div>
+        <!-- Custom full-VIN input (for VINs not in the list) -->
+        <div class="vin-input-wrap" id="vin-full-mode" hidden>
+          <input name="vin" minlength="17" maxlength="17"
+                 autocomplete="off"
                  data-i18n-placeholder="addCar.vin.placeholder"
                  placeholder="17-character VIN (e.g. 1HGCM82633A004352)">
           <span id="add-car-vin-hint" class="vin-hint" hidden></span>
+          <button type="button" id="vin-back-list-btn" class="vin-custom-btn"
+                  data-i18n="addCar.vin.backToList">Back to list</button>
         </div>
         <!-- Split mode: prefix (locked) + serial (editable) -->
         <div class="vin-split-wrap" id="vin-split-mode" hidden>
@@ -499,7 +774,13 @@
                  maxlength="6" autocomplete="off"
                  data-i18n-placeholder="addCar.serial.placeholder"
                  placeholder="Serial (6 digits)">
-          <button type="button" id="vin-edit-full-btn" class="vin-edit-full-btn" title="Edit full VIN">✎</button>
+          <button type="button" id="vin-edit-full-btn" class="vin-edit-full-btn"
+                  data-i18n-title="addCar.vin.change" title="Change VIN">✎</button>
+        </div>
+        <!-- Edit mode: the VIN is the car's identity and cannot change. -->
+        <div class="vin-locked-wrap" id="vin-locked-mode" hidden>
+          <span class="vin-prefix-badge vin-locked-badge" id="vin-locked-badge"></span>
+          <span class="vin-locked-note" data-i18n="addCar.vin.locked">VIN can't be changed</span>
         </div>
         <datalist id="known-vins-list"></datalist>
         <div class="field-error" data-error-for="vin"></div>
@@ -552,9 +833,34 @@
         </label>
       </div>
 
-      <button type="submit" class="btn btn-primary" data-i18n="addCar.action">Save car</button>
+      <button type="submit" class="btn btn-primary" id="add-car-submit" data-i18n="addCar.action">Save car</button>
+      <button type="button" class="btn btn-ghost-dark" id="add-car-cancel-edit" hidden data-i18n="action.cancel">Cancel</button>
       <button type="reset"  class="btn btn-ghost-dark" data-i18n="action.clear">Clear</button>
     </form>
+
+    <div class="my-cars-block">
+      <div class="card-head">
+        <h3 data-i18n="addCar.myCars">Cars you added</h3>
+        <p class="my-cars-hint" data-i18n="addCar.myCars.hint">Review the info below. You can edit each car up to twice, in case something was typed wrong. The VIN can't be changed.</p>
+      </div>
+      <div class="table-wrap">
+        <table id="tbl-my-cars" class="data-table">
+          <thead>
+            <tr>
+              <th data-i18n="cars.f.vin">VIN</th>
+              <th data-i18n="cars.f.type">Type</th>
+              <th data-i18n="cars.f.model">Model</th>
+              <th data-i18n="cars.f.color">Color</th>
+              <th data-i18n="cars.f.plate">Plate number</th>
+              <th data-i18n="cars.f.gps">GPS</th>
+              <th data-i18n="addClient.editsLeft">Edits left</th>
+              <th aria-hidden="true"></th>
+            </tr>
+          </thead>
+          <tbody id="my-cars-rows"></tbody>
+        </table>
+      </div>
+    </div>
 
     <hr class="addcar-divider">
 
@@ -661,6 +967,9 @@
        from) the API using their own software (curl / Postman / a cron job).
        Gated server-side: no key until the company has added some data. -->
   <section id="company-api" class="card company-only-card" hidden>
+    <button type="button" class="ent-back" data-chome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
     <div class="card-head">
       <h2>API access</h2>
       <p>
@@ -757,8 +1066,113 @@
     </div>
   </section>
 
+  <!-- ============== CARS RENTED TO SPECIAL COMPANIES (B2B report) ============== -->
+  <section id="company-special" class="card company-only-card" hidden>
+    <button type="button" class="ent-back" data-chome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
+    <div class="card-head">
+      <h2 data-i18n="special.title">Cars Rented to Companies</h2>
+      <p data-i18n="special.subtitle">Record a company you rent your own cars to — its details, branches and phones, and which of your cars it currently holds.</p>
+    </div>
+
+    <div id="special-status" class="company-info-status" hidden></div>
+
+    <form id="form-special-rental" class="grid-form" novalidate>
+      <div class="field">
+        <label data-i18n="special.f.company">Company name</label>
+        <input name="company_name" required placeholder="e.g. Cedars Transport" data-i18n-placeholder="special.f.company.ph">
+        <div class="field-error" data-error-for="sr_company_name"></div>
+      </div>
+      <div class="field">
+        <label data-i18n="special.f.owner">Company owner name</label>
+        <input name="owner_name" placeholder="e.g. Karim Haddad" data-i18n-placeholder="special.f.owner.ph">
+      </div>
+      <div class="field">
+        <label data-i18n="special.f.address">Company address</label>
+        <input name="location" placeholder="Beirut, Tripoli, …" data-i18n-placeholder="special.f.address.ph">
+      </div>
+
+      <div class="field phones-field">
+        <label data-i18n="special.f.phones">Phone numbers</label>
+        <div id="special-phones" class="phone-list"></div>
+        <button type="button" id="special-add-phone" class="btn btn-ghost-dark phone-add-btn" data-i18n="special.addPhone">+ Add phone</button>
+      </div>
+
+      <div class="field">
+        <label data-i18n="special.f.branches">Branches</label>
+        <div id="special-branches" class="special-repeat-list"></div>
+        <button type="button" id="special-add-branch" class="btn btn-ghost-dark phone-add-btn" data-i18n="special.addBranch">+ Add branch</button>
+      </div>
+
+      <input type="hidden" name="x" id="special-x">
+      <input type="hidden" name="y" id="special-y">
+      <div class="field map-status-field">
+        <label data-i18n="special.f.location">Location (map)</label>
+        <div id="special-map-loc-status" class="map-loc-status empty" data-i18n="companies.maploc.empty">
+          No location selected — click "Pick on map".
+        </div>
+      </div>
+      <button type="button" id="btn-pick-special-map" class="btn btn-ghost-dark" data-i18n="companies.pick">
+        Pick on map
+      </button>
+
+      <div class="field">
+        <label data-i18n="special.f.car">Car</label>
+        <select name="car_vin" id="special-car-select" data-ss-prefix="3" required>
+          <option value="" disabled selected hidden data-i18n="special.car.ph">Select a car…</option>
+        </select>
+        <p class="special-car-empty" id="special-no-cars" hidden data-i18n="special.noCars">You have no cars yet — add cars first.</p>
+      </div>
+
+      <div class="field">
+        <label data-i18n="special.f.start">From date</label>
+        <input type="date" name="start_date" id="special-start">
+      </div>
+      <div class="field">
+        <label data-i18n="special.f.end">End date</label>
+        <input type="date" name="end_date" id="special-end">
+      </div>
+
+      <div class="field" style="grid-column: 1 / -1;">
+        <label data-i18n="special.f.notes">Notes</label>
+        <input name="notes" placeholder="Optional notes…" data-i18n-placeholder="special.f.notes.ph">
+      </div>
+
+      <button type="submit" class="btn btn-primary" data-i18n="special.action">Save record</button>
+    </form>
+
+    <hr class="addcar-divider">
+
+    <div class="card-head">
+      <h3 data-i18n="special.list.title">Recorded companies</h3>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table" id="tbl-special">
+        <thead>
+          <tr>
+            <th data-i18n="special.th.company">Company</th>
+            <th data-i18n="special.th.owner">Owner</th>
+            <th data-i18n="special.th.phone">Phone</th>
+            <th data-i18n="special.th.model">Model</th>
+            <th data-i18n="special.th.color">Color</th>
+            <th data-i18n="special.th.plate">Plate</th>
+            <th data-i18n="special.th.gps">GPS</th>
+            <th data-i18n="special.th.from">From</th>
+            <th data-i18n="special.th.to">To</th>
+            <th aria-hidden="true"></th>
+          </tr>
+        </thead>
+        <tbody id="special-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
   <!-- ============== ADD CLIENT (company-user tab #3) ============== -->
   <section id="company-clients" class="card company-only-card" hidden>
+    <button type="button" class="ent-back" data-chome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
     <div class="card-head">
       <h2 data-i18n="addClient.title">Add a Client</h2>
       <p  data-i18n="addClient.subtitle">Each client you add becomes available to rent cars from any company.</p>
@@ -869,13 +1283,40 @@
         <div class="field-error" data-error-for="photo"></div>
       </div>
 
-      <button type="submit" class="btn btn-primary" data-i18n="addClient.action">Save client</button>
+      <button type="submit" class="btn btn-primary" id="add-client-submit" data-i18n="addClient.action">Save client</button>
+      <button type="button" class="btn btn-ghost-dark" id="add-client-cancel-edit" hidden data-i18n="action.cancel">Cancel</button>
       <button type="reset"  class="btn btn-ghost-dark" data-i18n="action.clear">Clear</button>
     </form>
+
+    <div class="my-clients-block">
+      <div class="card-head">
+        <h3 data-i18n="addClient.myClients">Clients you added</h3>
+        <p class="my-clients-hint" data-i18n="addClient.myClients.hint">Review the info below. You can edit each client up to twice, in case something was typed wrong.</p>
+      </div>
+      <div class="table-wrap">
+        <table id="tbl-my-clients" class="data-table">
+          <thead>
+            <tr>
+              <th data-i18n="clients.f.name">Name</th>
+              <th data-i18n="clients.f.pid">Person ID</th>
+              <th data-i18n="addClient.nationality">Nationality</th>
+              <th data-i18n="clients.f.phone">Phone</th>
+              <th data-i18n="clients.f.lic">License ID</th>
+              <th data-i18n="addClient.editsLeft">Edits left</th>
+              <th aria-hidden="true"></th>
+            </tr>
+          </thead>
+          <tbody id="my-clients-rows"></tbody>
+        </table>
+      </div>
+    </div>
   </section>
 
   <!-- ============== COMPANIES ============== -->
   <section id="companies" class="card">
+    <button type="button" class="ent-back admin-only-show" data-ahome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
     <div class="card-head">
       <h2 data-i18n="companies.title">Companies</h2>
       <p  data-i18n="companies.subtitle">Registered rental companies and their fleets.</p>
@@ -969,6 +1410,9 @@
 
   <!-- ============== CARS ============== -->
   <section id="cars" class="card">
+    <button type="button" class="ent-back admin-only-show" data-ahome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
     <div class="card-head">
       <h2 data-i18n="cars.title">Cars</h2>
       <p  data-i18n="cars.subtitle">Each car belongs to one company (linked by VIN).</p>
@@ -1017,8 +1461,8 @@
         </select>
       </div>
       <div class="field table-search-field">
-        <label for="filter-cars-vin" data-i18n="filter.byVin">Filter by VIN</label>
-        <select id="filter-cars-vin" data-ss-prefix="3" disabled>
+        <label for="filter-cars-vehicle" data-i18n="filter.byCar">Filter by car</label>
+        <select id="filter-cars-vehicle" data-ss-prefix="3" disabled>
           <option value="" disabled selected hidden data-i18n="filter.vinHint">Pick a company first…</option>
         </select>
       </div>
@@ -1029,7 +1473,7 @@
 
     <div id="pager-top-cars" class="pager-wrap" hidden></div>
     <div class="table-wrap">
-      <table id="tbl-cars">
+      <table id="tbl-cars" class="data-table">
         <thead>
           <tr>
             <th>#</th>
@@ -1051,22 +1495,33 @@
 
   <!-- ============== CAR GPS / MAP (admin) ============== -->
   <section id="car-gps" class="card admin-only-show" hidden>
+    <button type="button" class="ent-back admin-only-show" data-ahome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
     <div class="card-head">
       <h2 data-i18n="carGps.title">Car GPS &amp; Map</h2>
       <p data-i18n="carGps.subtitle">Pick a car to locate it on the map and review its full details.</p>
     </div>
 
     <div class="cargps-toolbar">
+      <div class="field cargps-filter-field">
+        <label for="cargps-filter-model" data-i18n="carGps.byModel">Filter by model</label>
+        <select id="cargps-filter-model" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
+      <div class="field cargps-filter-field">
+        <label for="cargps-filter-plate" data-i18n="carGps.byPlate">Filter by plate</label>
+        <select id="cargps-filter-plate" data-ss-prefix="3">
+          <option value="" disabled selected hidden data-i18n="filter.placeholder">— All —</option>
+        </select>
+      </div>
       <div class="field cargps-select-field">
         <label for="cargps-car" data-i18n="carGps.select">Select a car</label>
         <select id="cargps-car" data-ss-prefix="2">
           <option value="" disabled selected hidden data-i18n="carGps.placeholder">— Choose a car —</option>
         </select>
       </div>
-      <label class="cargps-gpsonly">
-        <input type="checkbox" id="cargps-gpsonly">
-        <span data-i18n="carGps.gpsOnly">GPS-equipped only</span>
-      </label>
     </div>
 
     <div class="cargps-layout">
@@ -1083,6 +1538,9 @@
 
   <!-- ============== CLIENTS ============== -->
   <section id="clients" class="card">
+    <button type="button" class="ent-back admin-only-show" data-ahome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
     <div class="card-head">
       <h2 data-i18n="clients.title">Clients</h2>
       <p  data-i18n="clients.subtitle">Personal and license information.</p>
@@ -1122,7 +1580,7 @@
 
     <div id="pager-top-clients" class="pager-wrap" hidden></div>
     <div class="table-wrap">
-      <table id="tbl-clients">
+      <table id="tbl-clients" class="data-table">
         <thead>
           <tr>
             <th>#</th>
@@ -1130,13 +1588,11 @@
             <th data-i18n="clients.f.pid">Person ID</th>
             <th data-i18n="clients.f.firstname">First name</th>
             <th data-i18n="clients.f.lastname">Last name</th>
-            <th data-i18n="clients.f.father">Father</th>
-            <th data-i18n="clients.f.mother">Mother</th>
             <th data-i18n="addClient.nationality">Nationality</th>
             <th data-i18n="clients.f.phone">Phone</th>
             <th data-i18n="clients.f.lic">License ID</th>
             <th data-i18n="clients.f.licend">License end</th>
-            <th data-i18n="actions">Actions</th>
+            <th aria-label="Details"></th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -1269,6 +1725,12 @@
 
   <!-- ============== REPORT ============== -->
   <section id="report" class="card">
+    <button type="button" class="ent-back admin-only-show" data-ahome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
+    <button type="button" class="ent-back company-only-show" data-chome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
     <!-- Company-only header: branding + contact, sourced from the
          logged-in company so the printed report carries its identity. -->
     <header id="report-company-head" class="report-company-head company-only-show">
@@ -1420,17 +1882,37 @@
     </div>
 
     <div id="pager-top-report" class="pager-wrap" hidden></div>
-    <div class="table-wrap report-grid">
-      <table id="tbl-report" class="grouped-table">
+    <div class="table-wrap admin-only-show">
+      <table id="tbl-report" class="data-table">
+        <thead>
+          <tr>
+            <th data-i18n="report.company">Company</th>
+            <th data-i18n="report.vehicle">Vehicle</th>
+            <th data-i18n="report.client">Client</th>
+            <th data-i18n="report.period">Rental period</th>
+            <th data-i18n="report.gps">GPS</th>
+            <th data-i18n="report.status">Status</th>
+            <th data-i18n="report.details">Details</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <!-- Company view: a compact at-a-glance rental list. The 👁 button opens
+         the same detail modal (photos, video, extra drivers) as admin. -->
+    <div class="table-wrap company-only-show">
+      <table id="tbl-report-co" class="data-table">
         <thead>
           <tr>
             <th data-i18n="report.client">Client</th>
-            <th data-i18n="report.contact">Contact &amp; ID</th>
-            <th data-i18n="report.company">Company</th>
+            <th data-i18n="report.phone">Phone</th>
             <th data-i18n="report.vehicle">Vehicle</th>
-            <th data-i18n="report.period">Rental period</th>
-            <th data-i18n="report.status">Status</th>
-            <th data-i18n="actions">Actions</th>
+            <th data-i18n="cars.f.color">Color</th>
+            <th data-i18n="report.plate">Plate</th>
+            <th data-i18n="report.gps">GPS</th>
+            <th data-i18n="report.from">From</th>
+            <th data-i18n="report.to">To</th>
+            <th data-i18n="report.details">Details</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -1441,6 +1923,9 @@
 
   <!-- ============== RESERVATIONS (admin view) ============== -->
   <section id="admin-reservations" class="card admin-only-show" hidden>
+    <button type="button" class="ent-back admin-only-show" data-ahome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
     <div class="card-head">
       <h2 data-i18n="reservations.title">Reservations</h2>
       <p data-i18n="reservations.adminSubtitle">All reservations across companies.</p>
@@ -1494,15 +1979,22 @@
 
     <div id="pager-top-admin-reservations" class="pager-wrap" hidden></div>
     <div class="table-wrap">
-      <table id="tbl-admin-reservations" class="grouped-table">
+      <table id="tbl-admin-reservations" class="data-table">
         <thead>
           <tr>
+            <th>#</th>
             <th data-i18n="report.company">Company</th>
+            <th data-i18n="report.cphone">Company phone</th>
             <th data-i18n="report.client">Client</th>
-            <th data-i18n="report.vehicle">Vehicle</th>
-            <th data-i18n="report.period">Rental period</th>
-            <th data-i18n="reservations.bookedOn">Booked on</th>
+            <th data-i18n="report.phone">Phone</th>
+            <th data-i18n="cars.f.model">Model</th>
+            <th data-i18n="cars.f.color">Color</th>
+            <th data-i18n="report.plate">Plate</th>
+            <th data-i18n="report.gps">GPS</th>
+            <th data-i18n="report.from">From</th>
+            <th data-i18n="report.to">To</th>
             <th data-i18n="reservations.status">Status</th>
+            <th aria-label="Details"></th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -1513,6 +2005,9 @@
 
   <!-- ============== RESERVATIONS (company-user) ============== -->
   <section id="reservations" class="card company-only-card" hidden>
+    <button type="button" class="ent-back" data-chome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
     <div class="card-head">
       <h2 data-i18n="reservations.title">Reservations</h2>
       <p data-i18n="reservations.subtitle">
@@ -1617,7 +2112,7 @@
       </div>
 
       <div id="pager-top-reservations" class="pager-wrap" hidden></div>
-      <div class="table-wrap">
+      <div class="table-wrap bento-table">
         <table id="tbl-reservations">
           <thead>
             <tr>
@@ -1713,7 +2208,7 @@
       </div>
 
       <div id="pager-top-returns" class="pager-wrap" hidden></div>
-      <div class="table-wrap">
+      <div class="table-wrap bento-table">
         <table id="tbl-returns">
           <thead>
             <tr>
@@ -1739,6 +2234,9 @@
 
   <!-- ============== CONTACT SUPPORT ============== -->
   <section id="support" class="card support-card">
+    <button type="button" class="ent-back admin-only-show" data-ahome>
+      <span aria-hidden="true">←</span> <span data-i18n="ent.back">Back to home</span>
+    </button>
     <div class="card-head">
       <h2 data-i18n="support.title">Contact Support</h2>
       <p data-i18n="support.subtitle">
@@ -1862,6 +2360,52 @@
 </div>
 
 
+<!-- ============== B2B (CARS RENTED TO COMPANIES) DETAIL MODAL ============== -->
+<div id="special-detail-modal" class="modal" hidden>
+  <div class="modal-card detail-card">
+    <header class="modal-head">
+      <h3 data-i18n="special.detail.title">Rental detail</h3>
+      <button id="special-detail-close" class="modal-close" aria-label="Close">&times;</button>
+    </header>
+
+    <div class="detail-body">
+      <!-- Company + car + dates info (rendered by SpecialDetail.open). -->
+      <div id="special-detail-body" class="detail-grid-wrap"></div>
+
+      <!-- Car photos -->
+      <section class="detail-section">
+        <div class="detail-section-head">
+          <h4 data-i18n="detail.photos">Car photos</h4>
+          <label class="btn btn-ghost-dark file-picker-btn detail-upload-btn">
+            <input type="file" id="special-upload-photo" accept="image/*" hidden multiple>
+            <span class="file-picker-icon">📷</span>
+            <span data-i18n="detail.uploadPhoto">Upload photo</span>
+          </label>
+        </div>
+        <div id="special-photos-grid" class="detail-photos-grid"></div>
+      </section>
+
+      <!-- Car videos -->
+      <section class="detail-section">
+        <div class="detail-section-head">
+          <h4 data-i18n="detail.videos">Inspection videos</h4>
+          <label class="btn btn-ghost-dark file-picker-btn detail-upload-btn">
+            <input type="file" id="special-upload-video" accept="video/*" hidden>
+            <span class="file-picker-icon">🎬</span>
+            <span data-i18n="detail.uploadVideo">Upload video</span>
+          </label>
+        </div>
+        <div id="special-videos-grid" class="detail-videos-grid"></div>
+      </section>
+    </div>
+
+    <footer class="modal-foot">
+      <button id="special-detail-cancel" type="button" class="btn btn-ghost-dark" data-i18n="action.close">Close</button>
+    </footer>
+  </div>
+</div>
+
+
 <!-- ============== CLIENT DETAIL MODAL ============== -->
 <div id="client-detail-modal" class="modal" hidden>
   <div class="modal-card" style="width: min(480px, 95vw);">
@@ -1872,6 +2416,20 @@
     <div id="client-detail-body" class="detail-body"></div>
     <footer class="modal-foot">
       <button type="button" id="client-detail-cancel" class="btn btn-ghost-dark" data-i18n="action.close">Close</button>
+    </footer>
+  </div>
+</div>
+
+<!-- ============== RESERVATION DETAIL MODAL (admin) ============== -->
+<div id="reservation-detail-modal" class="modal" hidden>
+  <div class="modal-card" style="width: min(560px, 95vw);">
+    <header class="modal-head">
+      <h3 data-i18n="detail.reservationInfo">Reservation Details</h3>
+      <button id="reservation-detail-close" class="modal-close" aria-label="Close">&times;</button>
+    </header>
+    <div id="reservation-detail-body" class="detail-body"></div>
+    <footer class="modal-foot">
+      <button type="button" id="reservation-detail-cancel" class="btn btn-ghost-dark" data-i18n="action.close">Close</button>
     </footer>
   </div>
 </div>
@@ -1960,8 +2518,8 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="js/i18n.js?v=19"></script>
+<script src="js/i18n.js?v=40"></script>
 <script src="js/searchselect.js?v=7"></script>
-<script src="js/app.js?v=22"></script>
+<script src="js/app.js?v=47"></script>
 </body>
 </html>

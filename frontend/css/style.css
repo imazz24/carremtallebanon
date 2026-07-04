@@ -348,6 +348,104 @@ tbody tr.report-row:hover{ background: rgba(99,102,241,.06); }
 .badge.yes{ background: var(--success-lt); color: var(--success); }
 .badge.no { background: var(--surface-3); color: var(--muted); }
 
+/* =================== REPORT TABLES ===================
+   The admin (#tbl-report) rental report is a COMPACT summary — Company ·
+   Vehicle · Client · Period · GPS · Status · 👁 — that stays readable at a
+   glance. Clicking 👁 expands an inline detail panel below the row showing
+   every field (phones, colour, plate, dates, status…) plus a button to the
+   full media / extra-driver modal. The company table (#tbl-report-co, 9
+   cols) is already flat. Shared: true green/red status pills. */
+/* GPS + "still active" use a hard RED for the off/no state (the global
+   .badge.no is only a muted grey — wrong signal for these columns). */
+#tbl-report   .badge.no,
+#tbl-report-co .badge.no{
+  background: var(--danger-lt); color: var(--danger);
+}
+#tbl-report   .badge,
+#tbl-report-co .badge{ min-width: 3.4em; text-align: center; }
+/* Center the status pills + the 👁 action (header and body together). */
+#tbl-report   thead th:nth-child(5), #tbl-report   tbody td[data-col="gps"],
+#tbl-report   thead th:nth-child(6), #tbl-report   tbody td[data-col="status"],
+#tbl-report   thead th:nth-child(7), #tbl-report   tbody td[data-col="view"],
+#tbl-report-co thead th:nth-child(6), #tbl-report-co tbody td[data-col="gps"],
+#tbl-report-co thead th:nth-child(9), #tbl-report-co tbody td[data-col="view"]{
+  text-align: center;
+}
+/* Period cell: from → to on one line with a soft arrow. */
+#tbl-report tbody td[data-col="period"]{
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+#tbl-report .rp-arrow{ color: var(--muted); margin: 0 .4rem; }
+#tbl-report-co tbody td[data-col="phone"],
+#tbl-report-co tbody td[data-col="plate"],
+#tbl-report-co tbody td[data-col="from"],
+#tbl-report-co tbody td[data-col="to"]{
+  font-variant-numeric: tabular-nums;
+}
+/* Primary names carry the row. */
+#tbl-report   tbody td[data-col="company"] strong,
+#tbl-report   tbody td[data-col="client"]  strong,
+#tbl-report-co tbody td[data-col="client"] strong{
+  color: var(--ink); font-weight: 700;
+}
+#tbl-report-co tbody td[data-col="color"]{ color: var(--ink-soft); }
+
+/* --- Expandable detail row --- */
+/* The 👁 button pairs an eye with a chevron that rotates + a filled look
+   while its panel is open, so the column clearly reads see ⇄ hide. */
+#tbl-report .report-view{
+  display: inline-flex; align-items: center; gap: .3rem;
+  transition: background .12s, color .12s, border-color .12s;
+}
+#tbl-report .report-view .rv-chev{
+  font-size: .8em; line-height: 1; transition: transform .18s ease;
+}
+#tbl-report .report-view[aria-expanded="true"]{
+  background: var(--primary-lt); color: var(--primary); border-color: var(--primary);
+}
+#tbl-report .report-view[aria-expanded="true"] .rv-chev{ transform: rotate(180deg); }
+/* The hidden detail <tr> carries no hover/zebra of its own; its single cell
+   hosts the panel. */
+#tbl-report tbody tr.report-detail-row:hover{ background: transparent; }
+#tbl-report tbody tr.report-detail-row > td{
+  padding: 0;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+/* Grouped, receipt-style panel: cards laid side by side, each a titled list
+   of key→value rows. Reads far cleaner than a flat wall of fields. */
+#tbl-report .report-detail{
+  display: grid; gap: 1rem 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  padding: 1.15rem 1.25rem 1.3rem;
+  animation: rdIn .16s ease;
+}
+@keyframes rdIn{ from{ opacity:0; transform: translateY(-4px); } to{ opacity:1; transform:none; } }
+#tbl-report .rd-group{ display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
+#tbl-report .rd-h{
+  margin: 0; padding-bottom: .35rem;
+  font-size: .66rem; font-weight: 800; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--primary);
+  border-bottom: 1px solid var(--line);
+}
+#tbl-report .rd-fields{ display: flex; flex-direction: column; gap: .45rem; }
+#tbl-report .rd-item{
+  display: flex; justify-content: space-between; align-items: baseline; gap: 1rem;
+}
+#tbl-report .rd-k{
+  font-size: .74rem; color: var(--muted); font-weight: 600; white-space: nowrap;
+  flex: 0 0 auto;
+}
+/* Value column: right-aligned and able to STACK (a company with two phone
+   numbers shows one per line instead of a run-on link). */
+#tbl-report .rd-v{
+  font-size: .9rem; color: var(--ink); overflow-wrap: anywhere;
+  display: flex; flex-direction: column; align-items: flex-end; gap: .12rem;
+  text-align: end; min-width: 0;
+}
+#tbl-report .rd-v .rd-phone{ white-space: nowrap; }
+#tbl-report .report-detail-actions{ grid-column: 1 / -1; margin-top: .2rem; }
+
 /* =================== RENT PREVIEW =================== */
 .preview{
   margin-top: 1.4rem;
@@ -758,36 +856,35 @@ html[dir="rtl"] .sidebar-btn::before{
 .admin-sidebar.collapsed .sidebar-divider{ margin: .2rem .3rem; }
 .admin-sidebar.collapsed .sidebar-nav{ padding: .2rem .3rem .6rem; }
 
-/* Push content for both states */
+/* The admin view is card-driven now (like the enterprise view): hide the
+   sidebar + its layout offset, and hide the mobile hamburger that toggled it.
+   Navigation is the card home + each panel's "Back to home". */
+body.role-admin #admin-sidebar{ display: none !important; }
+body.role-admin .mobile-nav-toggle{ display: none !important; }
 body.role-admin .site-header,
 body.role-admin .main,
-body.role-admin .site-footer{
-  margin-left: 230px;
-  transition: margin-left .25s cubic-bezier(.4,0,.2,1);
-}
-body.role-admin.sidebar-collapsed .site-header,
-body.role-admin.sidebar-collapsed .main,
-body.role-admin.sidebar-collapsed .site-footer{
-  margin-left: 62px;
-}
+body.role-admin .site-footer{ margin-left: 0; margin-right: 0; }
 
 /* Hide header nav + hero for admin */
 body.role-admin .main-nav{ display: none !important; }
 body.role-admin .hero{ display: none !important; }
 
-/* Admin sections: toggled by JS */
+/* Admin sections: all hidden, JS shows the active one */
+body.role-admin #admin-home,
 body.role-admin #companies,
 body.role-admin #cars,
 body.role-admin #car-gps,
 body.role-admin #clients,
 body.role-admin #report,
 body.role-admin #admin-reservations,
+body.role-admin #admin-special,
 body.role-admin #support{
   display: none;
 }
 body.role-admin .admin-panel-active{ display: block !important; }
-body.role-admin #stats-dashboard{ display: block; }
-body.role-admin #inactive-alerts{ display: block; }
+/* Dashboard + its alert banner are driven by JS style.display (block/none). */
+body.role-admin #stats-dashboard{ display: none; }
+body.role-admin #inactive-alerts{ display: none; }
 
 /* RTL */
 html[dir="rtl"] .admin-sidebar{
@@ -799,12 +896,7 @@ html[dir="rtl"] .admin-sidebar.collapsed .sidebar-collapse-icon{ transform: rota
 html[dir="rtl"] body.role-admin .site-header,
 html[dir="rtl"] body.role-admin .main,
 html[dir="rtl"] body.role-admin .site-footer{
-  margin-left: 0; margin-right: 230px;
-}
-html[dir="rtl"] body.role-admin.sidebar-collapsed .site-header,
-html[dir="rtl"] body.role-admin.sidebar-collapsed .main,
-html[dir="rtl"] body.role-admin.sidebar-collapsed .site-footer{
-  margin-left: 0; margin-right: 62px;
+  margin-left: 0; margin-right: 0;
 }
 
 /* Tablet / iPad (721–1024px) keeps the full labeled sidebar — the base
@@ -866,9 +958,7 @@ body.role-admin #upload,
 body.role-admin #tbl-companies th:last-child,
 body.role-admin #tbl-companies td:last-child,
 body.role-admin #tbl-cars th:last-child,
-body.role-admin #tbl-cars td:last-child,
-body.role-admin #tbl-clients th:last-child,
-body.role-admin #tbl-clients td:last-child { display: none !important; }
+body.role-admin #tbl-cars td:last-child { display: none !important; }
 
 body.role-company #home,
 body.role-company #register,
@@ -881,23 +971,21 @@ body.role-company .main-nav{ display: none !important; }
 body.role-company .hero{ display: none !important; }
 body.role-company #btn-export-pdf { display: none !important; }
 
-/* Company sidebar layout — same offset as admin */
+/* The enterprise view is card-driven, not sidebar-driven: drop the sidebar
+   and its layout offset entirely, and hide the mobile hamburger that used to
+   toggle it. Navigation is the card home + each panel's "Back to home". */
+body.role-company #company-sidebar{ display: none !important; }
+body.role-company .mobile-nav-toggle{ display: none !important; }
 body.role-company .site-header,
 body.role-company .main,
-body.role-company .site-footer{
-  margin-left: 230px;
-  transition: margin-left .25s cubic-bezier(.4,0,.2,1);
-}
-body.role-company.sidebar-collapsed .site-header,
-body.role-company.sidebar-collapsed .main,
-body.role-company.sidebar-collapsed .site-footer{
-  margin-left: 62px;
-}
+body.role-company .site-footer{ margin-left: 0; margin-right: 0; }
 
 /* Company sections: all hidden, JS shows the active one */
+body.role-company #company-home,
 body.role-company #company-info,
 body.role-company #company-cars,
 body.role-company #company-clients,
+body.role-company #company-special,
 body.role-company #reservations,
 body.role-company #report,
 body.role-company #support{
@@ -909,28 +997,183 @@ body.role-company .company-panel-active{ display: block !important; }
 .company-only-card { display: none; }
 body.role-company .company-only-card{ display: none; }
 
-/* RTL company sidebar */
+/* RTL: no sidebar offset either — the enterprise view is full-width. */
 html[dir="rtl"] body.role-company .site-header,
 html[dir="rtl"] body.role-company .main,
 html[dir="rtl"] body.role-company .site-footer{
-  margin-left: 0; margin-right: 230px;
-}
-html[dir="rtl"] body.role-company.sidebar-collapsed .site-header,
-html[dir="rtl"] body.role-company.sidebar-collapsed .main,
-html[dir="rtl"] body.role-company.sidebar-collapsed .site-footer{
-  margin-left: 0; margin-right: 62px;
+  margin-left: 0; margin-right: 0;
 }
 
-/* Company content goes full-width on phones (drawer handles the nav).
-   On iPad/tablet the base 230px sidebar layout applies unchanged. */
-@media (max-width: 720px){
-  body.role-company .site-header,
-  body.role-company .main,
-  body.role-company .site-footer{ margin-left: 0; margin-right: 0; }
-  html[dir="rtl"] body.role-company .site-header,
-  html[dir="rtl"] body.role-company .main,
-  html[dir="rtl"] body.role-company .site-footer{ margin-left: 0; margin-right: 0; }
+/* =================== ENTERPRISE CARD HOME =================== */
+.ent-home{ max-width: 1080px; margin: 0 auto; }
+
+/* Welcome hero above the card grid */
+.ent-home-hero{
+  position: relative; overflow: hidden;
+  border-radius: 22px;
+  padding: 2.4rem 2.2rem;
+  margin-bottom: 1.8rem;
+  background: linear-gradient(120deg, #1e1b4b 0%, #312e81 45%, #4338ca 100%);
+  border: 1px solid rgba(255,255,255,.08);
+  box-shadow: 0 24px 60px -30px rgba(49,46,129,.9);
 }
+.ent-home-hero-content{ position: relative; z-index: 2; }
+.ent-home-orb{
+  position: absolute; border-radius: 50%; filter: blur(6px);
+  background: radial-gradient(circle at 30% 30%, rgba(129,140,248,.55), rgba(129,140,248,0) 70%);
+  z-index: 1; pointer-events: none;
+}
+.ent-home-orb-1{ width: 320px; height: 320px; top: -120px; right: -80px; }
+.ent-home-orb-2{ width: 240px; height: 240px; bottom: -140px; left: -60px;
+  background: radial-gradient(circle at 30% 30%, rgba(192,132,252,.45), rgba(192,132,252,0) 70%); }
+.ent-home-eyebrow{
+  display: inline-block; text-transform: uppercase; letter-spacing: .14em;
+  font-size: .72rem; font-weight: 700; color: rgba(199,210,254,.9);
+  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12);
+  padding: .3rem .7rem; border-radius: 999px; margin-bottom: .9rem;
+}
+.ent-home-title{
+  margin: 0 0 .5rem; color: #fff; font-size: 2rem; font-weight: 800;
+  line-height: 1.15; letter-spacing: -.01em;
+}
+.ent-home-sub{ margin: 0; color: rgba(226,232,240,.82); font-size: 1.02rem; max-width: 46ch; line-height: 1.6; }
+
+/* The card grid */
+.ent-card-grid{
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.1rem;
+}
+
+.ent-card{
+  position: relative; overflow: hidden;
+  display: flex; align-items: center; gap: 1.1rem; text-align: left;
+  width: 100%; padding: 1.4rem 1.5rem;
+  border: 1px solid rgba(255,255,255,.14); border-radius: 18px;
+  color: #fff; cursor: pointer; text-decoration: none;
+  box-shadow: 0 18px 40px -26px rgba(0,0,0,.85);
+  transition: transform .18s cubic-bezier(.4,0,.2,1), box-shadow .18s, filter .18s;
+  animation: entCardIn .45s cubic-bezier(.2,.7,.3,1) both;
+}
+.ent-card::after{
+  content: ""; position: absolute; inset: 0;
+  background: radial-gradient(120% 100% at 100% 0%, rgba(255,255,255,.22), rgba(255,255,255,0) 55%);
+  pointer-events: none;
+}
+.ent-card:hover{ transform: translateY(-4px); filter: brightness(1.06); box-shadow: 0 26px 55px -24px rgba(0,0,0,.9); }
+.ent-card:active{ transform: translateY(-1px); }
+.ent-card:focus-visible{ outline: 3px solid rgba(255,255,255,.7); outline-offset: 2px; }
+
+.ent-card-icon{
+  flex: 0 0 auto; width: 58px; height: 58px; border-radius: 15px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 1.7rem; background: rgba(255,255,255,.18);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+}
+.ent-card-body{ display: flex; flex-direction: column; gap: .28rem; min-width: 0; flex: 1; }
+.ent-card-title{ font-size: 1.18rem; font-weight: 800; letter-spacing: -.01em; }
+.ent-card-desc{ font-size: .9rem; line-height: 1.45; color: rgba(255,255,255,.85); }
+.ent-card-arrow{
+  flex: 0 0 auto; font-size: 1.3rem; opacity: .8;
+  transition: transform .18s;
+}
+.ent-card:hover .ent-card-arrow{ transform: translateX(4px); }
+html[dir="rtl"] .ent-card{ text-align: right; }
+html[dir="rtl"] .ent-card-arrow{ transform: scaleX(-1); }
+html[dir="rtl"] .ent-card:hover .ent-card-arrow{ transform: scaleX(-1) translateX(4px); }
+
+/* Per-card gradient identities (echoing the colourful tiles) */
+.ent-card-cars{        background: linear-gradient(135deg, #059669 0%, #10b981 100%); }
+.ent-card-clients{     background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%); }
+.ent-card-reservation{ background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%); }
+.ent-card-branch{      background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%); }
+.ent-card-key{         background: linear-gradient(135deg, #e11d48 0%, #f43f5e 100%); }
+.ent-card-docs{        background: linear-gradient(135deg, #0d9488 0%, #14b8a6 100%); }
+
+/* Staggered entrance */
+.ent-card:nth-child(1){ animation-delay: .04s; }
+.ent-card:nth-child(2){ animation-delay: .09s; }
+.ent-card:nth-child(3){ animation-delay: .14s; }
+.ent-card:nth-child(4){ animation-delay: .19s; }
+.ent-card:nth-child(5){ animation-delay: .24s; }
+.ent-card:nth-child(6){ animation-delay: .29s; }
+@keyframes entCardIn{ from{ opacity: 0; transform: translateY(16px) scale(.98); } to{ opacity: 1; transform: none; } }
+
+/* "Back to home" button on each panel */
+.ent-back{
+  display: inline-flex; align-items: center; gap: .4rem;
+  margin-bottom: 1.1rem; padding: .5rem .9rem;
+  border-radius: 10px; cursor: pointer; font-weight: 600; font-size: .92rem;
+  color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line);
+  transition: background .15s, transform .15s, border-color .15s;
+}
+.ent-back:hover{ transform: translateX(-3px); border-color: var(--primary); color: var(--primary); }
+html[dir="rtl"] .ent-back:hover{ transform: translateX(3px); }
+
+@media (max-width: 720px){
+  .ent-card-grid{ grid-template-columns: 1fr; }
+  .ent-home-hero{ padding: 1.8rem 1.4rem; }
+  .ent-home-title{ font-size: 1.55rem; }
+}
+@media (prefers-reduced-motion: reduce){
+  .ent-card{ animation: none; }
+  .ent-card:hover{ transform: none; }
+}
+
+/* Extra home-card colour for the special-companies (B2B) tile */
+.ent-card-special{ background: linear-gradient(135deg, #0f766e 0%, #0ea5a4 55%, #22d3ee 100%); }
+
+/* Admin home-card colours */
+.ent-card-dashboard{ background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%); }
+.ent-card-companies{ background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 100%); }
+.ent-card-gps{       background: linear-gradient(135deg, #0369a1 0%, #0ea5e9 100%); }
+.ent-card-report{    background: linear-gradient(135deg, #475569 0%, #64748b 100%); }
+.ent-card-register{  background: linear-gradient(135deg, #be185d 0%, #ec4899 100%); }
+.ent-card-support{   background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%); }
+
+/* Special-company panel: repeatable branch/car rows + recorded-companies table */
+.special-repeat-list{ display: flex; flex-direction: column; gap: .4rem; margin-bottom: .5rem; }
+.special-branch-row,
+.special-car-row{
+  display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; max-width: 620px;
+}
+.special-branch-row .special-branch-input{
+  flex: 1; min-width: 0; border: 1.5px solid var(--line);
+  background: #fff; border-radius: var(--radius-xs);
+  padding: .6rem .8rem; font: inherit; color: var(--ink);
+  transition: border-color .15s, box-shadow .15s;
+}
+.special-branch-row .special-branch-input:focus{
+  outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-lt);
+}
+.special-car-row > .special-car-select{ flex: 1; min-width: 200px; }
+.special-car-row .ss-wrapper{ flex: 1; min-width: 220px; }
+.special-branch-row .phone-remove,
+.special-car-row .phone-remove{
+  width: 30px; height: 30px; flex: 0 0 auto; border: 1px solid var(--line);
+  background: #fff; border-radius: 6px; cursor: pointer;
+  font-size: 1rem; line-height: 1; color: var(--muted); transition: all .12s;
+}
+.special-branch-row .phone-remove:hover,
+.special-car-row .phone-remove:hover{ color: var(--danger); border-color: var(--danger); }
+.special-car-empty{ color: var(--muted); margin: .4rem 0; }
+.special-cars-held{ margin: 0; padding-left: 1.1rem; font-size: .88rem; line-height: 1.5; }
+html[dir="rtl"] .special-cars-held{ padding-left: 0; padding-right: 1.1rem; }
+.muted-cell{ color: var(--muted); font-size: .85rem; }
+
+/* Header light/dark toggle — shown for both signed-in roles, hidden on the
+   public/login page. */
+.theme-toggle{ display: none; }
+body:is(.role-admin, .role-company) .theme-toggle{
+  display: inline-flex; align-items: center; gap: .4rem;
+  padding: .4rem .7rem; border-radius: 10px; cursor: pointer;
+  font-size: .82rem; font-weight: 600;
+  color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line);
+  transition: background .15s, border-color .15s, color .15s;
+}
+.theme-toggle:hover{ border-color: var(--primary); color: var(--primary); }
+.theme-toggle-icon{ font-size: 1rem; line-height: 1; }
+@media (max-width: 720px){ .theme-toggle-label{ display: none; } }
 
 /* =================== SECTION-SPECIFIC =================== */
 .branches-head{ margin-top: 1.4rem; }
@@ -996,6 +1239,32 @@ html[dir="rtl"] .vin-serial-input{
   background: var(--surface-3); color: var(--ink);
   border-color: var(--muted);
 }
+
+/* VIN picker: searchable dropdown + a "not listed" escape hatch. */
+.vin-picker-wrap{ display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.vin-picker-wrap .ss-wrapper{ flex: 1; min-width: 220px; }
+.vin-custom-btn{
+  background: none; border: 0; padding: .2rem .1rem;
+  color: var(--primary); font-size: .85rem; font-weight: 600;
+  cursor: pointer; text-decoration: underline; white-space: nowrap;
+}
+.vin-custom-btn:hover{ color: var(--primary-dk); }
+#vin-full-mode .vin-custom-btn{ display: inline-block; margin-top: .4rem; }
+/* VIN locked (edit mode): read-only identity badge. */
+.vin-locked-wrap{ display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.vin-locked-badge{
+  border-radius: var(--radius-xs);
+  opacity: .85; cursor: not-allowed;
+}
+.vin-locked-note{ font-size: .85rem; color: var(--ink-soft); }
+
+/* ---- Add-Car tab: "cars you added" table + edit outline ---- */
+.my-cars-block{ margin-top: 1.75rem; }
+.my-cars-block .card-head{ margin-bottom: .6rem; }
+.my-cars-hint{ font-size: .9rem; opacity: .8; }
+#tbl-my-cars td.my-car-action{ width: 1%; white-space: nowrap; text-align: center; }
+#tbl-my-cars .my-car-edit{ font-size: .9rem; line-height: 1; padding: .35rem .7rem; }
+.car-editing{ box-shadow: 0 0 0 2px rgba(59,130,246,.45); border-radius: 12px; }
 
 .field-error{
   margin-top: .25rem; font-size: .78rem; color: var(--danger); font-weight: 500;
@@ -1206,6 +1475,22 @@ body.role-admin .media-remove{ display: none; }
   color: #fff; border: 0; box-shadow: var(--shadow-xs);
   font-weight: 800; font-size: .78rem;
 }
+/* Client-detail modal: the uploaded ID / passport / licence is a DOCUMENT, so
+   render it full-width and rectangular (object-fit: contain, never a cropped
+   circle) and let a click open it full-size in a new tab. */
+.client-doc-section{ margin-top: .95rem; border-top: 1px solid var(--line); padding-top: .85rem; }
+.client-doc-title{
+  margin: 0 0 .55rem; font-size: .78rem; font-weight: 700; letter-spacing: .03em;
+  text-transform: uppercase; color: var(--ink-soft);
+}
+.client-doc-link{ display: block; }
+.client-doc-photo{
+  display: block; width: 100%; max-height: 340px; object-fit: contain;
+  border-radius: 12px; border: 1px solid var(--line); background: #fff;
+  box-shadow: 0 2px 10px rgba(15,23,42,.10); cursor: zoom-in;
+}
+.client-doc-pdf{ display: inline-flex; }
+.client-doc-empty{ margin: 0; color: var(--ink-soft); font-size: .9rem; }
 
 /* Branch rows */
 #tbl-companies tr.company-branch-row > td{
@@ -2318,7 +2603,7 @@ body.role-admin .co-renter-remove{ display: none; }
    Re-themes by overriding the design tokens, then patches
    the handful of components that hard-code light colors.
 ===================================================== */
-body:is(.role-company, .role-admin){
+body:is(.role-company, .role-admin):not(.theme-light){
   --bg:        #0b1120;
   --surface:   #141c2f;
   --surface-2: #1b2438;
@@ -2351,78 +2636,81 @@ body:is(.role-company, .role-admin){
     var(--bg);
   background-attachment: fixed;
 }
-body:is(.role-company, .role-admin) ::selection{ background: rgba(129,140,248,.35); color: #fff; }
-body:is(.role-company, .role-admin) ::placeholder{ color: var(--muted); opacity: 1; }
-body:is(.role-company, .role-admin) input,
-body:is(.role-company, .role-admin) select,
-body:is(.role-company, .role-admin) textarea{ color-scheme: dark; }
+body:is(.role-company, .role-admin):not(.theme-light) ::selection{ background: rgba(129,140,248,.35); color: #fff; }
+body:is(.role-company, .role-admin):not(.theme-light) ::placeholder{ color: var(--muted); opacity: 1; }
+body:is(.role-company, .role-admin):not(.theme-light) input,
+body:is(.role-company, .role-admin):not(.theme-light) select,
+body:is(.role-company, .role-admin):not(.theme-light) textarea{ color-scheme: dark; }
 
 /* Header reads as part of the dark shell */
-body:is(.role-company, .role-admin) .site-header{ border-bottom: 1px solid rgba(129,140,248,.14); }
+body:is(.role-company, .role-admin):not(.theme-light) .site-header{ border-bottom: 1px solid rgba(129,140,248,.14); }
 
 /* Inputs that hard-code a white background */
-body:is(.role-company, .role-admin) .phone-row .phone-input,
-body:is(.role-company, .role-admin) .phone-row .phone-remove,
-body:is(.role-company, .role-admin) .report-search-field input,
-body:is(.role-company, .role-admin) .report-date-field input,
-body:is(.role-company, .role-admin) .table-search-field input,
-body:is(.role-company, .role-admin) .dash-search-input,
-body:is(.role-company, .role-admin) .field input,
-body:is(.role-company, .role-admin) .field select,
-body:is(.role-company, .role-admin) .ss-trigger,
-body:is(.role-company, .role-admin) .vin-serial-input,
-body:is(.role-company, .role-admin) .vin-edit-full-btn,
-body:is(.role-company, .role-admin) .pager-size-select{
+body:is(.role-company, .role-admin):not(.theme-light) .phone-row .phone-input,
+body:is(.role-company, .role-admin):not(.theme-light) .phone-row .phone-remove,
+body:is(.role-company, .role-admin):not(.theme-light) .special-branch-row .special-branch-input,
+body:is(.role-company, .role-admin):not(.theme-light) .special-branch-row .phone-remove,
+body:is(.role-company, .role-admin):not(.theme-light) .special-car-row .phone-remove,
+body:is(.role-company, .role-admin):not(.theme-light) .report-search-field input,
+body:is(.role-company, .role-admin):not(.theme-light) .report-date-field input,
+body:is(.role-company, .role-admin):not(.theme-light) .table-search-field input,
+body:is(.role-company, .role-admin):not(.theme-light) .dash-search-input,
+body:is(.role-company, .role-admin):not(.theme-light) .field input,
+body:is(.role-company, .role-admin):not(.theme-light) .field select,
+body:is(.role-company, .role-admin):not(.theme-light) .ss-trigger,
+body:is(.role-company, .role-admin):not(.theme-light) .vin-serial-input,
+body:is(.role-company, .role-admin):not(.theme-light) .vin-edit-full-btn,
+body:is(.role-company, .role-admin):not(.theme-light) .pager-size-select{
   background: var(--surface-2); color: var(--ink);
 }
-body:is(.role-company, .role-admin) .ss-search:focus{ background: var(--surface); }
+body:is(.role-company, .role-admin):not(.theme-light) .ss-search:focus{ background: var(--surface); }
 
 /* Accent text that becomes low-contrast on dark */
-body:is(.role-company, .role-admin) code,
-body:is(.role-company, .role-admin) .vin-serial-input,
-body:is(.role-company, .role-admin) .ss-item.active,
-body:is(.role-company, .role-admin) .map-loc-status code,
-body:is(.role-company, .role-admin) .detail-grid dd code,
-body:is(.role-company, .role-admin) .modal-coords code{ color: var(--primary); }
-body:is(.role-company, .role-admin) .company-info-status{ color: var(--success); }
+body:is(.role-company, .role-admin):not(.theme-light) code,
+body:is(.role-company, .role-admin):not(.theme-light) .vin-serial-input,
+body:is(.role-company, .role-admin):not(.theme-light) .ss-item.active,
+body:is(.role-company, .role-admin):not(.theme-light) .map-loc-status code,
+body:is(.role-company, .role-admin):not(.theme-light) .detail-grid dd code,
+body:is(.role-company, .role-admin):not(.theme-light) .modal-coords code{ color: var(--primary); }
+body:is(.role-company, .role-admin):not(.theme-light) .company-info-status{ color: var(--success); }
 
 /* Cards with hard-coded light gradients */
-body:is(.role-company, .role-admin) .card.highlight{
+body:is(.role-company, .role-admin):not(.theme-light) .card.highlight{
   border-color: rgba(129,140,248,.30);
   background: linear-gradient(180deg, var(--surface) 0%, #0f1828 100%);
 }
-body:is(.role-company, .role-admin) .preview{
+body:is(.role-company, .role-admin):not(.theme-light) .preview{
   border-color: rgba(129,140,248,.30);
   background: linear-gradient(180deg, rgba(129,140,248,.06), transparent);
 }
 
 /* Toast: keep a dark chip for the default; success/error keep their colour */
-body:is(.role-company, .role-admin) .toast:not(.success):not(.error){
+body:is(.role-company, .role-admin):not(.theme-light) .toast:not(.success):not(.error){
   background: #0f1828; border: 1px solid var(--line);
 }
 
 /* Premium primary button + card glow */
-body:is(.role-company, .role-admin) .btn-primary{
+body:is(.role-company, .role-admin):not(.theme-light) .btn-primary{
   background: linear-gradient(135deg, #6366f1, #818cf8);
 }
-body:is(.role-company, .role-admin) .btn-primary:hover{
+body:is(.role-company, .role-admin):not(.theme-light) .btn-primary:hover{
   background: linear-gradient(135deg, #4f46e5, #6d7cf6);
   box-shadow: 0 6px 22px rgba(129,140,248,.45);
 }
-body:is(.role-company, .role-admin) .card{ transition: box-shadow .3s, border-color .3s; }
-body:is(.role-company, .role-admin) .card:hover{
+body:is(.role-company, .role-admin):not(.theme-light) .card{ transition: box-shadow .3s, border-color .3s; }
+body:is(.role-company, .role-admin):not(.theme-light) .card:hover{
   border-color: rgba(129,140,248,.28);
   box-shadow: var(--shadow-md), 0 0 0 1px rgba(129,140,248,.12);
 }
-body:is(.role-company, .role-admin) .brand:hover .brand-mark{ box-shadow: 0 6px 20px var(--primary-glow); }
+body:is(.role-company, .role-admin):not(.theme-light) .brand:hover .brand-mark{ box-shadow: 0 6px 20px var(--primary-glow); }
 
 /* Custom dark scrollbars */
-body:is(.role-company, .role-admin) *::-webkit-scrollbar{ width: 10px; height: 10px; }
-body:is(.role-company, .role-admin) *::-webkit-scrollbar-thumb{
+body:is(.role-company, .role-admin):not(.theme-light) *::-webkit-scrollbar{ width: 10px; height: 10px; }
+body:is(.role-company, .role-admin):not(.theme-light) *::-webkit-scrollbar-thumb{
   background: rgba(148,163,184,.25); border-radius: 999px;
 }
-body:is(.role-company, .role-admin) *::-webkit-scrollbar-thumb:hover{ background: rgba(148,163,184,.40); }
-body:is(.role-company, .role-admin) *::-webkit-scrollbar-track{ background: transparent; }
+body:is(.role-company, .role-admin):not(.theme-light) *::-webkit-scrollbar-thumb:hover{ background: rgba(148,163,184,.40); }
+body:is(.role-company, .role-admin):not(.theme-light) *::-webkit-scrollbar-track{ background: transparent; }
 
 /* ---- Company sidebar: deeper, glowing ---- */
 body.role-company #company-sidebar{
@@ -2479,7 +2767,7 @@ body.role-company .company-panel-active{
 
 /* Tighten the dark header on very small screens */
 @media (max-width: 560px){
-  body:is(.role-company, .role-admin) .site-header .brand-text{ display: none; }
+  body:is(.role-company, .role-admin):not(.theme-light) .site-header .brand-text{ display: none; }
 }
 
 /* =====================================================
@@ -2640,6 +2928,57 @@ body.role-admin .alert-card-badge{
 
 /* register modal success text on dark */
 body.role-admin .register-result{ color: var(--success); }
+
+/* ---- LIGHT MODE for admin: undo the dark-dashboard patches above so the
+   base (light, token-driven) styles show through. Higher specificity
+   (adds .theme-light) means these win over the body.role-admin dark rules. */
+body.role-admin.theme-light .dash-hero{
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(99,102,241,.16), transparent 55%),
+    radial-gradient(120% 140% at 100% 0%, rgba(139,92,246,.14), transparent 55%),
+    linear-gradient(135deg, var(--surface), var(--surface-2));
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+body.role-admin.theme-light .dash-hero-eyebrow{
+  background: var(--primary-lt); color: var(--primary); border-color: transparent;
+}
+body.role-admin.theme-light .dash-hero-sub{ color: var(--ink-soft); }
+body.role-admin.theme-light .dash-date{ color: var(--muted); }
+body.role-admin.theme-light .dash-title{
+  background: none; -webkit-text-fill-color: currentColor;
+  color: var(--ink); animation: none;
+}
+body.role-admin.theme-light .stat-card{
+  background: var(--surface); border-color: var(--line);
+}
+body.role-admin.theme-light .dash-panel-warn{
+  border-color: rgba(217,119,6,.35);
+  background: linear-gradient(180deg, rgba(245,158,11,.10), rgba(245,158,11,.03));
+}
+body.role-admin.theme-light .dash-panel-warn .dash-panel-head{
+  background: rgba(245,158,11,.12); border-bottom-color: rgba(245,158,11,.25);
+}
+body.role-admin.theme-light .dash-panel-desc{ color: #b45309; }
+body.role-admin.theme-light .dash-search-bar-warn{ background: rgba(245,158,11,.06); }
+body.role-admin.theme-light .dash-activity-chip.rentals{ background: rgba(99,102,241,.12); color: #4338ca; }
+body.role-admin.theme-light .dash-activity-chip.reservations{ background: rgba(245,158,11,.14); color: #b45309; }
+body.role-admin.theme-light .dash-activity-chip.cars{ background: rgba(16,185,129,.12); color: #047857; }
+body.role-admin.theme-light .dash-activity-chip.clients{ background: rgba(99,102,241,.12); color: #6d28d9; }
+body.role-admin.theme-light .alert-warning{
+  background: linear-gradient(135deg, rgba(245,158,11,.12), rgba(245,158,11,.04));
+  border-color: rgba(217,119,6,.35);
+}
+body.role-admin.theme-light .alert-header{ color: #b45309; }
+body.role-admin.theme-light .alert-desc{ color: #92400e; }
+body.role-admin.theme-light .alert-card{
+  background: var(--surface); border-color: rgba(217,119,6,.28);
+}
+body.role-admin.theme-light .alert-card-meta{ color: #b45309; }
+body.role-admin.theme-light .alert-card-meta a{ color: #b45309; }
+body.role-admin.theme-light .alert-card-badge{
+  background: rgba(245,158,11,.14); color: #b45309; border-color: rgba(217,119,6,.35);
+}
 
 @keyframes statIn{
   from{ opacity: 0; transform: translateY(16px) scale(.97); }
@@ -2988,6 +3327,133 @@ body.role-admin #tbl-admin-reservations tr.rv-row-today td{
 }
 
 /* =====================================================
+   BENTO-GRID TABLES (both signed-in roles · tablet+)
+   The per-record list tables (cars, clients, reservations,
+   returns, B2B rentals) render as a responsive grid of
+   cards — one card per record — instead of dense rows.
+   Each cell shows its column label (data-label) beside the
+   value; the #-column is dropped and the empty state spans
+   full width. Below 721px the shared phone stacked-card
+   rules take over, so this is scoped to min-width:721px.
+===================================================== */
+@media (min-width: 721px){
+  body:is(.role-admin, .role-company) .bento-table{
+    border: 0; background: transparent; box-shadow: none;
+    overflow: visible; border-radius: 0;
+  }
+  body:is(.role-admin, .role-company) .bento-table table{
+    display: block; min-width: 0; font-size: .9rem;
+  }
+  /* header row is visually hidden — labels live on each cell */
+  body:is(.role-admin, .role-company) .bento-table thead{
+    position: absolute; width: 1px; height: 1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  body:is(.role-admin, .role-company) .bento-table tbody{
+    display: grid; gap: 1rem;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  }
+  /* each record = a bento card */
+  body:is(.role-admin, .role-company) .bento-table tbody tr,
+  body:is(.role-admin, .role-company) .bento-table tbody tr:nth-child(even){
+    display: flex; flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: var(--shadow-xs);
+    padding: .35rem 1.1rem;
+    overflow: hidden;
+    transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+  }
+  body:is(.role-admin, .role-company) .bento-table tbody tr:hover,
+  body:is(.role-admin, .role-company) .bento-table tbody tr:nth-child(even):hover{
+    transform: translateY(-3px);
+    border-color: rgba(129,140,248,.5);
+    box-shadow: 0 10px 26px rgba(0,0,0,.28);
+  }
+  body:is(.role-admin, .role-company) .bento-table tbody td{
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 1rem; text-align: end;
+    padding: .6rem 0; min-height: 0;
+    border: 0; border-bottom: 1px solid var(--line-soft) !important;
+    background: transparent !important;
+    font-size: .9rem; font-weight: 500; white-space: normal;
+  }
+  body:is(.role-admin, .role-company) .bento-table tbody td:last-child{
+    border-bottom: 0 !important;
+  }
+  body:is(.role-admin, .role-company) .bento-table tbody td::before{
+    content: attr(data-label);
+    flex: 0 0 42%; text-align: start;
+    font-size: .66rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--ink-soft); word-break: break-word;
+  }
+  /* drop the row-number cell — noise in card view */
+  body:is(.role-admin, .role-company) .bento-table tbody td[data-label="#"]{ display: none; }
+  /* unlabeled cells (e.g. actions) right-align, no label gap */
+  body:is(.role-admin, .role-company) .bento-table tbody td:not([data-label]){
+    justify-content: flex-end;
+  }
+  body:is(.role-admin, .role-company) .bento-table tbody td:not([data-label])::before{
+    display: none;
+  }
+  body:is(.role-admin, .role-company) .bento-table tbody td .row-actions{
+    justify-content: flex-end; flex-wrap: wrap; gap: .4rem;
+  }
+  /* empty-state spans the whole grid */
+  body:is(.role-admin, .role-company) .bento-table tbody tr.empty-row,
+  body:is(.role-admin, .role-company) .bento-table tbody tr.empty-row:hover{
+    grid-column: 1 / -1;
+    display: block; text-align: center; transform: none;
+    border: 1px dashed var(--line); box-shadow: none; background: transparent;
+  }
+  body:is(.role-admin, .role-company) .bento-table tbody tr.empty-row td{
+    display: block; text-align: center; border: 0 !important;
+    color: var(--muted); padding: 2rem 1rem;
+  }
+  body:is(.role-admin, .role-company) .bento-table tbody tr.empty-row td::before{ display: none; }
+  /* images inside cards stay tidy */
+  body:is(.role-admin, .role-company) .bento-table tbody td img{
+    max-height: 46px; width: auto; border-radius: 8px;
+  }
+}
+
+/* -----------------------------------------------------
+   "Cars Rented to Companies" (B2B) list renders as a real,
+   dense data-table (not bento cards) so it stays scannable as
+   the record count grows. A few per-column touches keep the
+   multi-line contact block and car list tidy, and the Delete
+   column hugs its button on the right.
+----------------------------------------------------- */
+#tbl-special tbody td[data-col="company"] strong{ font-weight: 700; }
+#tbl-special tbody td[data-col="phone"]{ white-space: nowrap; }
+#tbl-special tbody td[data-col="gps"]{ text-align: center; }
+#tbl-special tbody td[data-col="view"]{ width: 1%; white-space: nowrap; text-align: center; }
+#tbl-special .special-view{ font-size: 1rem; line-height: 1; padding: .35rem .6rem; }
+
+/* -----------------------------------------------------
+   Admin Clients: a dense, scannable data-table (not bento cards) so it
+   stays readable across every company's customers. It's view-only — no
+   edit/delete — so the single trailing column is just an eye-icon that opens
+   the full-record modal (father/mother, DOB, document type + document photo,
+   and license dates that were dropped from the row to keep it friendly).
+----------------------------------------------------- */
+#tbl-clients tbody td[data-col="photo"]{ width: 1%; }
+#tbl-clients tbody td[data-col="view"]{ width: 1%; white-space: nowrap; text-align: center; }
+#tbl-clients .client-view{ font-size: 1rem; line-height: 1; padding: .35rem .6rem; }
+
+/* ---- Add-Client tab: conditional "*" + "clients you added" table ---- */
+.req-star{ color: #f43f5e; font-weight: 800; }
+.my-clients-block{ margin-top: 1.75rem; }
+.my-clients-block .card-head{ margin-bottom: .6rem; }
+.my-clients-hint{ font-size: .9rem; opacity: .8; }
+#tbl-my-clients td.my-client-action{ width: 1%; white-space: nowrap; text-align: center; }
+#tbl-my-clients .my-client-edit{ font-size: .9rem; line-height: 1; padding: .35rem .7rem; }
+/* While editing an existing client, tint the form so it's obvious the next
+   Save updates a record instead of creating a new one. */
+.client-editing{ box-shadow: 0 0 0 2px rgba(59,130,246,.45); border-radius: 12px; }
+
+/* =====================================================
    FINISHING TOUCHES (both signed-in roles)
    The small details that read as "professional":
    accessible focus rings, aligned numerals, gradient
@@ -2998,19 +3464,19 @@ body.role-admin #tbl-admin-reservations tr.rv-row-today td{
 html{ scroll-behavior: smooth; }
 
 /* Firefox scrollbar theming (WebKit handled earlier) */
-body:is(.role-company, .role-admin){
+body:is(.role-company, .role-admin):not(.theme-light){
   scrollbar-color: rgba(148,163,184,.35) transparent;
   scrollbar-width: thin;
 }
 
 /* Accessible keyboard focus — visible only for keyboard users */
-body:is(.role-company, .role-admin) a:focus-visible,
-body:is(.role-company, .role-admin) button:focus-visible,
-body:is(.role-company, .role-admin) .sidebar-btn:focus-visible,
-body:is(.role-company, .role-admin) .row-btn:focus-visible,
-body:is(.role-company, .role-admin) .pager-btn:focus-visible,
-body:is(.role-company, .role-admin) .rv-action-btn:focus-visible,
-body:is(.role-company, .role-admin) .ss-trigger:focus-visible{
+body:is(.role-company, .role-admin):not(.theme-light) a:focus-visible,
+body:is(.role-company, .role-admin):not(.theme-light) button:focus-visible,
+body:is(.role-company, .role-admin):not(.theme-light) .sidebar-btn:focus-visible,
+body:is(.role-company, .role-admin):not(.theme-light) .row-btn:focus-visible,
+body:is(.role-company, .role-admin):not(.theme-light) .pager-btn:focus-visible,
+body:is(.role-company, .role-admin):not(.theme-light) .rv-action-btn:focus-visible,
+body:is(.role-company, .role-admin):not(.theme-light) .ss-trigger:focus-visible{
   outline: 2px solid var(--primary);
   outline-offset: 2px;
   border-radius: 8px;
@@ -3021,23 +3487,23 @@ body:is(.role-company, .role-admin) .ss-trigger:focus-visible{
 }
 
 /* Tables: align digits so columns of numbers/dates line up */
-body:is(.role-company, .role-admin) tbody td{ font-variant-numeric: tabular-nums; }
+body:is(.role-company, .role-admin):not(.theme-light) tbody td{ font-variant-numeric: tabular-nums; }
 
 /* Section headers: gradient accent bar + balanced wrapping */
-body:is(.role-company, .role-admin) .card-head{
+body:is(.role-company, .role-admin):not(.theme-light) .card-head{
   border-image: linear-gradient(180deg, #818cf8 0%, #a78bfa 100%) 1;
 }
-body:is(.role-company, .role-admin) .card-head h2,
-body:is(.role-company, .role-admin) .card-head h3{ text-wrap: balance; }
+body:is(.role-company, .role-admin):not(.theme-light) .card-head h2,
+body:is(.role-company, .role-admin):not(.theme-light) .card-head h3{ text-wrap: balance; }
 
 /* Buttons: a touch of optical refinement */
-body:is(.role-company, .role-admin) .btn{ letter-spacing: .01em; }
-body:is(.role-company, .role-admin) .btn-ghost-dark:hover{
+body:is(.role-company, .role-admin):not(.theme-light) .btn{ letter-spacing: .01em; }
+body:is(.role-company, .role-admin):not(.theme-light) .btn-ghost-dark:hover{
   border-color: rgba(129,140,248,.45); color: #fff;
 }
 
 /* Header sits on a subtle elevation so it feels anchored */
-body:is(.role-company, .role-admin) .site-header{
+body:is(.role-company, .role-admin):not(.theme-light) .site-header{
   box-shadow: 0 1px 0 rgba(255,255,255,.03), 0 6px 24px rgba(0,0,0,.28);
 }
 
@@ -3269,11 +3735,11 @@ body.nav-open .mobile-nav-toggle .mnt-bar:nth-child(2){ opacity: 0; }
 body.nav-open .mobile-nav-toggle .mnt-bar:nth-child(3){ transform: translateY(-7px) rotate(-45deg); }
 
 /* Signed-in dark header → light bars on the hamburger */
-body:is(.role-company, .role-admin) .mobile-nav-toggle{
+body:is(.role-company, .role-admin):not(.theme-light) .mobile-nav-toggle{
   background: rgba(255,255,255,.06);
   border-color: rgba(148,163,184,.25);
 }
-body:is(.role-company, .role-admin) .mobile-nav-toggle .mnt-bar{ background: #e9ecff; }
+body:is(.role-company, .role-admin):not(.theme-light) .mobile-nav-toggle .mnt-bar{ background: #e9ecff; }
 
 /* ---- Drawer backdrop ---- */
 .mobile-nav-backdrop{
@@ -3289,7 +3755,7 @@ body.nav-open .mobile-nav-backdrop{ opacity: 1; pointer-events: auto; }
 @media (max-width: 720px){
   /* Reveal the hamburger only for the two signed-in roles (the public
      login page has no nav drawer). */
-  body:is(.role-company, .role-admin) .mobile-nav-toggle{ display: inline-flex; }
+  body:is(.role-company, .role-admin):not(.theme-light) .mobile-nav-toggle{ display: inline-flex; }
 
   /* Backdrop sits above the sticky header so the whole page dims behind the
      drawer; the drawer (z 60) still paints on top of it. */
@@ -3674,15 +4140,17 @@ body:is(.role-company,.role-admin) .gt-chip-gps{ color: #34d399; background: rgb
   body.role-company #tbl-report thead th:nth-child(6){ width: 9%; }
   body.role-company #tbl-report thead th:nth-child(7){ width: 7%; }
 
-  /* Admin Reservations — grouped columns. */
-  #tbl-admin-reservations{ table-layout: fixed; }
-  #tbl-admin-reservations tbody td{ padding: .7rem .85rem; }
-  #tbl-admin-reservations thead th:nth-child(1){ width: 20%; }  /* Company */
-  #tbl-admin-reservations thead th:nth-child(2){ width: 19%; }  /* Client  */
-  #tbl-admin-reservations thead th:nth-child(3){ width: 18%; }  /* Vehicle */
-  #tbl-admin-reservations thead th:nth-child(4){ width: 15%; }  /* Period  */
-  #tbl-admin-reservations thead th:nth-child(5){ width: 16%; }  /* Booked  */
-  #tbl-admin-reservations thead th:nth-child(6){ width: 12%; white-space: nowrap; }  /* Status */
+  /* Admin Reservations — dense flat table (many columns). With 13 columns,
+     squeezing everything to fit the width makes cells unreadable. Instead give
+     the table a comfortable min-width and keep each cell on one line, so it
+     scrolls sideways inside .table-wrap while every value stays readable. */
+  #tbl-admin-reservations{ min-width: 1240px; }
+  #tbl-admin-reservations tbody td{ padding: .6rem .8rem; white-space: nowrap; }
+  #tbl-admin-reservations thead th{ white-space: nowrap; }
+  /* Names can be long — let just those two wrap a little rather than blowing
+     the row width out, but keep a readable floor. */
+  #tbl-admin-reservations td[data-col="company"]{ white-space: normal; min-width: 150px; }
+  #tbl-admin-reservations td[data-col="client"]{  white-space: normal; min-width: 140px; }
 }
 
 /* =====================================================
@@ -3693,6 +4161,11 @@ body:is(.role-company,.role-admin) .gt-chip-gps{ color: #34d399; background: rgb
   margin: .2rem 0 1.1rem;
 }
 .cargps-select-field{ flex: 1 1 320px; max-width: 480px; }
+.cargps-filter-field{ flex: 1 1 200px; max-width: 260px; }
+/* The searchable-dropdown panels open downward over the Leaflet map, whose
+   panes/controls stack up to ~1000. Lift the panels above it (but below the
+   1500 app modal) so the options aren't hidden behind the map. */
+.cargps-toolbar .ss-panel{ z-index: 1100; }
 .cargps-gpsonly{
   display: inline-flex; align-items: center; gap: .5rem;
   font-size: .85rem; color: var(--ink-soft); font-weight: 600;
@@ -3851,6 +4324,28 @@ body:is(.role-company,.role-admin) .empty-row td{
 body:is(.role-company,.role-admin) .reservation-status-badge.pending{  color: #fbbf24; }
 body:is(.role-company,.role-admin) .reservation-status-badge.active{   color: #34d399; }
 body:is(.role-company,.role-admin) .reservation-status-badge.inactive{ color: #94a3b8; }
+
+/* ---- Admin Reservations: GPS green/red dot + view (eye) column ---- */
+.gps-dot{
+  display: inline-block; width: 11px; height: 11px; border-radius: 50%;
+  vertical-align: middle; box-shadow: 0 0 0 3px rgba(0,0,0,.04);
+}
+.gps-dot.on{  background: #16a34a; box-shadow: 0 0 0 3px rgba(22,163,74,.18); }
+.gps-dot.off{ background: #dc2626; box-shadow: 0 0 0 3px rgba(220,38,38,.16); }
+#tbl-admin-reservations td[data-col="gps"],
+#tbl-admin-reservations th:nth-child(9){ text-align: center; }
+#tbl-admin-reservations td[data-col="view"]{ width: 1%; white-space: nowrap; text-align: center; }
+#tbl-admin-reservations .rv-detail-btn{ font-size: 1rem; line-height: 1; padding: .35rem .55rem; }
+
+/* ---- Reservation detail modal: grouped Company / Client / Vehicle cards ---- */
+.rvd-group{ margin-top: .85rem; }
+.rvd-group:first-child{ margin-top: 0; }
+.rvd-group + .rvd-group{ border-top: 1px solid var(--line); padding-top: .85rem; }
+.rvd-h{
+  margin: 0 0 .5rem; font-size: .74rem; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--ink-soft);
+}
+.rvd-notes{ margin: 0; color: var(--ink-soft); font-size: .9rem; white-space: pre-wrap; }
 
 /* ---- Coordinates link in the Companies table → a tidy map chip ---- */
 body:is(.role-company,.role-admin) .company-coord-link{

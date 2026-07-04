@@ -33,6 +33,13 @@ MEDIA_ROOT = os.path.abspath(
 )
 os.makedirs(MEDIA_ROOT, exist_ok=True)
 
+# Photos / videos for B2B "cars rented to companies" records live in a
+# separate folder tree, keyed by the special_company_rentals row id.
+SPECIAL_MEDIA_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "uploads", "special_rental_media")
+)
+os.makedirs(SPECIAL_MEDIA_ROOT, exist_ok=True)
+
 # Allowed MIME prefixes per media kind. Anything outside this list is
 # rejected at upload time so the storage doesn't fill with surprise files.
 ALLOWED_MEDIA_PREFIX = {
@@ -636,19 +643,92 @@ def list_cars():
         return jsonify({"error": "Not authorized"}), 403
 
     company_id = request.args.get("company_id")
+
+    # Server-side paginated fleet view. Triggered only when ?page= is present so
+    # existing callers (reservation forms, GPS map, etc.) that expect the full
+    # array keep working. This is what scales the admin cars table to very large
+    # fleets — the browser never downloads the whole table, only one page.
+    if request.args.get("page") is not None:
+        try:
+            page = max(1, int(request.args.get("page", 1)))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(request.args.get("page_size", 25))
+        except (TypeError, ValueError):
+            page_size = 25
+        page_size = max(1, min(page_size, 100))
+
+        where = ["c.is_active = TRUE", "co.is_active = TRUE"]
+        params = []
+        if company_id:
+            where.append("c.company_id = %s")
+            params.append(company_id)
+        vin = (request.args.get("vin") or "").strip()
+        if vin:
+            where.append("c.vin = %s")
+            params.append(vin)
+        search = (request.args.get("search") or "").strip()
+        if search:
+            where.append(
+                "(c.vin ILIKE %s OR c.model ILIKE %s OR c.type ILIKE %s "
+                "OR c.platenumber ILIKE %s OR co.companyname ILIKE %s)"
+            )
+            like = f"%{search}%"
+            params += [like, like, like, like, like]
+        gps = request.args.get("gps")
+        if gps in ("1", "true", "yes"):
+            where.append("c.has_gps = TRUE")
+        elif gps in ("0", "false", "no"):
+            where.append("c.has_gps = FALSE")
+        where_sql = " AND ".join(where)
+
+        total = query(
+            "SELECT COUNT(*) AS n FROM cars c "
+            "JOIN companies co ON co.id = c.company_id "
+            f"WHERE {where_sql}",
+            tuple(params),
+            one=True,
+        )["n"]
+        offset = (page - 1) * page_size
+        rows = query(
+            f"""SELECT c.*, co.companyname
+                  FROM cars c JOIN companies co ON co.id = c.company_id
+                 WHERE {where_sql}
+                 ORDER BY co.companyname, c.model, c.id
+                 LIMIT %s OFFSET %s""",
+            tuple(params + [page_size, offset]),
+        )
+        return jsonify({
+            "rows": _clean(rows),
+            "total": int(total),
+            "page": page,
+            "page_size": page_size,
+        })
+
+    # Optional has_gps filter for the whole-fleet views (e.g. the Car GPS map,
+    # which only ever wants GPS-equipped cars). Keeps the payload small instead
+    # of shipping every car and filtering in the browser.
+    gps = request.args.get("gps")
+    gps_sql = ""
+    if gps in ("1", "true", "yes"):
+        gps_sql = " AND c.has_gps = TRUE"
+    elif gps in ("0", "false", "no"):
+        gps_sql = " AND c.has_gps = FALSE"
+
     if company_id:
         rows = query(
-            """SELECT c.*, co.companyname
+            f"""SELECT c.*, co.companyname
                  FROM cars c JOIN companies co ON co.id = c.company_id
-                WHERE c.company_id = %s AND c.is_active = TRUE AND co.is_active = TRUE
+                WHERE c.company_id = %s AND c.is_active = TRUE AND co.is_active = TRUE{gps_sql}
                 ORDER BY c.model""",
             (company_id,),
         )
     else:
         rows = query(
-            """SELECT c.*, co.companyname
+            f"""SELECT c.*, co.companyname
                  FROM cars c JOIN companies co ON co.id = c.company_id
-                WHERE c.is_active = TRUE AND co.is_active = TRUE
+                WHERE c.is_active = TRUE AND co.is_active = TRUE{gps_sql}
                 ORDER BY co.companyname, c.model"""
         )
     return jsonify(_clean(rows))
@@ -660,18 +740,47 @@ def update_car(car_id):
     miss = _required(data, "type", "model", "color", "platenumber", "company_id")
     if miss:
         return jsonify({"error": f"Missing: {miss}"}), 400
-    row = execute(
-        """UPDATE cars
-              SET type = %s, model = %s, color = %s, platenumber = %s,
-                  has_gps = %s, company_id = %s
-            WHERE id = %s AND is_active = TRUE
-        RETURNING *""",
-        (
-            data["type"], data["model"], data["color"], data["platenumber"],
-            bool(data.get("has_gps", False)), data["company_id"], car_id,
-        ),
-        returning=True,
-    )
+
+    # Only the car's owning company (or admin) may edit it. The VIN is never
+    # touched here — it's the car's identity; edits are limited to the plate
+    # number and the descriptive fields.
+    car = query("SELECT company_id, edit_count FROM cars WHERE id = %s AND is_active = TRUE",
+                (car_id,), one=True)
+    if not car:
+        return jsonify({"error": "Not found"}), 404
+    if not _can_edit_company(int(car["company_id"])):
+        return jsonify({"error": "Not authorized"}), 403
+
+    # Company users may only correct a car twice (typo fixes); after that the
+    # record is locked. Admin edits are unlimited.
+    u = _current_user()
+    is_company = bool(u and u.get("role") == "company")
+    if is_company and int(car.get("edit_count") or 0) >= 2:
+        return jsonify({"error": "This car has reached its edit limit (2)."}), 403
+
+    try:
+        row = execute(
+            """UPDATE cars
+                  SET type = %s, model = %s, color = %s, platenumber = %s,
+                      has_gps = %s, company_id = %s,
+                      edit_count = edit_count + %s
+                WHERE id = %s AND is_active = TRUE
+            RETURNING *""",
+            (
+                data["type"], data["model"], data["color"], data["platenumber"],
+                bool(data.get("has_gps", False)), data["company_id"],
+                1 if is_company else 0, car_id,
+            ),
+            returning=True,
+        )
+    except Exception as e:
+        # A plate edited to one another car already uses trips UNIQUE(platenumber);
+        # return a clean 409 instead of a 500.
+        msg = str(e).lower()
+        if "plate" in msg:
+            return jsonify({"error": "Validation failed",
+                            "errors": {"plate_number": f"Plate '{data['platenumber']}' is already registered"}}), 409
+        return jsonify({"error": "Could not update car"}), 409
     if not row:
         return jsonify({"error": "Not found"}), 404
     return jsonify(_clean(row))
@@ -1852,6 +1961,110 @@ def delete_branch(branch_id):
     return ("", 204)
 
 
+# ----------------------- SPECIAL-COMPANY RENTALS (B2B) ----------------
+# The enterprise records another company it rents its own cars OUT to. Each
+# record is owned by the calling company and lists which of the company's own
+# car VINs that other company currently holds. Company users only.
+def _require_company_user():
+    u = _current_user()
+    if not u:
+        return None, (jsonify({"error": "Not authenticated"}), 401)
+    if u.get("role") != "company" or not u.get("company_id"):
+        return None, (jsonify({"error": "Only company users can do this"}), 403)
+    return u, None
+
+
+@app.get("/api/special-rentals")
+def list_special_rentals():
+    u, err = _require_company_user()
+    if err:
+        return err
+    rows = query(
+        """SELECT * FROM special_company_rentals
+            WHERE company_id = %s
+            ORDER BY created_at DESC""",
+        (u["company_id"],),
+    )
+    return jsonify(_clean(rows))
+
+
+@app.get("/api/admin/special-rentals")
+def admin_list_special_rentals():
+    """Admin-wide view of every B2B "cars rented to companies" record across
+    ALL companies. Joins the owning company's car so the model/color/plate/GPS
+    travel with each row (admin has no per-company car list loaded)."""
+    u = _current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    if u.get("role") != "admin":
+        return jsonify({"error": "Only admins can do this"}), 403
+    rows = query(
+        """SELECT s.*, c.model, c.color, c.platenumber, c.has_gps, c.type
+             FROM special_company_rentals s
+             LEFT JOIN cars c
+               ON c.vin = s.car_vin AND c.company_id = s.company_id
+            ORDER BY s.created_at DESC"""
+    )
+    return jsonify(_clean(rows))
+
+
+@app.post("/api/special-rentals")
+def create_special_rental():
+    u, err = _require_company_user()
+    if err:
+        return err
+    data = request.get_json(force=True) or {}
+    miss = _required(data, "company_name")
+    if miss:
+        return jsonify({"error": f"Missing: {miss}"}), 400
+
+    # phones / branches / car_vins may arrive as a list OR an already
+    # comma-joined string; normalise all three to a clean CSV string.
+    def _csv(value):
+        if isinstance(value, list):
+            return ",".join(str(v).strip() for v in value if str(v).strip())
+        return value
+
+    # One record now holds a single car (car_vin) plus its rental period.
+    # car_vins is still written (= car_vin) so legacy readers keep working.
+    car_vin = _none_if_blank(data.get("car_vin"))
+    row = execute(
+        """INSERT INTO special_company_rentals
+             (company_id, company_name, owner_name, location, x, y,
+              phones, branches, car_vin, car_vins, start_date, end_date, notes)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+        (
+            u["company_id"], data["company_name"],
+            _none_if_blank(data.get("owner_name")),
+            _none_if_blank(data.get("location")),
+            _none_if_blank(data.get("x")), _none_if_blank(data.get("y")),
+            _none_if_blank(_csv(data.get("phones"))),
+            _none_if_blank(_csv(data.get("branches"))),
+            car_vin, car_vin,
+            _none_if_blank(data.get("start_date")),
+            _none_if_blank(data.get("end_date")),
+            _none_if_blank(data.get("notes")),
+        ),
+        returning=True,
+    )
+    _log_activity(u["company_id"], "create", "special_rental", data["company_name"])
+    return jsonify(_clean(row)), 201
+
+
+@app.delete("/api/special-rentals/<int:rental_id>")
+def delete_special_rental(rental_id):
+    existing = query(
+        "SELECT company_id FROM special_company_rentals WHERE id = %s",
+        (rental_id,), one=True,
+    )
+    if not existing:
+        return jsonify({"error": "Not found"}), 404
+    if not _can_edit_company(existing["company_id"]):
+        return jsonify({"error": "Not authorized"}), 403
+    execute("DELETE FROM special_company_rentals WHERE id = %s", (rental_id,))
+    return ("", 204)
+
+
 # ----------------------- CLIENTS --------------------------------------
 def _attach_linked_companies(rows):
     """Augment client rows with a `companies` list (names of every
@@ -1967,6 +2180,18 @@ def update_client(client_id):
     personid = _none_if_blank(data.get("personid"))
     if id_type in ("passport", "national_id") and not personid:
         return jsonify({"error": "personid required for passport / national ID"}), 400
+
+    # Company users may only correct a client twice (in case of a typo);
+    # after that the record is locked. Admin edits are unlimited.
+    u = _current_user()
+    is_company = bool(u and u.get("role") == "company")
+    if is_company:
+        cur = query("SELECT edit_count FROM clients WHERE id = %s", (client_id,), one=True)
+        if not cur:
+            return jsonify({"error": "Not found"}), 404
+        if int(cur.get("edit_count") or 0) >= 2:
+            return jsonify({"error": "This client has reached its edit limit (2)."}), 403
+
     row = execute(
         """UPDATE clients
               SET personid = %s, name = %s, fathername = %s, mothername = %s,
@@ -1974,7 +2199,8 @@ def update_client(client_id):
                   phonenumber = %s, dateofbirth = %s, licenseid = %s,
                   startdatelicense = %s, enddatelicense = %s,
                   photo = COALESCE(%s, photo),
-                  id_type = COALESCE(%s, id_type)
+                  id_type = COALESCE(%s, id_type),
+                  edit_count = edit_count + %s
             WHERE id = %s AND is_active = TRUE
         RETURNING *""",
         (
@@ -1990,6 +2216,7 @@ def update_client(client_id):
             _none_if_blank(data.get("enddatelicense")),
             _none_if_blank(data.get("photo")),
             id_type,
+            1 if is_company else 0,
             client_id,
         ),
         returning=True,
@@ -2466,9 +2693,19 @@ def list_reservations():
         )
     else:
         rows = query(
-            """SELECT rv.*, c.name AS client_name, c.phonenumber AS client_phone,
+            """SELECT rv.*,
+                      c.name AS client_name, c.phonenumber AS client_phone,
+                      c.personid AS client_personid, c.fathername AS client_father,
+                      c.mothername AS client_mother, c.nationality AS client_nationality,
+                      c.dateofbirth AS client_dob, c.licenseid AS client_license,
+                      c.startdatelicense AS client_license_start,
+                      c.enddatelicense AS client_license_end, c.id_type AS client_id_type,
                       ca.model AS car_model, ca.platenumber AS car_plate,
-                      co.companyname
+                      ca.color AS car_color, ca.type AS car_type,
+                      ca.has_gps AS car_has_gps,
+                      co.companyname, co.phonenumber AS company_phone,
+                      co.location AS company_location, co.owner_name AS company_owner,
+                      co.companyid AS company_regid
                  FROM reservations rv
                  JOIN clients c ON c.id = rv.client_id
                  JOIN cars ca ON ca.vin = rv.car_vin
@@ -2983,6 +3220,100 @@ def serve_rental_media(rental_id, filename):
     endpoints above."""
     return send_from_directory(
         os.path.join(MEDIA_ROOT, str(rental_id)),
+        filename,
+    )
+
+
+# ---------- SPECIAL-RENTAL MEDIA (B2B car photos + videos) ------------
+def _can_attach_to_special(special_id: int) -> bool:
+    """True when the current user owns the B2B record's company."""
+    row = query(
+        "SELECT company_id FROM special_company_rentals WHERE id = %s",
+        (special_id,), one=True,
+    )
+    if not row:
+        return False
+    return _can_edit_company(row["company_id"])
+
+
+@app.get("/api/special-rentals/<int:special_id>/media")
+def list_special_media(special_id):
+    if not _can_attach_to_special(special_id):
+        return jsonify({"error": "Not authorized"}), 403
+    rows = query(
+        "SELECT id, kind, filename, original_name, mime, uploaded_at, uploaded_by "
+        "FROM special_rental_media WHERE special_rental_id = %s "
+        "ORDER BY uploaded_at DESC",
+        (special_id,),
+    ) or []
+    for r in rows:
+        r["url"] = f"/uploads/special_rental_media/{special_id}/{r['filename']}"
+    return jsonify(_clean(rows))
+
+
+@app.post("/api/special-rentals/<int:special_id>/media")
+def upload_special_media(special_id):
+    if not _can_attach_to_special(special_id):
+        return jsonify({"error": "Not authorized"}), 403
+    f = request.files.get("file")
+    kind = (request.form.get("kind") or "").strip().lower()
+    if not f:
+        return jsonify({"error": "No file uploaded"}), 400
+    if kind not in ALLOWED_MEDIA_PREFIX:
+        return jsonify({"error": "kind must be 'photo' or 'video'"}), 400
+
+    mime = (f.mimetype or "").lower()
+    if not any(mime.startswith(p) for p in ALLOWED_MEDIA_PREFIX[kind]):
+        return jsonify({
+            "error": f"Mime '{mime}' is not allowed for kind '{kind}'"
+        }), 400
+
+    ext = ""
+    if "." in f.filename:
+        ext = "." + f.filename.rsplit(".", 1)[-1].lower()[:6]
+    fname = f"{secrets.token_hex(8)}{ext}"
+    rec_dir = os.path.join(SPECIAL_MEDIA_ROOT, str(special_id))
+    os.makedirs(rec_dir, exist_ok=True)
+    f.save(os.path.join(rec_dir, fname))
+
+    user = _current_user() or {}
+    row = execute(
+        """INSERT INTO special_rental_media
+             (special_rental_id, kind, filename, original_name, mime, uploaded_by)
+           VALUES (%s,%s,%s,%s,%s,%s) RETURNING *""",
+        (special_id, kind, fname, f.filename, mime, user.get("username")),
+        returning=True,
+    )
+    row["url"] = f"/uploads/special_rental_media/{special_id}/{fname}"
+    return jsonify(_clean(row)), 201
+
+
+@app.delete("/api/special-rentals/<int:special_id>/media/<int:media_id>")
+def delete_special_media(special_id, media_id):
+    if not _can_attach_to_special(special_id):
+        return jsonify({"error": "Not authorized"}), 403
+    row = query(
+        "SELECT filename FROM special_rental_media "
+        "WHERE id = %s AND special_rental_id = %s",
+        (media_id, special_id), one=True,
+    )
+    if not row:
+        return jsonify({"error": "Not found"}), 404
+    path = os.path.join(SPECIAL_MEDIA_ROOT, str(special_id), row["filename"])
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+    execute("DELETE FROM special_rental_media WHERE id = %s", (media_id,))
+    return ("", 204)
+
+
+@app.get("/uploads/special_rental_media/<int:special_id>/<path:filename>")
+def serve_special_media(special_id, filename):
+    """Static-serve a B2B record's photo/video (see serve_rental_media)."""
+    return send_from_directory(
+        os.path.join(SPECIAL_MEDIA_ROOT, str(special_id)),
         filename,
     )
 

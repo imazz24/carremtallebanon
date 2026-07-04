@@ -17,6 +17,8 @@ const API = (() => {
     addCompany:    (b) => fetch(url("/api/companies"), { method:"POST", headers:{ "Content-Type":"application/json"}, body: JSON.stringify(b)}).then(json),
 
     listCars:      (companyId) => fetch(url("/api/cars" + (companyId ? `?company_id=${companyId}` : "")), { headers: authHeaders() }).then(json),
+    listCarsPaged: (qs) => fetch(url("/api/cars?" + qs), { headers: authHeaders() }).then(json),
+    listGpsCars:   () => fetch(url("/api/cars?gps=1"), { headers: authHeaders() }).then(json),
     addCar:        (b) => fetch(url("/api/cars"),      { method:"POST", headers:{ "Content-Type":"application/json"}, body: JSON.stringify(b)}).then(json),
 
     listClients:   () => fetch(url("/api/clients"), { headers: authHeaders() }).then(json),
@@ -26,6 +28,11 @@ const API = (() => {
 
     addRental:     (b) => fetch(url("/api/rentals"),   { method:"POST", headers:{ "Content-Type":"application/json"}, body: JSON.stringify(b)}).then(json),
     report:        () => fetch(url("/api/rentals/report"), { headers: authHeaders() }).then(json),
+
+    listSpecialRentals: () => fetch(url("/api/special-rentals"), { headers: authHeaders() }).then(json),
+    listAdminSpecialRentals: () => fetch(url("/api/admin/special-rentals"), { headers: authHeaders() }).then(json),
+    addSpecialRental:   (b) => fetch(url("/api/special-rentals"), { method:"POST", headers:{ "Content-Type":"application/json", ...authHeaders() }, body: JSON.stringify(b)}).then(json),
+    delSpecialRental:   (id) => fetch(url(`/api/special-rentals/${id}`), { method:"DELETE", headers: authHeaders() }),
   };
 })();
 
@@ -166,7 +173,19 @@ const Pager = (() => {
     }
   }
 
-  return { reset, slice, render };
+  // Server-side pager: the caller already knows the true `total` row count and
+  // supplies only the current page's rows. We fake an `info` object so the same
+  // render() (size selector + nav) drives it, and `onChange` re-fetches instead
+  // of re-slicing an in-memory array.
+  function renderServer(key, topSel, bottomSel, total, onChange){
+    const s = _get(key);
+    const totalPages = Math.ceil(total / s.size) || 1;
+    if (s.page > totalPages) s.page = totalPages;
+    const info = { rows: [], page: s.page, total: totalPages, allCount: total, size: s.size };
+    render(key, topSel, bottomSel, info, onChange);
+  }
+
+  return { reset, slice, render, renderServer, state: _get };
 })();
 
 function showModal(sel){
@@ -396,33 +415,78 @@ function renderCompanies(){
 }
 
 /* ============== CARS ============== */
-async function refreshCars(){
-  state.cars = await API.listCars();
-  renderCars();
-  rebuildCarsVinDropdown();
+// Total row count of the last server page fetch, so re-renders (e.g. language
+// switch) can redraw the pager without another round-trip.
+let _carsTotal = 0;
+// True unfiltered fleet size for the dashboard stat card — kept separate from
+// _carsTotal (which reflects the current filter) and from state.cars (one page).
+let _carsCount = 0;
+
+// Cheap COUNT-only fetch (page_size=1) for the dashboard "Cars" stat, so it
+// shows the real fleet total no matter which page/filter the table is on.
+async function refreshCarsCount(){
+  try {
+    const d = await API.listCarsPaged("page=1&page_size=1");
+    _carsCount = d.total || 0;
+  } catch (e){ /* leave the previous value */ }
 }
-function getCarsRows(){
-  const company = $("#filter-cars-company")?.value || "";
-  const vin     = $("#filter-cars-vin")?.value     || "";
-  let rows = state.cars;
-  if (company) rows = rows.filter(c => c.companyname === company);
-  if (vin)     rows = rows.filter(c => c.vin === vin);
-  return rows;
+
+function companyIdByName(name){
+  if (!name) return "";
+  const c = (state.companies || []).find(co => co.companyname === name);
+  return c ? c.id : "";
+}
+
+// Fetch one page of the admin fleet from the server, honoring the current
+// company / search filters and the pager's page + page-size. Company users
+// never reach this table, so this path is admin-only.
+async function loadCarsPage(){
+  const tbl = $("#tbl-cars");
+  if (!tbl) return;
+  const s = Pager.state("cars");
+  const params = new URLSearchParams();
+  params.set("page", s.page);
+  params.set("page_size", s.size);
+  const cid = companyIdByName($("#filter-cars-company")?.value || "");
+  if (cid) params.set("company_id", cid);
+  const vin = $("#filter-cars-vehicle")?.value || "";
+  if (vin) params.set("vin", vin);
+  try {
+    const data = await API.listCarsPaged(params.toString());
+    state.cars   = data.rows  || [];
+    _carsTotal   = data.total || 0;
+    // When nothing is filtered, the page total IS the whole fleet size — keep
+    // the dashboard stat in sync for free.
+    if (!cid && !vin) _carsCount = _carsTotal;
+  } catch (e){
+    state.cars = []; _carsTotal = 0;
+  }
+  renderCars();
+}
+
+async function refreshCars(){
+  Pager.reset("cars");
+  await loadCarsPage();
 }
 
 function renderCars(){
   const tbl = $("#tbl-cars");
-  const rows = getCarsRows();
+  if (!tbl) return;
+  const rows = state.cars || [];
+  const countEl = $("#cars-count");
+  if (countEl) countEl.textContent = _carsTotal
+    ? `${_carsTotal} ${_carsTotal === 1 ? t("report.result") : t("report.results")}`
+    : "";
   if (!rows.length){
     const pt = $("#pager-top-cars"); if (pt) pt.hidden = true;
     const pb = $("#pager-cars"); if (pb) pb.hidden = true;
     return emptyRow(tbl, 9);
   }
 
-  const info = Pager.slice("cars", rows);
-  tbl.tBodies[0].innerHTML = info.rows.map((c,i) => `
+  const s = Pager.state("cars");
+  tbl.tBodies[0].innerHTML = rows.map((c,i) => `
     <tr>
-      <td>${(info.page - 1) * info.size + i + 1}</td>
+      <td>${(s.page - 1) * s.size + i + 1}</td>
       <td>${escape(c.companyname)}</td>
       <td><code>${escape(c.vin)}</code></td>
       <td>${escape(c.type)}</td>
@@ -433,7 +497,7 @@ function renderCars(){
       <td>${rowActionsHtml("cars", c.id)}</td>
     </tr>`).join("");
   bindRowActions(tbl);
-  Pager.render("cars", "#pager-top-cars", "#pager-cars", info, renderCars);
+  Pager.renderServer("cars", "#pager-top-cars", "#pager-cars", _carsTotal, loadCarsPage);
 }
 
 /* ============== BRANCHES (admin: shown as sub-rows in #tbl-companies) ===== */
@@ -464,13 +528,60 @@ function getClientsRows(){
   return rows;
 }
 
+/* Populate + open the shared client-detail modal for a full-record view. */
+function openClientDetail(cr){
+  const body = $("#client-detail-body");
+  if (!body || !cr) return;
+  const k = (key) => escape(t(key));
+  const v = (x) => x == null || x === "" ? "—" : escape(String(x));
+  const name = [cr.firstname, cr.lastname].filter(Boolean).join(" ") || cr.name || "—";
+  const idTypeKeys = {
+    passport: "addClient.idType.passport",
+    national_id: "addClient.idType.national",
+    license: "addClient.idType.license",
+    international_license: "addClient.idType.international",
+  };
+  const idType = cr.id_type ? escape(t(idTypeKeys[cr.id_type] || cr.id_type)) : "—";
+  // The uploaded "photo" is the client's DOCUMENT (ID / passport / licence),
+  // so show it full-width and rectangular (contain, not a cropped avatar) and
+  // let a click open it full-size in a new tab. A PDF gets a link instead.
+  const isPdf = cr.photo && /^data:application\/pdf|\.pdf($|\?)/i.test(cr.photo);
+  const docBody = !cr.photo
+    ? `<p class="client-doc-empty">${k("clients.noDoc")}</p>`
+    : isPdf
+      ? `<a href="${escape(cr.photo)}" target="_blank" rel="noopener" class="btn btn-ghost-dark client-doc-pdf">📄 ${k("action.view")}</a>`
+      : `<a href="${escape(cr.photo)}" target="_blank" rel="noopener" class="client-doc-link" title="${k("action.view")}">
+           <img src="${escape(cr.photo)}" alt="${k("addClient.photoOrDoc")}" class="client-doc-photo" loading="lazy">
+         </a>`;
+  body.innerHTML = `
+    <dl class="detail-grid">
+      <dt>${k("clients.f.name")}</dt>        <dd><strong>${escape(name)}</strong></dd>
+      <dt>${k("clients.f.pid")}</dt>         <dd>${v(cr.personid)}</dd>
+      <dt>${k("clients.f.father")}</dt>      <dd>${v(cr.fathername)}</dd>
+      <dt>${k("clients.f.mother")}</dt>      <dd>${v(cr.mothername)}</dd>
+      <dt>${k("addClient.nationality")}</dt> <dd>${v(cr.nationality)}</dd>
+      <dt>${k("clients.f.dob")}</dt>         <dd>${v(cr.dateofbirth)}</dd>
+      <dt>${k("clients.f.phone")}</dt>       <dd>${cr.phonenumber ? `<a href="tel:${escape(cr.phonenumber)}">${escape(cr.phonenumber)}</a>` : "—"}</dd>
+      <div class="full"></div>
+      <dt>${k("clients.f.lic")}</dt>         <dd><code>${v(cr.licenseid)}</code></dd>
+      <dt>${k("addClient.idType")}</dt>      <dd>${idType}</dd>
+      <dt>${k("clients.f.licstart")}</dt>    <dd>${v(cr.startdatelicense)}</dd>
+      <dt>${k("clients.f.licend")}</dt>      <dd>${v(cr.enddatelicense)}</dd>
+    </dl>
+    <section class="client-doc-section">
+      <h4 class="client-doc-title">${k("addClient.photoOrDoc")}</h4>
+      ${docBody}
+    </section>`;
+  showModal("#client-detail-modal");
+}
+
 function renderClients(){
   const tbl = $("#tbl-clients");
   const rows = getClientsRows();
   if (!rows.length){
     const pt = $("#pager-top-clients"); if (pt) pt.hidden = true;
     const pb = $("#pager-clients"); if (pb) pb.hidden = true;
-    return emptyRow(tbl, 12);
+    return emptyRow(tbl, 10);
   }
 
   const info = Pager.slice("clients", rows);
@@ -482,19 +593,25 @@ function renderClients(){
   tbl.tBodies[0].innerHTML = info.rows.map((c,i) => `
     <tr>
       <td>${(info.page - 1) * info.size + i + 1}</td>
-      <td>${photo(c.photo, [c.firstname, c.lastname].filter(Boolean).join(" ") || c.name)}</td>
+      <td data-col="photo">${photo(c.photo, [c.firstname, c.lastname].filter(Boolean).join(" ") || c.name)}</td>
       <td>${cell(c.personid)}</td>
       <td>${cell(c.firstname)}</td>
       <td>${cell(c.lastname)}</td>
-      <td>${cell(c.fathername)}</td>
-      <td>${cell(c.mothername)}</td>
       <td>${cell(c.nationality)}</td>
       <td>${cell(c.phonenumber)}</td>
       <td>${cell(c.licenseid)}</td>
       <td>${cell(c.enddatelicense)}</td>
-      <td>${rowActionsHtml("clients", c.id)}</td>
+      <td data-col="view">
+        <button type="button" class="row-btn client-view" data-id="${c.id}"
+                title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">👁</button>
+      </td>
     </tr>`).join("");
-  bindRowActions(tbl);
+  tbl.querySelectorAll(".client-view").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const rec = (state.clients || []).find(x => x.id === Number(btn.dataset.id));
+      if (rec) openClientDetail(rec);
+    });
+  });
   Pager.render("clients", "#pager-top-clients", "#pager-clients", info, renderClients);
 }
 
@@ -573,6 +690,10 @@ function _daysBetween(a, b){
 function renderReport(){
   const tbl = $("#tbl-report");
   const rows = getReportRows();
+  const _u = AUTH.user();
+  // Company users get a compact, purpose-built table; the admin grid stays
+  // the comprehensive premium layout.
+  if (_u && _u.role === "company") return renderReportCompany(rows);
   renderReportAnalytics(rows);
   if (!rows.length){
     const pt = $("#pager-top-report"); if (pt) pt.hidden = true;
@@ -580,86 +701,164 @@ function renderReport(){
     return emptyRow(tbl, 7);
   }
 
-  const info = Pager.slice("report", rows);
+  // The admin report is a COMPACT summary — one row per rental showing
+  //   company · vehicle · client · period · GPS(green/red) · status(green/red)
+  // plus a 👁 button. Clicking 👁 (or the row) EXPANDS an inline detail panel
+  // beneath the row that lists every field (both phones, colour, plate, exact
+  // dates, status…) and a button to the full media / extra-driver modal.
+  // Atomic Latin tokens (dates, phones, plate) are LTR-isolated so they read
+  // correctly even when the UI is Arabic/RTL.
+  const info  = Pager.slice("report", rows);
   const today = _raToday();
-  // The admin report is a comprehensive, premium grid: every column groups a
-  // bold primary value with muted, optionally-labelled sub-lines, so the whole
-  // client + company + vehicle + rental record is on screen without the page
-  // ever scrolling sideways. Atomic Latin tokens (dates, phones, IDs, VIN) are
-  // LTR-isolated so they read correctly even when the UI is Arabic/RTL.
-  const ltr = (v) => `<span class="ltr">${escape(v)}</span>`;
-  // A labelled sub-line: tiny muted key + value. `lt` = wrap value LTR.
-  const meta = (key, v, lt) => v
-    ? `<span class="gt-sub">${key ? `<span class="gt-k">${escape(t(key))}</span>` : ""}<span class="${lt ? "ltr" : ""}">${escape(v)}</span></span>`
-    : "";
-  const join = (...parts) => parts.filter(Boolean).map(escape).join(" · ");
+  const ltr   = (v) => `<span class="ltr">${escape(v)}</span>`;
+  const dash  = `<span class="cell-dash">—</span>`;
+  const day   = (d) => d ? String(d).slice(0, 10) : "";
+  const dayC  = (d) => d ? ltr(String(d).slice(0, 10)) : dash;   // for detail cells
+  const tel   = (p) => p ? `<a href="tel:${escape(p)}" class="ltr">${escape(p)}</a>` : dash;
+  // A phone field may hold several numbers joined by commas/semicolons — render
+  // each on its own line as a tappable tel: link so two+ numbers stay readable.
+  const telList = (raw) => {
+    const parts = String(raw || "").split(/[,;\n/]+/).map(s => s.trim()).filter(Boolean);
+    if (!parts.length) return dash;
+    return parts.map(p => `<a href="tel:${escape(p)}" class="ltr rd-phone">${escape(p)}</a>`).join("");
+  };
+  // green Yes / red No pill (badge yes|no).
+  const yn = (on) => on
+    ? `<span class="badge yes">${escape(t("yes"))}</span>`
+    : `<span class="badge no">${escape(t("no"))}</span>`;
+  // A labelled field (key left, value right) inside the expanded detail panel.
+  const field = (key, val) =>
+    `<div class="rd-item"><span class="rd-k">${escape(t(key))}</span><span class="rd-v">${val}</span></div>`;
+  // A titled group of fields inside the detail panel.
+  const group = (titleKey, fieldsHtml) =>
+    `<section class="rd-group"><h4 class="rd-h">${escape(t(titleKey))}</h4><div class="rd-fields">${fieldsHtml}</div></section>`;
 
   tbl.tBodies[0].innerHTML = info.rows.map((r, i) => {
     const idx = (info.page - 1) * info.size + i;
-    const st  = _raStatus(r, today);   // active | overdue | returned
-    const statusBadge = `<span class="status-pill status-${st}">${escape(t("analytics.kpi." + st))}</span>`;
-    const gps = r.car_has_gps ? `<span class="gt-chip gt-chip-gps">GPS</span>` : "";
+    // Active = out and not yet past its end date; anything else is "ended".
+    const status = _raStatus(r, today) === "active"
+      ? `<span class="badge yes">${escape(t("report.active"))}</span>`
+      : `<span class="badge no">${escape(t("report.ended"))}</span>`;
+    const gps    = yn(r.car_has_gps);
+    const period = `${ltr(day(r.start_date)) || dash}<span class="rp-arrow">→</span>${ltr(day(r.end_date)) || dash}`;
 
-    // Avatar: the client's photo if present, else colored initials.
-    const initials = _initials(r.client_name);
-    const avatar = r.client_photo
-      ? `<span class="gt-avatar"><img src="${escape(r.client_photo)}" alt=""></span>`
-      : `<span class="gt-avatar gt-avatar-initials" style="background:${_avatarColor(r.client_name)}">${escape(initials)}</span>`;
-
-    const parents = join(r.client_father, r.client_mother);
-    const days    = _daysBetween(r.start_date, r.end_date);
-
-    return `
-    <tr data-row="${idx}" class="report-row">
-      <td data-col="client">
-        <div class="gt-client">
-          ${avatar}
-          <div class="gt-client-text">
-            <span class="gt-primary">${escape(r.client_name) || "—"}</span>
-            ${meta("report.parents", parents)}
-            ${meta(null, join(r.client_nationality, r.client_dob), false)}
-          </div>
+    // The full breakdown shown when the row is expanded — grouped into
+    // Company / Vehicle / Client / Rental cards so it reads like a receipt.
+    const detail = `
+      <div class="report-detail">
+        ${group("report.company", field("report.cphone", telList(r.company_phone)))}
+        ${group("report.vehicle",
+            field("cars.f.model", r.car_model ? escape(r.car_model) : dash) +
+            field("cars.f.color", r.car_color ? escape(r.car_color) : dash) +
+            field("report.plate", r.car_plate ? ltr(r.car_plate) : dash) +
+            field("report.gps",   gps))}
+        ${group("report.client", field("report.phone", telList(r.client_phone)))}
+        ${group("report.period",
+            field("report.from",   dayC(r.start_date)) +
+            field("report.to",     dayC(r.end_date)) +
+            field("report.status", status))}
+        <div class="report-detail-actions">
+          <button type="button" class="row-btn report-media" data-media="${idx}">${escape(t("report.openMedia"))}</button>
         </div>
-      </td>
-      <td data-col="contact">
-        ${r.client_phone
-          ? `<a href="tel:${escape(r.client_phone)}" class="gt-primary gt-phone ltr">${escape(r.client_phone)}</a>`
-          : `<span class="gt-primary cell-dash">—</span>`}
-        ${meta("report.idNo", r.client_personid, true)}
-        ${meta("report.license", r.client_licenseid, true)}
-      </td>
-      <td data-col="company">
-        <span class="gt-primary">${escape(r.company_name) || "—"}</span>
-        ${meta("report.code", r.company_code, true)}
-        ${meta(null, r.company_location, false)}
-        ${meta(null, r.company_phone, true)}
-      </td>
-      <td data-col="vehicle">
-        <span class="gt-primary">${escape(r.car_model) || "—"} ${gps}</span>
-        ${meta(null, join(r.car_type, r.car_color), false)}
-        ${meta("report.plate", r.car_plate, true)}
-        ${meta("report.vin", r.car_vin, true)}
-      </td>
-      <td data-col="period">
-        <span class="gt-period">${ltr(r.start_date)}<span class="gt-arrow">→</span>${ltr(r.end_date)}</span>
-        ${days != null ? `<span class="gt-sub">${days} ${escape(t("report.days"))}</span>` : ""}
-        ${r.returned_at ? meta("report.returned", String(r.returned_at).slice(0, 10), true) : ""}
-      </td>
-      <td data-col="status">${statusBadge}</td>
-      <td data-col="actions">
-        <div class="row-actions">
-          <button type="button" class="row-btn pdf" data-detail="${idx}">${escape(t("action.open"))}</button>
-        </div>
+      </div>`;
+
+    return `<tr data-row="${idx}" class="report-row">
+        <td data-col="company"><strong>${escape(r.company_name) || "—"}</strong></td>
+        <td data-col="vehicle">${r.car_model ? escape(r.car_model) : dash}</td>
+        <td data-col="client"><strong>${escape(r.client_name) || "—"}</strong></td>
+        <td data-col="period">${period}</td>
+        <td data-col="gps">${gps}</td>
+        <td data-col="status">${status}</td>
+        <td data-col="view">
+          <button type="button" class="row-btn report-view" data-detail="${idx}"
+                  aria-expanded="false" aria-controls="report-detail-${idx}"
+                  title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">
+            <span class="rv-eye" aria-hidden="true">👁</span>
+            <span class="rv-chev" aria-hidden="true">⌄</span>
+          </button>
+        </td>
+      </tr>
+      <tr class="report-detail-row" id="report-detail-${idx}" hidden>
+        <td colspan="7">${detail}</td>
+      </tr>`;
+  }).join("");
+
+  // Toggle the inline detail panel from the 👁 button or a click on the row.
+  const toggleDetail = (idx, btn) => {
+    const dr = document.getElementById(`report-detail-${idx}`);
+    if (!dr) return;
+    const opening = dr.hasAttribute("hidden");
+    if (opening) dr.removeAttribute("hidden"); else dr.setAttribute("hidden", "");
+    if (btn){
+      btn.setAttribute("aria-expanded", String(opening));
+      // Flip the label so the icon reads as "view" (closed) / "hide" (open).
+      const lbl = opening ? t("report.hide") : t("action.view");
+      btn.title = lbl; btn.setAttribute("aria-label", lbl);
+    }
+  };
+  $$("tr.report-row", tbl).forEach(tr => {
+    const idx = Number(tr.dataset.row);
+    const btn = $(".report-view", tr);
+    tr.addEventListener("click", (e) => {
+      if (e.target.closest("a")) return;   // don't hijack tel: links
+      toggleDetail(idx, btn);
+    });
+  });
+  // The detail panel's button opens the full modal (photos / video / extra driver).
+  $$(".report-media", tbl).forEach(b => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      Detail.open(rows[Number(b.dataset.media)]);
+    });
+  });
+  Pager.render("report", "#pager-top-report", "#pager-report", info, renderReport);
+}
+
+/* Company rental report — a compact, at-a-glance list. Columns:
+   client full name · phone · vehicle · color · plate · GPS (green/red) ·
+   from · to · 👁. The eye button (and any row click) opens the shared
+   Detail modal, where the company can view the record and attach photos,
+   a video, or an extra driver (co-renter). */
+function renderReportCompany(rows){
+  const tbl = $("#tbl-report-co");
+  if (!tbl) return;
+  if (!rows.length){
+    const pt = $("#pager-top-report"); if (pt) pt.hidden = true;
+    const pb = $("#pager-report");     if (pb) pb.hidden = true;
+    return emptyRow(tbl, 9);
+  }
+  const info = Pager.slice("report", rows);
+  const ltr  = (v) => `<span class="ltr">${escape(v)}</span>`;
+  const dash = `<span class="cell-dash">—</span>`;
+  const day  = (d) => d ? ltr(String(d).slice(0, 10)) : dash;
+
+  tbl.tBodies[0].innerHTML = info.rows.map((r, i) => {
+    const idx = (info.page - 1) * info.size + i;
+    // GPS: green "Yes" / red "No" pill (badge yes|no).
+    const gps = r.car_has_gps
+      ? `<span class="badge yes">${escape(t("yes"))}</span>`
+      : `<span class="badge no">${escape(t("no"))}</span>`;
+    const phone = r.client_phone
+      ? `<a href="tel:${escape(r.client_phone)}" class="ltr">${escape(r.client_phone)}</a>`
+      : dash;
+    return `<tr data-row="${idx}" class="report-row">
+      <td data-col="client"><strong>${escape(r.client_name) || "—"}</strong></td>
+      <td data-col="phone">${phone}</td>
+      <td data-col="vehicle">${r.car_model ? escape(r.car_model) : dash}</td>
+      <td data-col="color">${r.car_color ? escape(r.car_color) : dash}</td>
+      <td data-col="plate">${r.car_plate ? ltr(r.car_plate) : dash}</td>
+      <td data-col="gps">${gps}</td>
+      <td data-col="from">${day(r.start_date)}</td>
+      <td data-col="to">${day(r.end_date)}</td>
+      <td data-col="view">
+        <button type="button" class="row-btn report-view" data-detail="${idx}"
+                title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">👁</button>
       </td>
     </tr>`;
   }).join("");
 
-  // Click anywhere on the row OR the Open button to see the detail/PDF dialog
   $$("tr.report-row", tbl).forEach(tr => {
-    tr.addEventListener("click", () => {
-      const idx = Number(tr.dataset.row);
-      Detail.open(rows[idx]);
-    });
+    tr.addEventListener("click", () => Detail.open(rows[Number(tr.dataset.row)]));
   });
   Pager.render("report", "#pager-top-report", "#pager-report", info, renderReport);
 }
@@ -2089,6 +2288,12 @@ function setupAddCarForm(){
   const form = $("#form-add-car");
   if (!form) return;
 
+  // Edit-mode state: when set, Save updates this car (VIN locked) instead of
+  // creating a new one. `_myCars` caches the tab's own table rows so the Edit
+  // button can find the full record by id.
+  let editingCarId = null;
+  let _myCars = [];
+
   // Fill the four static dropdowns up-front.
   fillStaticSelect($("#add-car-type"),  CAR_TYPES);
   fillStaticSelect($("#add-car-model"), CAR_MODELS);
@@ -2111,6 +2316,18 @@ function setupAddCarForm(){
           `<option value="${escape(v.vin)}" label="${escape(`${v.model} (${v.type}, ${v.color})`)}">`
         ).join("");
       }
+      // Searchable dropdown: label leads with the model so typing the first
+      // 3+ letters of the model filters (SearchSelect prefix mode). The VIN
+      // is appended so it's visible when picking.
+      const vinSelect = $("#add-car-vin-select");
+      if (vinSelect){
+        const ph = vinSelect.querySelector('option[disabled][hidden]')?.outerHTML || "";
+        vinSelect.innerHTML = ph + list.map(v =>
+          `<option value="${escape(v.vin)}">${escape(`${v.model} · ${v.type} · ${v.color} — ${v.vin}`)}</option>`
+        ).join("");
+        vinSelect.value = "";
+        if (vinSelect._ss) vinSelect._ss.sync();
+      }
       list.forEach(v => { knownVinsByVin[v.vin.toUpperCase()] = v; });
     } catch (e){
       // Soft-fail — the form still works without the registry.
@@ -2118,14 +2335,31 @@ function setupAddCarForm(){
   }
   loadKnownVins();
 
-  // VIN split mode: prefix (11 chars, locked) + serial (6 chars, editable)
+  // VIN input has four mutually-exclusive modes:
+  //   picker → searchable dropdown of known VINs (default)
+  //   full   → raw 17-char input for a VIN not in the list
+  //   split  → known prefix (locked) + serial (6 chars, editable)
+  //   locked → read-only VIN badge (while editing an existing car)
+  const vinPickerMode = $("#vin-picker-mode");
   const vinFullMode  = $("#vin-full-mode");
   const vinSplitMode = $("#vin-split-mode");
+  const vinLockedMode = $("#vin-locked-mode");
+  const vinSelect    = $("#add-car-vin-select");
   const vinPrefixBadge = $("#vin-prefix-badge");
+  const vinLockedBadge = $("#vin-locked-badge");
   const vinSerialInput = $("#vin-serial-input");
   const vinEditFullBtn = $("#vin-edit-full-btn");
+  const vinCustomBtn   = $("#vin-custom-btn");
+  const vinBackListBtn = $("#vin-back-list-btn");
   let _vinPrefix = "";
   let _vinOrigSerial = "";   // last 6 of the picked VIN, shown as a shadow
+
+  function showVinMode(mode){
+    if (vinPickerMode) vinPickerMode.hidden = mode !== "picker";
+    if (vinFullMode)   vinFullMode.hidden   = mode !== "full";
+    if (vinSplitMode)  vinSplitMode.hidden  = mode !== "split";
+    if (vinLockedMode) vinLockedMode.hidden = mode !== "locked";
+  }
 
   function enterSplitMode(vin){
     const v = (vin || "").toUpperCase();
@@ -2138,8 +2372,7 @@ function setupAddCarForm(){
       vinSerialInput.value = "";
       vinSerialInput.placeholder = _vinOrigSerial || "000000";
     }
-    if (vinFullMode)  vinFullMode.hidden = true;
-    if (vinSplitMode) vinSplitMode.hidden = false;
+    showVinMode("split");
     setTimeout(() => vinSerialInput?.focus(), 50);
   }
 
@@ -2150,17 +2383,16 @@ function setupAddCarForm(){
     return typed || _vinOrigSerial;
   }
 
+  // "✎ Change VIN" from split mode: abandon the current pick and return to
+  // the searchable dropdown so the user can choose a different VIN.
   function exitSplitMode(){
-    const serial = _currentSerial();
-    const fullVin = _vinPrefix + serial;
-    const vinInput2 = form.querySelector('input[name="vin"]');
-    if (vinInput2) vinInput2.value = fullVin;
     _vinPrefix = "";
     _vinOrigSerial = "";
-    if (vinFullMode)  vinFullMode.hidden = false;
-    if (vinSplitMode) vinSplitMode.hidden = true;
+    const vinInput2 = form.querySelector('input[name="vin"]');
+    if (vinInput2) vinInput2.value = "";
+    if (vinSelect){ vinSelect.value = ""; if (vinSelect._ss) vinSelect._ss.sync(); }
     lastVinSeen = "";
-    setTimeout(() => vinInput2?.focus(), 50);
+    showVinMode("picker");
   }
 
   function getSplitVin(){
@@ -2365,9 +2597,12 @@ function setupAddCarForm(){
       clearAllFieldErrors(form);
       lastVinSeen = "";
       _vinPrefix = "";
-      if (vinFullMode)  vinFullMode.hidden = false;
-      if (vinSplitMode) vinSplitMode.hidden = true;
+      if (vinInput) vinInput.value = "";
       if (vinSerialInput) vinSerialInput.value = "";
+      if (vinSelect){ vinSelect.value = ""; if (vinSelect._ss) vinSelect._ss.sync(); }
+      // Only drop back to the picker when NOT mid-edit — exitCarEditMode owns
+      // the VIN mode while an existing car is being corrected.
+      if (editingCarId == null) showVinMode("picker");
     }, 0);
   });
 
@@ -2376,6 +2611,39 @@ function setupAddCarForm(){
   vinInput.addEventListener("input",  decodeCurrentVin);
   vinInput.addEventListener("blur",   decodeCurrentVin);
   vinInput.addEventListener("change", decodeCurrentVin);
+
+  // ---- VIN mode toggles ----
+  // Picking a VIN from the searchable dropdown: mirror it into the hidden
+  // vin input (so required-field validation sees it) and drop into split
+  // mode so the user edits just the serial number.
+  if (vinSelect){
+    vinSelect.addEventListener("change", () => {
+      const vin = (vinSelect.value || "").toUpperCase();
+      if (!vin) return;
+      if (vinInput) vinInput.value = vin;
+      setFieldError(form, "vin", "");
+      const known = knownVinsByVin[vin];
+      if (known) autoFillFromKnown(known);
+      else enterSplitMode(vin);
+    });
+  }
+  if (vinCustomBtn){
+    vinCustomBtn.addEventListener("click", () => {
+      if (vinSelect){ vinSelect.value = ""; if (vinSelect._ss) vinSelect._ss.sync(); }
+      if (vinInput) vinInput.value = "";
+      showVinMode("full");
+      setTimeout(() => vinInput?.focus(), 50);
+    });
+  }
+  if (vinBackListBtn){
+    vinBackListBtn.addEventListener("click", () => {
+      if (vinInput) vinInput.value = "";
+      lastVinSeen = "";
+      if (vinHint){ vinHint.hidden = true; vinHint.textContent = ""; }
+      setFieldError(form, "vin", "");
+      showVinMode("picker");
+    });
+  }
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -2386,9 +2654,14 @@ function setupAddCarForm(){
       return;
     }
 
-    if (!validateRequiredFields(form, [
-      "vin", "type", "model", "color", "plate_icon", "plate_number",
-    ])){
+    const editing = editingCarId != null;
+
+    // The VIN is only validated when creating — in edit mode it's locked and
+    // never sent (the backend ignores it), so skip the VIN checks entirely.
+    const requiredFields = editing
+      ? ["type", "model", "color", "plate_icon", "plate_number"]
+      : ["vin", "type", "model", "color", "plate_icon", "plate_number"];
+    if (!validateRequiredFields(form, requiredFields)){
       toast(t("toast.fillAll"), "error");
       return;
     }
@@ -2396,7 +2669,7 @@ function setupAddCarForm(){
     const fd       = new FormData(form);
     const vin      = (getSplitVin() || (fd.get("vin") || "").toString().trim()).toUpperCase();
 
-    if (vin.length !== 17){
+    if (!editing && vin.length !== 17){
       setFieldError(form, "vin", t("addCar.vinLength"));
       toast(t("addCar.vinLength"), "error");
       return;
@@ -2410,28 +2683,33 @@ function setupAddCarForm(){
     const platenumber = `${icon} ${plateRaw}`.trim();
 
     try {
-      const r = await fetch(API.url("/api/cars"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({
-          vin, type, model, color,
-          platenumber,
-          company_id: u.company_id,
-          has_gps,
-        }),
-      });
+      const body = editing
+        ? { type, model, color, platenumber, company_id: u.company_id, has_gps }
+        : { vin, type, model, color, platenumber, company_id: u.company_id, has_gps };
+      const r = await fetch(
+        editing ? API.url(`/api/cars/${editingCarId}`) : API.url("/api/cars"),
+        {
+          method: editing ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify(body),
+        });
       const data = await r.json().catch(() => ({}));
       if (!r.ok){
         // Server-side validation: paint each error on its corresponding field.
+        // The cross-company VIN clash comes back as errors.vin — surface it
+        // prominently so the user knows the VIN belongs to another company.
         if (data.errors && typeof data.errors === "object"){
           Object.entries(data.errors).forEach(([k, v]) => setFieldError(form, k, v));
-          toast(data.error || t("toast.error"), "error");
+          if (data.errors.vin) showAddCarStatus(data.errors.vin);
+          toast(data.errors.vin || data.error || t("toast.error"), "error");
         } else {
+          if (data.error) showAddCarStatus(data.error);
           toast(data.error || t("toast.error"), "error");
         }
         return;
       }
       // Success: clear everything for the next car, keep no field state behind.
+      exitCarEditMode();
       form.reset();
       [$("#add-car-type"), $("#add-car-model"), $("#add-car-color"), $("#add-car-icon")].forEach(sel => {
         if (!sel) return;
@@ -2441,16 +2719,113 @@ function setupAddCarForm(){
       const vinHintEl = $("#add-car-vin-hint");
       if (vinHintEl){ vinHintEl.hidden = true; vinHintEl.textContent = ""; }
       lastVinSeen = "";
-      showAddCarStatus(t("addCar.saved").replace("{plate}", platenumber));
-      toast(t("toast.added"), "success");
-      // Update the create-rental and create-reservation Car dropdowns with
-      // the new entry, so it's selectable without a page refresh.
+      showAddCarStatus(editing
+        ? t("addCar.updated")
+        : t("addCar.saved").replace("{plate}", platenumber));
+      toast(editing ? t("toast.saved") : t("toast.added"), "success");
+      // Refresh this tab's own table and the create-rental / create-reservation
+      // Car dropdowns so the new/edited entry shows without a page refresh.
+      await refreshMyCarsTable();
       refreshRentalPickers();
       Reservations.refreshPickers();
     } catch (err){
       toast(err.message || t("toast.error"), "error");
     }
   });
+
+  // ---- Edit-an-existing-car (typo correction, max 2×, VIN locked) ----
+  const carSubmitBtn = $("#add-car-submit");
+  const carCancelBtn = $("#add-car-cancel-edit");
+
+  function enterCarEditMode(c){
+    editingCarId = c.id;
+    autoFillFromExistingCar(c);        // fills type/model/color/icon/plate/gps
+    // Lock the VIN — it's the car's identity and can't change.
+    if (vinLockedBadge) vinLockedBadge.textContent = c.vin || "";
+    const vinInput2 = form.querySelector('input[name="vin"]');
+    if (vinInput2) vinInput2.value = c.vin || "";
+    showVinMode("locked");
+    if (carSubmitBtn){
+      carSubmitBtn.removeAttribute("data-i18n");
+      carSubmitBtn.textContent = t("addCar.update");
+    }
+    if (carCancelBtn) carCancelBtn.hidden = false;
+    form.classList.add("car-editing");
+    showAddCarStatus(t("addCar.editingNow").replace("{plate}", c.platenumber || c.vin || ""));
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function exitCarEditMode(){
+    if (editingCarId == null) return;
+    editingCarId = null;
+    if (carSubmitBtn){
+      carSubmitBtn.setAttribute("data-i18n", "addCar.action");
+      carSubmitBtn.textContent = t("addCar.action");
+    }
+    if (carCancelBtn) carCancelBtn.hidden = true;
+    form.classList.remove("car-editing");
+    const vinInput2 = form.querySelector('input[name="vin"]');
+    if (vinInput2) vinInput2.value = "";
+    if (vinSelect){ vinSelect.value = ""; if (vinSelect._ss) vinSelect._ss.sync(); }
+    showVinMode("picker");
+  }
+
+  if (carCancelBtn){
+    carCancelBtn.addEventListener("click", () => {
+      exitCarEditMode();
+      form.reset();
+      showAddCarStatus._t && clearTimeout(showAddCarStatus._t);
+    });
+  }
+
+  async function refreshMyCarsTable(){
+    const tb = $("#my-cars-rows");
+    if (!tb) return;
+    const u = AUTH.user();
+    if (!u || u.role !== "company"){ _myCars = []; tb.innerHTML = ""; return; }
+    let cars = [];
+    try {
+      cars = await fetch(API.url(`/api/cars?company_id=${u.company_id}`), { headers: authHeaders() }).then(r => r.json());
+    } catch (e){ cars = []; }
+    _myCars = Array.isArray(cars) ? cars : [];
+    if (!_myCars.length){
+      tb.innerHTML = `<tr><td colspan="8" class="empty-cell">${escape(t("addCar.noCars"))}</td></tr>`;
+      return;
+    }
+    const dash = `<span class="badge no">—</span>`;
+    const cell = (v) => v ? escape(v) : dash;
+    tb.innerHTML = _myCars.map(c => {
+      const left = Math.max(0, 2 - Number(c.edit_count || 0));
+      const gps = c.has_gps
+        ? `<span class="badge yes">${escape(t("yes"))}</span>`
+        : `<span class="badge no">${escape(t("no"))}</span>`;
+      const action = left > 0
+        ? `<button type="button" class="row-btn my-car-edit" data-id="${c.id}">✎ ${escape(t("action.edit"))}</button>`
+        : `<span class="badge no">${escape(t("addClient.noEditsLeft"))}</span>`;
+      return `<tr>
+        <td class="ltr">${cell(c.vin)}</td>
+        <td>${cell(c.type)}</td>
+        <td>${cell(c.model)}</td>
+        <td>${cell(c.color)}</td>
+        <td class="ltr">${cell(c.platenumber)}</td>
+        <td>${gps}</td>
+        <td><span class="badge ${left > 0 ? "yes" : "no"}">${left}</span></td>
+        <td class="my-car-action">${action}</td>
+      </tr>`;
+    }).join("");
+  }
+  // Expose so panel navigation can refresh the table on open.
+  window.refreshMyCarsTable = refreshMyCarsTable;
+
+  const myCarRows = $("#my-cars-rows");
+  if (myCarRows){
+    myCarRows.addEventListener("click", (e) => {
+      const btn = e.target.closest(".my-car-edit");
+      if (!btn) return;
+      const c = _myCars.find(x => String(x.id) === btn.dataset.id);
+      if (c) enterCarEditMode(c);
+    });
+  }
 }
 
 function showAddCarStatus(message){
@@ -2600,6 +2975,12 @@ function setupAddClientForm(){
   const form = $("#form-add-client");
   if (!form) return;
 
+  // Edit-mode state: when set, Save updates this client instead of creating
+  // a new one. `_myClients` caches the rows rendered in the tab's own table
+  // so the Edit button can find the full record by id.
+  let editingClientId = null;
+  let _myClients = [];
+
   fillStaticSelect($("#add-client-nationality"), NATIONALITIES);
 
   // Populate the country-code dropdown — Lebanon (+961) selected by default.
@@ -2713,6 +3094,25 @@ function setupAddClientForm(){
     form.querySelectorAll("[data-hide-for-id-type]").forEach(el => {
       const blocked = el.dataset.hideForIdType.split(/\s+/).filter(Boolean);
       visit(el, blocked.includes(idt));
+    });
+    markParentRequirement();
+  }
+  // Show a red "*" on father/mother only while Lebanese is selected, so the
+  // conditional requirement is visible before the user hits Save.
+  function markParentRequirement(){
+    const need = ($("#add-client-nationality")?.value || "").trim() === "Lebanese";
+    form.querySelectorAll('[name="fathername"], [name="mothername"]').forEach(inp => {
+      const label = inp.closest(".field")?.querySelector("label");
+      if (!label) return;
+      let star = label.querySelector(".req-star");
+      if (need && !star){
+        star = document.createElement("span");
+        star.className = "req-star";
+        star.textContent = " *";
+        label.appendChild(star);
+      } else if (!need && star){
+        star.remove();
+      }
     });
   }
   if (idTypeSel) idTypeSel.addEventListener("change", applyIdTypeVisibility);
@@ -2860,12 +3260,17 @@ function setupAddClientForm(){
       body.personid  = "";
     }
 
+    // Editing an existing client (typo fix) → PUT that record; otherwise
+    // create a new one. The backend caps company edits at two per client.
+    const editing = editingClientId != null;
     try {
-      const r = await fetch(API.url("/api/clients"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify(body),
-      });
+      const r = await fetch(
+        editing ? API.url(`/api/clients/${editingClientId}`) : API.url("/api/clients"),
+        {
+          method: editing ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify(body),
+        });
       const data = await r.json().catch(() => ({}));
       if (!r.ok){
         // Duplicate personid / licenseid surface here as DB constraint errors;
@@ -2875,15 +3280,20 @@ function setupAddClientForm(){
         toast(msg, "error");
         return;
       }
+      exitEditMode();
       form.reset();
       const natSel  = $("#add-client-nationality");
       if (natSel){ natSel.value = ""; if (natSel._ss) natSel._ss.sync(); }
       const codeSel2 = $("#add-client-phone-code");
       if (codeSel2){ codeSel2.value = "961"; if (codeSel2._ss) codeSel2._ss.sync(); }
-      showAddClientStatus(t("addClient.saved").replace("{pid}", body.personid || body.licenseid));
-      toast(t("toast.added"), "success");
-      // Keep the admin's clients list and both client pickers in sync.
+      showAddClientStatus(editing
+        ? t("addClient.updated")
+        : t("addClient.saved").replace("{pid}", body.personid || body.licenseid));
+      toast(editing ? t("toast.saved") : t("toast.added"), "success");
+      // Keep the admin's clients list, this tab's own table, and both client
+      // pickers in sync.
       await refreshClients();
+      await refreshMyClientsTable();
       refreshRentalPickers();
       Reservations.refreshPickers();
     } catch (err){
@@ -2919,20 +3329,32 @@ function setupAddClientForm(){
     // hides licenseid and reuses personid as the license number (we
     // route it through to body.licenseid in saveClient).
     required.push("personid");
-    // Lebanese clients always need father + mother on record (it's part
-    // of the official identity in Lebanon). For every other nationality
-    // the fields stay visible but optional.
-    // Father/mother names are always optional — kept for Lebanese convention but not enforced.
+    // Lebanese clients must carry father + mother names (it's part of the
+    // official identity in Lebanon). For every other nationality those two
+    // fields stay optional — everything else is still required.
+    if (nat === "Lebanese") required.push("fathername", "mothername");
     if (!validateRequiredFields(form, required)){
-      toast(t("toast.fillAll"), "error");
+      // Give a clearer nudge for the Lebanese-only parent-name rule so the
+      // user understands nothing was saved and exactly why.
+      const fd2 = new FormData(form);
+      const parentsMissing = nat === "Lebanese" && (
+        !(fd2.get("fathername") || "").toString().trim() ||
+        !(fd2.get("mothername") || "").toString().trim());
+      if (parentsMissing){
+        showAddClientStatus(t("addClient.parentsRequired"));
+        toast(t("addClient.parentsRequired"), "error");
+      } else {
+        toast(t("toast.fillAll"), "error");
+      }
       return;
     }
 
     // Photo is optional. If the user didn't pick one, ask whether they want
     // to add one now; "Yes" opens the picker and saves once a photo lands,
-    // "No" saves immediately without a photo.
+    // "No" saves immediately without a photo. Skipped when editing — a typo
+    // fix shouldn't nag for a photo the record may already have.
     const photoData = ($("#add-client-photo-data")?.value || "").trim();
-    if (!photoData){
+    if (!photoData && editingClientId == null){
       const wantPhoto = window.confirm(t("addClient.photo.confirm"));
       if (wantPhoto){
         const fileInput = $("#add-client-photo-file");
@@ -2959,6 +3381,90 @@ function setupAddClientForm(){
 
     await saveClient();
   });
+
+  // ---- Edit-an-existing-client (typo correction, max 2×) ----
+  const submitBtn = $("#add-client-submit");
+  const cancelBtn = $("#add-client-cancel-edit");
+
+  function enterEditMode(c){
+    editingClientId = c.id;
+    autoFillFromClient(c);
+    // autoFillFromClient covers everything except the personid input.
+    const pidEl = form.querySelector('[name="personid"]');
+    if (pidEl) pidEl.value = c.personid || c.licenseid || "";
+    if (submitBtn){
+      submitBtn.removeAttribute("data-i18n");
+      submitBtn.textContent = t("addClient.update");
+    }
+    if (cancelBtn) cancelBtn.hidden = false;
+    form.classList.add("client-editing");
+    showAddClientStatus(t("addClient.editingNow").replace("{name}", c.name || c.personid || c.licenseid || ""));
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function exitEditMode(){
+    if (editingClientId == null) return;
+    editingClientId = null;
+    if (submitBtn){
+      submitBtn.setAttribute("data-i18n", "addClient.action");
+      submitBtn.textContent = t("addClient.action");
+    }
+    if (cancelBtn) cancelBtn.hidden = true;
+    form.classList.remove("client-editing");
+  }
+
+  if (cancelBtn){
+    cancelBtn.addEventListener("click", () => {
+      exitEditMode();
+      form.reset();               // reset handler sweeps selects + errors
+      hideAddClientStatus();
+    });
+  }
+
+  async function refreshMyClientsTable(){
+    const tb = $("#my-clients-rows");
+    if (!tb) return;
+    const u = AUTH.user();
+    if (!u || u.role !== "company"){ _myClients = []; tb.innerHTML = ""; return; }
+    let clients = [];
+    try {
+      clients = await fetch(API.url("/api/clients"), { headers: authHeaders() }).then(r => r.json());
+    } catch (e){ clients = []; }
+    _myClients = Array.isArray(clients) ? clients : [];
+    if (!_myClients.length){
+      tb.innerHTML = `<tr><td colspan="7" class="empty-cell">${escape(t("addClient.noClients"))}</td></tr>`;
+      return;
+    }
+    const dash = `<span class="badge no">—</span>`;
+    const cell = (v) => v ? escape(v) : dash;
+    tb.innerHTML = _myClients.map(c => {
+      const left = Math.max(0, 2 - Number(c.edit_count || 0));
+      const action = left > 0
+        ? `<button type="button" class="row-btn my-client-edit" data-id="${c.id}">✎ ${escape(t("action.edit"))}</button>`
+        : `<span class="badge no">${escape(t("addClient.noEditsLeft"))}</span>`;
+      return `<tr>
+        <td>${cell(c.name)}</td>
+        <td class="ltr">${cell(c.personid)}</td>
+        <td>${cell(c.nationality)}</td>
+        <td class="ltr">${cell(c.phonenumber)}</td>
+        <td class="ltr">${cell(c.licenseid)}</td>
+        <td><span class="badge ${left > 0 ? "yes" : "no"}">${left}</span></td>
+        <td class="my-client-action">${action}</td>
+      </tr>`;
+    }).join("");
+  }
+  // Expose so panel navigation can refresh the table on open.
+  window.refreshMyClientsTable = refreshMyClientsTable;
+
+  const myRows = $("#my-clients-rows");
+  if (myRows){
+    myRows.addEventListener("click", (e) => {
+      const btn = e.target.closest(".my-client-edit");
+      if (!btn) return;
+      const c = _myClients.find(x => String(x.id) === btn.dataset.id);
+      if (c) enterEditMode(c);
+    });
+  }
 }
 
 function showAddClientStatus(message){
@@ -3369,25 +3875,32 @@ function clearFilterSelect(sel){
   if (sel._ss) sel._ss.sync();
 }
 
-function rebuildCarsVinDropdown(){
-  const company = $("#filter-cars-company")?.value || "";
-  const vinSel  = $("#filter-cars-vin");
-  if (!vinSel) return;
-  if (company){
-    const vins = state.cars
-      .filter(c => c.companyname === company)
-      .map(c => c.vin);
-    populateFilterSelect(vinSel, vins);
-    vinSel.disabled = false;
-  } else {
-    // Reset the VIN dropdown to its disabled placeholder.
-    const placeholder = vinSel.querySelector('option[disabled][hidden]')?.outerHTML
-      || `<option value="" disabled selected hidden>${escape(t("filter.vinHint"))}</option>`;
-    vinSel.innerHTML = placeholder;
-    vinSel.value = "";
-    vinSel.disabled = true;
-    if (vinSel._ss) vinSel._ss.sync();
+// The car filter cascades off the company filter: pick a company and this
+// searchable dropdown (data-ss-prefix) fills with only THAT company's cars —
+// which stays scalable however large the overall fleet grows. With no company
+// chosen it's disabled, because a global list of every car can't be a dropdown.
+async function rebuildCarsVehicleDropdown(){
+  const sel = $("#filter-cars-vehicle");
+  if (!sel) return;
+  const placeholder = sel.querySelector('option[disabled][hidden]')?.outerHTML
+    || `<option value="" disabled selected hidden>${escape(t("filter.vinHint"))}</option>`;
+  const cid = companyIdByName($("#filter-cars-company")?.value || "");
+  if (!cid){
+    sel.innerHTML = placeholder;
+    sel.value = "";
+    sel.disabled = true;
+    if (sel._ss) sel._ss.sync();
+    return;
   }
+  let cars = [];
+  try { cars = await API.listCars(cid); } catch (e){ cars = []; }
+  const label = (c) => c.platenumber ? `${c.model} — ${c.platenumber}` : c.model;
+  sel.innerHTML = placeholder
+    + `<option value="">${escape(t("filter.all"))}</option>`
+    + cars.map(c => `<option value="${escape(c.vin)}">${escape(label(c))}</option>`).join("");
+  sel.value = "";
+  sel.disabled = false;
+  if (sel._ss) sel._ss.sync();
 }
 
 function setupReportSearch(){
@@ -3399,18 +3912,21 @@ function setupReportSearch(){
     renderCompanies();
   });
 
-  // ---------- Cars toolbar (with cascading VIN) ----------
-  $("#filter-cars-company")?.addEventListener("change", () => {
-    rebuildCarsVinDropdown();
+  // ---------- Cars toolbar (server-side paging + cascading car dropdown) ----------
+  // Filters drive a fresh server query (page reset to 1), never an in-memory
+  // slice — so the table scales to very large fleets. The car dropdown cascades
+  // off the company pick (only that company's cars, kept searchable).
+  $("#filter-cars-company")?.addEventListener("change", async () => {
+    await rebuildCarsVehicleDropdown();
     Pager.reset("cars");
-    renderCars();
+    loadCarsPage();
   });
-  $("#filter-cars-vin")?.addEventListener("change", () => { Pager.reset("cars"); renderCars(); });
-  $("#filter-cars-clear")?.addEventListener("click", () => {
+  $("#filter-cars-vehicle")?.addEventListener("change", () => { Pager.reset("cars"); loadCarsPage(); });
+  $("#filter-cars-clear")?.addEventListener("click", async () => {
     clearFilterSelect($("#filter-cars-company"));
-    rebuildCarsVinDropdown();
+    await rebuildCarsVehicleDropdown();   // company now empty → dropdown resets to disabled
     Pager.reset("cars");
-    renderCars();
+    loadCarsPage();
   });
 
   // ---------- Clients toolbar ----------
@@ -3573,7 +4089,7 @@ function animateCount(el, to){
 function updateStatsDashboard(){
   const el = (id, val) => animateCount($(`#${id}`), val);
   el("stat-companies", state.companies.length);
-  el("stat-cars",      state.cars.length);
+  el("stat-cars",      _carsCount || state.cars.length);
   el("stat-clients",   state.clients.length);
   el("stat-rentals",   state.report.length);
 
@@ -3902,17 +4418,14 @@ const DashboardLive = (() => {
           // Keep the stat cards (companies / cars / clients / rentals) moving
           // too — refresh the underlying datasets, then recompute the totals.
           await Promise.all([
-            refreshCompanies(), refreshCars(), refreshClients(), refreshReport(),
+            refreshCompanies(), refreshCarsCount(), refreshClients(), refreshReport(),
           ]);
           updateStatsDashboard();
           break;
-        case "companies":         await refreshCompanies(); break;
-        case "cars":              await refreshCars();      break;
-        case "car-gps":           await refreshCars(); CarGps.populate(); break;
-        case "clients":           await refreshClients();   break;
-        case "report":            await refreshReport();    break;
-        case "admin-reservations":await Reservations.refresh(); break;
-        // "support" has nothing live to poll.
+        // Only the dashboard polls live. The data-table panels
+        // (companies / cars / clients / car-gps / report / reservations) are
+        // refreshed once when you navigate into them (see AdminSidebar.show),
+        // so they no longer re-fetch/re-render every few seconds while open.
       }
     } catch (e){ /* transient fetch error on a poll → keep current view */ }
   }
@@ -4066,8 +4579,11 @@ function showLogin(){
 /* ----- role-based UI gate ----- */
 /* ============== ADMIN SIDEBAR PANEL TOGGLE ============== */
 const AdminSidebar = (() => {
-  const PANELS = ["dashboard", "companies", "cars", "car-gps", "clients", "admin-reservations", "report", "support"];
-  let _current = "dashboard";
+  // "admin-home" is the card-based landing; the rest are the panels a card (or
+  // the — now hidden — sidebar) opens. Dashboard is special-cased below because
+  // it's shown via style.display, not the .admin-panel-active class.
+  const PANELS = ["admin-home", "dashboard", "companies", "cars", "car-gps", "clients", "admin-reservations", "report", "admin-special", "support"];
+  let _current = "admin-home";
 
   function show(panel){
     if (panel === "register-modal"){
@@ -4079,33 +4595,90 @@ const AdminSidebar = (() => {
       if (p === "dashboard"){
         const sd = $("#stats-dashboard");
         const ia = $("#inactive-alerts");
-        if (sd) sd.style.display = panel === "dashboard" ? "" : "none";
-        if (ia) ia.style.display = panel === "dashboard" ? "" : "none";
+        if (sd) sd.style.display = panel === "dashboard" ? "block" : "none";
+        if (ia) ia.style.display = panel === "dashboard" ? "block" : "none";
       } else {
         const el = $(`#${p}`);
         if (!el) return;
         el.classList.toggle("admin-panel-active", p === panel);
       }
     });
-    $$(".sidebar-btn").forEach(btn => {
+    $$("#admin-sidebar .sidebar-btn").forEach(btn => {
       btn.classList.toggle("active", btn.dataset.panel === panel);
     });
+    // Drop the (unused) sidebar offset and let the card grid breathe full-width.
+    document.body.classList.toggle("admin-home-active", panel === "admin-home");
+    // Refresh a data-table panel once, on open, instead of polling it every
+    // few seconds (which made the bento tables re-render constantly). The
+    // loaders no-op the re-render when the payload is unchanged.
+    switch (panel){
+      case "companies":          refreshCompanies(); break;
+      case "cars":               refreshCars();      break;
+      case "car-gps":            /* CarGps.onShow() loads its own full list */ break;
+      case "clients":            refreshClients();   break;
+      case "report":             refreshReport();    break;
+      case "admin-reservations": Reservations.refresh(); break;
+      case "admin-special":      AdminSpecial.refresh(); break;
+    }
     // The GPS/map tab needs a nudge once it's visible: Leaflet can only size
     // itself against a laid-out container.
     if (panel === "car-gps" && typeof CarGps !== "undefined") CarGps.onShow();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function setup(){
-    $$(".sidebar-btn").forEach(btn => {
+    $$("#admin-sidebar .sidebar-btn").forEach(btn => {
       btn.addEventListener("click", () => show(btn.dataset.panel));
     });
-    show("dashboard");
+    // Card-based navigation: each home card opens its panel; each panel's
+    // "← Back to home" button returns to the card grid.
+    $$("[data-ago]").forEach(card => {
+      card.addEventListener("click", () => show(card.dataset.ago));
+    });
+    $$("[data-ahome]").forEach(btn => {
+      btn.addEventListener("click", () => show("admin-home"));
+    });
+    show("admin-home");
   }
 
   function current(){ return _current; }
 
   return { setup, show, current };
 })();
+
+/* Light/dark theme toggle — shared by both signed-in roles. Both default to
+   the premium dark theme; the header button flips to a white/light theme and
+   remembers the choice. Adding `theme-light` disables the shared dark rules
+   (they're gated `:not(.theme-light)`), so the base light tokens take over. */
+let _themeWired = false;
+function setupThemeToggle(){
+  const THEME_KEY = "carrental.uiTheme";
+  const themeBtn = $("#btn-theme-toggle");
+  function applyTheme(mode){
+    const light = mode === "light";
+    document.body.classList.toggle("theme-light", light);
+    if (themeBtn){
+      // Label/icon show the mode you'll switch TO.
+      const icon  = themeBtn.querySelector(".theme-toggle-icon");
+      const label = themeBtn.querySelector(".theme-toggle-label");
+      if (icon)  icon.textContent  = light ? "🌙" : "☀️";
+      if (label) label.textContent = light ? t("theme.dark") : t("theme.light");
+    }
+  }
+  applyTheme(localStorage.getItem(THEME_KEY) || "dark");
+  if (themeBtn && !_themeWired){
+    _themeWired = true;
+    themeBtn.addEventListener("click", () => {
+      const next = document.body.classList.contains("theme-light") ? "dark" : "light";
+      localStorage.setItem(THEME_KEY, next);
+      applyTheme(next);
+    });
+    // Keep the toggle label correct after a language switch.
+    document.addEventListener("lang:changed", () => {
+      applyTheme(document.body.classList.contains("theme-light") ? "light" : "dark");
+    });
+  }
+}
 
 function applyRoleUI(){
   const user = AUTH.user();
@@ -4116,6 +4689,7 @@ function applyRoleUI(){
 
   if (user.role === "admin"){
     AdminSidebar.setup();
+    AdminSpecial.setup();
     const collapseBtn = $("#sidebar-collapse-btn");
     if (collapseBtn){
       collapseBtn.addEventListener("click", () => {
@@ -4133,8 +4707,10 @@ function applyRoleUI(){
   }
 
   if (user.role === "company"){
-    const COMPANY_PANELS = ["report", "reservations", "company-returns", "company-info", "company-cars", "company-clients", "company-api", "support"];
-    let _compCurrent = "report";
+    // "company-home" is the card-based landing; the rest are the individual
+    // panels a card (or the sidebar) opens.
+    const COMPANY_PANELS = ["company-home", "report", "reservations", "company-returns", "company-info", "company-cars", "company-clients", "company-special", "company-api", "support"];
+    let _compCurrent = "company-home";
 
     function showCompanyPanel(panel){
       _compCurrent = panel;
@@ -4145,16 +4721,43 @@ function applyRoleUI(){
       $$("#company-sidebar .sidebar-btn").forEach(btn => {
         btn.classList.toggle("active", btn.dataset.cpanel === panel);
       });
+      // The card home has its own body class so we can drop the sidebar offset
+      // and let the grid breathe full-width.
+      document.body.classList.toggle("company-home-active", panel === "company-home");
       // Opening the Reservations tab: rebuild the car/client pickers so cars
       // (or clients) added on another tab are selectable without a refresh.
       if (panel === "reservations") Reservations.refreshPickers();
       // Opening the Returns tab: pull fresh rentals so due/overdue dates are
       // current without a page refresh.
       if (panel === "company-returns") Returns.refresh();
+      // Opening the special-companies tab: refresh the car checklist + the
+      // recorded-companies list.
+      if (panel === "company-special") SpecialRentals.refresh();
+      // Opening the Add-Client tab: refresh the "clients you added" table so
+      // freshly-added / edited clients (and remaining edit counts) show.
+      if (panel === "company-clients" && window.refreshMyClientsTable) window.refreshMyClientsTable();
+      // Opening the Add-Car tab: refresh the "cars you added" table.
+      if (panel === "company-cars" && window.refreshMyCarsTable) window.refreshMyCarsTable();
+      // Opening the Report card: pull fresh rentals so the client-rental
+      // list reflects any rentals just created on another panel.
+      if (panel === "report") refreshReport();
+      // Jumping between panels can leave you scrolled halfway down a long form.
+      window.scrollTo({ top: 0, behavior: "smooth" });
     }
+    // Expose so other modules (e.g. deep links) could navigate if needed.
+    window.showCompanyPanel = showCompanyPanel;
 
     $$("#company-sidebar .sidebar-btn").forEach(btn => {
       btn.addEventListener("click", () => showCompanyPanel(btn.dataset.cpanel));
+    });
+
+    // Card-based navigation: each home card opens its panel; each panel's
+    // "← Back to home" button returns to the card grid.
+    $$("[data-cgo]").forEach(card => {
+      card.addEventListener("click", () => showCompanyPanel(card.dataset.cgo));
+    });
+    $$("[data-chome]").forEach(btn => {
+      btn.addEventListener("click", () => showCompanyPanel("company-home"));
     });
 
     const compCollapseBtn = $("#company-sidebar-collapse");
@@ -4166,8 +4769,11 @@ function applyRoleUI(){
       });
     }
 
-    showCompanyPanel("report");
+    showCompanyPanel("company-home");
   }
+
+  // Both signed-in roles get the light/dark toggle.
+  setupThemeToggle();
 }
 
 function setupAuth(){
@@ -4940,32 +5546,7 @@ const Detail = (() => {
   });
 
   // Co-renters
-  function showClientDetail(cr){
-    const body = $("#client-detail-body");
-    if (!body) return;
-    const k = (key) => escape(t(key));
-    const v = (x) => x == null || x === "" ? "—" : escape(String(x));
-    const name = [cr.firstname, cr.lastname].filter(Boolean).join(" ") || cr.name || "—";
-    const photoHtml = cr.photo
-      ? `<div class="client-photo-strip"><img src="${escape(cr.photo)}" alt="" class="client-photo"></div>`
-      : "";
-    body.innerHTML = `${photoHtml}
-      <dl class="detail-grid">
-        <dt>${k("clients.f.name")}</dt>        <dd><strong>${escape(name)}</strong></dd>
-        <dt>${k("clients.f.pid")}</dt>         <dd>${v(cr.personid)}</dd>
-        <dt>${k("clients.f.father")}</dt>      <dd>${v(cr.fathername)}</dd>
-        <dt>${k("clients.f.mother")}</dt>      <dd>${v(cr.mothername)}</dd>
-        <dt>${k("addClient.nationality")}</dt> <dd>${v(cr.nationality)}</dd>
-        <dt>${k("clients.f.dob")}</dt>         <dd>${v(cr.dateofbirth)}</dd>
-        <dt>${k("clients.f.phone")}</dt>       <dd>${cr.phonenumber ? `<a href="tel:${escape(cr.phonenumber)}">${escape(cr.phonenumber)}</a>` : "—"}</dd>
-        <div class="full"></div>
-        <dt>${k("clients.f.lic")}</dt>         <dd><code>${v(cr.licenseid)}</code></dd>
-        <dt>${k("addClient.idType")}</dt>      <dd>${v(cr.id_type)}</dd>
-        <dt>${k("clients.f.licstart")}</dt>    <dd>${v(cr.startdatelicense)}</dd>
-        <dt>${k("clients.f.licend")}</dt>      <dd>${v(cr.enddatelicense)}</dd>
-      </dl>`;
-    showModal("#client-detail-modal");
-  }
+  const showClientDetail = (cr) => openClientDetail(cr);
   $("#client-detail-close")?.addEventListener("click", () => hideModal("#client-detail-modal"));
   $("#client-detail-cancel")?.addEventListener("click", () => hideModal("#client-detail-modal"));
 
@@ -5302,14 +5883,26 @@ const CarGps = (() => {
   const CENTER = [33.8547, 35.8623];   // Lebanon
   let map = null, marker = null, selectedVin = null, wired = false;
 
+  // The GPS view works on GPS-equipped cars across ALL companies (fetched with
+  // ?gps=1). The model / plate dropdowns narrow that set down to the car(s) the
+  // admin wants to locate. Sorted by a stable, readable key (company, model).
   function _cars(){
-    // Admin dataset; newest companies first is irrelevant — sort by a stable,
-    // readable key (company, then model).
-    const list = (state.cars || []).slice();
-    const gpsOnly = $("#cargps-gpsonly")?.checked;
-    return (gpsOnly ? list.filter(c => c.has_gps) : list)
-      .sort((a, b) => (a.companyname || "").localeCompare(b.companyname || "")
-                   || (a.model || "").localeCompare(b.model || ""));
+    const model = $("#cargps-filter-model")?.value || "";
+    const plate = $("#cargps-filter-plate")?.value || "";
+    let list = (state.cars || []).filter(c => c.has_gps);
+    if (model) list = list.filter(c => (c.model || "") === model);
+    if (plate) list = list.filter(c => (c.platenumber || "") === plate);
+    return list.sort((a, b) => (a.companyname || "").localeCompare(b.companyname || "")
+                            || (a.model || "").localeCompare(b.model || ""));
+  }
+
+  // Fill the Model / Plate filter dropdowns from the current GPS car set
+  // (deduped + sorted + "— All —" via the shared helper).
+  function populateFilters(){
+    if (typeof populateFilterSelect !== "function") return;
+    const base = (state.cars || []).filter(c => c.has_gps);
+    populateFilterSelect($("#cargps-filter-model"), base.map(c => c.model));
+    populateFilterSelect($("#cargps-filter-plate"), base.map(c => c.platenumber));
   }
 
   function _companyOf(car){
@@ -5470,7 +6063,12 @@ const CarGps = (() => {
 
   // Called whenever the tab becomes visible: (re)populate from the freshest
   // car/company data and size the map.
-  function onShow(){
+  async function onShow(){
+    // The GPS map only wants GPS-equipped cars, from every company. The cars
+    // table loads pages, so state.cars may be a slice — refetch just the GPS
+    // fleet (server-side ?gps=1 keeps the payload small) before populating.
+    try { state.cars = await API.listGpsCars(); } catch (e){ /* keep whatever we have */ }
+    populateFilters();
     populate();
     ensureMap();
     if (map) setTimeout(() => map.invalidateSize(true), 80);
@@ -5481,8 +6079,9 @@ const CarGps = (() => {
     wired = true;
     const sel = $("#cargps-car");
     sel?.addEventListener("change", () => { if (sel.value) select(sel.value); });
-    $("#cargps-gpsonly")?.addEventListener("change", () => {
-      // Re-filter; keep the current pick if it survives the filter.
+    // Model / plate filters narrow the picker; keep the current pick if it
+    // survives the new filter, otherwise clear the map + detail panel.
+    const reFilter = () => {
       const keep = selectedVin && _cars().some(c => c.vin === selectedVin) ? selectedVin : null;
       selectedVin = keep;
       populate();
@@ -5491,7 +6090,9 @@ const CarGps = (() => {
         const e = $("#cargps-map-empty"); if (e) e.hidden = false;
         if (marker && map){ map.removeLayer(marker); marker = null; }
       }
-    });
+    };
+    $("#cargps-filter-model")?.addEventListener("change", reFilter);
+    $("#cargps-filter-plate")?.addEventListener("change", reFilter);
     document.addEventListener("lang:changed", () => {
       populate();
       if (selectedVin) select(selectedVin);
@@ -5582,43 +6183,118 @@ const Reservations = (() => {
     if (!rows.length){
       const pt = $("#pager-top-admin-reservations"); if (pt) pt.hidden = true;
       const pb = $("#pager-admin-reservations"); if (pb) pb.hidden = true;
-      return emptyRow(tbl, 6);
+      return emptyRow(tbl, 13);
     }
     const today = _today();
     const info = Pager.slice("admin-reservations", rows);
-    const sub  = (v) => v ? `<span class="gt-sub">${escape(v)}</span>` : "";
-    const subL = (v) => v ? `<span class="gt-sub ltr">${escape(v)}</span>` : "";
-    tbl.tBodies[0].innerHTML = info.rows.map((rv) => {
+    const dash = `<span class="cell-dash">—</span>`;
+    const cell = (v) => v == null || v === "" ? dash : escape(String(v));
+    tbl.tBodies[0].innerHTML = info.rows.map((rv, i) => {
+      const idx = (info.page - 1) * info.size + i;
       const statusCls = rv.status || "pending";
       const statusLabel = t(`reservations.${statusCls}`) || rv.status;
       // Highlight reservations booked today so the newest stand out.
       const isToday = (rv.created_at || "").slice(0, 10) === today;
-      const phone = rv.client_phone
-        ? `<a href="tel:${escape(rv.client_phone)}" class="gt-sub ltr">${escape(rv.client_phone)}</a>` : "";
+      const cPhone = rv.company_phone
+        ? `<a href="tel:${escape(rv.company_phone)}" class="ltr">${escape(rv.company_phone)}</a>` : dash;
+      const clPhone = rv.client_phone
+        ? `<a href="tel:${escape(rv.client_phone)}" class="ltr">${escape(rv.client_phone)}</a>` : dash;
       return `<tr${isToday ? ' class="rv-row-today"' : ""}>
-        <td data-col="company">
-          <div class="gt-client">
-            <span class="gt-avatar gt-avatar-initials" style="background:${_avatarColor(rv.companyname)}">${escape(_initials(rv.companyname))}</span>
-            <div class="gt-client-text"><span class="gt-primary">${escape(rv.companyname || "—")}</span></div>
-          </div>
-        </td>
-        <td data-col="client">
-          <span class="gt-primary">${escape(rv.client_name || "—")}</span>
-          ${phone}
-        </td>
-        <td data-col="vehicle">
-          <span class="gt-primary">${escape(rv.car_model || "—")}</span>
-          ${subL(rv.car_plate)}
-        </td>
-        <td data-col="period">
-          <span class="gt-period"><span class="ltr">${escape(rv.start_date || "")}</span><span class="gt-arrow">→</span><span class="ltr">${escape(rv.end_date || "")}</span></span>
-        </td>
-        <td data-col="booked">${rv.created_at ? subL(_fmtBooked(rv.created_at)) : `<span class="cell-dash">—</span>`}</td>
+        <td>${idx + 1}</td>
+        <td data-col="company"><strong>${cell(rv.companyname)}</strong></td>
+        <td data-col="cphone">${cPhone}</td>
+        <td data-col="client"><strong>${cell(rv.client_name)}</strong></td>
+        <td data-col="clphone">${clPhone}</td>
+        <td data-col="model">${cell(rv.car_model)}</td>
+        <td data-col="color">${cell(rv.car_color)}</td>
+        <td data-col="plate"><span class="ltr">${cell(rv.car_plate)}</span></td>
+        <td data-col="gps">${_gpsDot(rv.car_has_gps)}</td>
+        <td data-col="from"><span class="ltr">${cell(rv.start_date)}</span></td>
+        <td data-col="to"><span class="ltr">${cell(rv.end_date)}</span></td>
         <td data-col="status"><span class="reservation-status-badge ${statusCls}">${escape(statusLabel)}</span></td>
+        <td data-col="view">
+          <button type="button" class="row-btn rv-detail-btn" data-rv-detail="${rv.id}"
+                  title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">👁</button>
+        </td>
       </tr>`;
     }).join("");
+    tbl.querySelectorAll(".rv-detail-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const rec = _data.find(x => x.id === Number(btn.dataset.rvDetail));
+        if (rec) _openReservationDetail(rec);
+      });
+    });
     Pager.render("admin-reservations", "#pager-top-admin-reservations",
                  "#pager-admin-reservations", info, renderAdmin);
+  }
+
+  // Small green (has GPS) / red (no GPS) status dot for the reservations table.
+  function _gpsDot(on){
+    const cls = on ? "on" : "off";
+    const label = escape(t(on ? "yes" : "no"));
+    return `<span class="gps-dot ${cls}" title="${label}" aria-label="${label}"></span>`;
+  }
+
+  // Read-only "everything not shown in the columns" popup: the full related
+  // company / client / car records behind a reservation.
+  function _openReservationDetail(rv){
+    const body = $("#reservation-detail-body");
+    if (!body || !rv) return;
+    const k = (key) => escape(t(key));
+    const v = (x) => x == null || x === "" ? "—" : escape(String(x));
+    const idTypeKeys = {
+      passport: "addClient.idType.passport",
+      national_id: "addClient.idType.national",
+      license: "addClient.idType.license",
+      international_license: "addClient.idType.international",
+    };
+    const idType = rv.client_id_type
+      ? escape(t(idTypeKeys[rv.client_id_type] || rv.client_id_type)) : "—";
+    const gps = rv.car_has_gps ? k("yes") : k("no");
+    body.innerHTML = `
+      <section class="rvd-group">
+        <h4 class="rvd-h">${k("report.company")}</h4>
+        <dl class="detail-grid">
+          <dt>${k("companies.f.name")}</dt> <dd><strong>${v(rv.companyname)}</strong></dd>
+          <dt>${k("register.f.owner")}</dt>  <dd>${v(rv.company_owner)}</dd>
+          <dt>${k("companies.f.cid")}</dt>   <dd>${v(rv.company_regid)}</dd>
+          <dt>${k("report.cphone")}</dt>     <dd>${rv.company_phone ? `<a href="tel:${escape(rv.company_phone)}">${escape(rv.company_phone)}</a>` : "—"}</dd>
+          <dt>${k("companies.f.loc")}</dt>   <dd>${v(rv.company_location)}</dd>
+        </dl>
+      </section>
+      <section class="rvd-group">
+        <h4 class="rvd-h">${k("report.client")}</h4>
+        <dl class="detail-grid">
+          <dt>${k("clients.f.name")}</dt>        <dd><strong>${v(rv.client_name)}</strong></dd>
+          <dt>${k("report.phone")}</dt>          <dd>${rv.client_phone ? `<a href="tel:${escape(rv.client_phone)}">${escape(rv.client_phone)}</a>` : "—"}</dd>
+          <dt>${k("clients.f.pid")}</dt>         <dd>${v(rv.client_personid)}</dd>
+          <dt>${k("clients.f.father")}</dt>      <dd>${v(rv.client_father)}</dd>
+          <dt>${k("clients.f.mother")}</dt>      <dd>${v(rv.client_mother)}</dd>
+          <dt>${k("addClient.nationality")}</dt> <dd>${v(rv.client_nationality)}</dd>
+          <dt>${k("clients.f.dob")}</dt>         <dd>${v(rv.client_dob)}</dd>
+          <dt>${k("clients.f.lic")}</dt>         <dd><code>${v(rv.client_license)}</code></dd>
+          <dt>${k("addClient.idType")}</dt>      <dd>${idType}</dd>
+          <dt>${k("clients.f.licstart")}</dt>    <dd>${v(rv.client_license_start)}</dd>
+          <dt>${k("clients.f.licend")}</dt>      <dd>${v(rv.client_license_end)}</dd>
+        </dl>
+      </section>
+      <section class="rvd-group">
+        <h4 class="rvd-h">${k("report.vehicle")}</h4>
+        <dl class="detail-grid">
+          <dt>${k("cars.f.model")}</dt> <dd><strong>${v(rv.car_model)}</strong></dd>
+          <dt>${k("cars.f.type")}</dt>  <dd>${v(rv.car_type)}</dd>
+          <dt>${k("cars.f.color")}</dt> <dd>${v(rv.car_color)}</dd>
+          <dt>${k("report.plate")}</dt> <dd><span class="ltr">${v(rv.car_plate)}</span></dd>
+          <dt>${k("cars.f.vin")}</dt>   <dd><code class="ltr">${v(rv.car_vin)}</code></dd>
+          <dt>${k("report.gps")}</dt>   <dd>${gps}</dd>
+        </dl>
+      </section>
+      ${rv.notes ? `
+      <section class="rvd-group">
+        <h4 class="rvd-h">${k("reservations.notes")}</h4>
+        <p class="rvd-notes">${escape(rv.notes)}</p>
+      </section>` : ""}`;
+    showModal("#reservation-detail-modal");
   }
 
   function _today(){ return new Date().toISOString().slice(0, 10); }
@@ -6049,6 +6725,10 @@ const Reservations = (() => {
       renderAdmin();
     });
 
+    // Reservation detail modal (admin eye button).
+    $("#reservation-detail-close")?.addEventListener("click", () => hideModal("#reservation-detail-modal"));
+    $("#reservation-detail-cancel")?.addEventListener("click", () => hideModal("#reservation-detail-modal"));
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const u = AUTH.user();
@@ -6310,6 +6990,504 @@ function setupResponsiveTables(){
   });
 }
 
+/* ============== SPECIAL-COMPANY RENTALS (B2B) ==============
+   The enterprise records another company it rents its own cars OUT to: that
+   company's contact details (many phones + many branches, each with a "+"),
+   plus a searchable dropdown per car it currently holds. The recorded list
+   shows the full car detail. */
+const SpecialRentals = (() => {
+  let _cars = [];      // the enterprise's own cars (VIN → full detail)
+  let _records = [];   // saved special-company records
+
+  const setStatus = (msg, kind) => {
+    const el = $("#special-status");
+    if (!el) return;
+    if (!msg){ el.hidden = true; el.textContent = ""; return; }
+    el.hidden = false;
+    el.className = "company-info-status" + (kind ? " " + kind : "");
+    el.textContent = msg;
+  };
+
+  function carLabel(c){
+    // "Model — Plate (Type · Color) · VIN"
+    const bits = [];
+    if (c.model) bits.push(c.model);
+    const meta = [c.type, c.color].filter(Boolean).join(" · ");
+    let head = bits.join("");
+    if (c.platenumber) head += ` — ${c.platenumber}`;
+    if (meta) head += ` (${meta})`;
+    if (c.vin) head += ` · ${c.vin}`;
+    return head;
+  }
+
+  /* ---- Branches: a repeatable text-input list with "+ Add branch" ---- */
+  function branchRowHtml(value = ""){
+    return `<div class="special-branch-row">
+      <input type="text" class="special-branch-input" value="${escape(value)}" placeholder="${escape(t("special.f.branch.ph"))}">
+      <button type="button" class="phone-remove special-branch-remove" aria-label="Remove">&times;</button>
+    </div>`;
+  }
+  function setBranches(csv){
+    const c = $("#special-branches");
+    if (!c) return;
+    const list = String(csv || "").split(",").map(s => s.trim()).filter(Boolean);
+    if (!list.length) list.push("");
+    c.innerHTML = list.map(branchRowHtml).join("");
+  }
+  function getBranches(){
+    const c = $("#special-branches");
+    if (!c) return "";
+    return $$(".special-branch-input", c).map(i => i.value.trim()).filter(Boolean).join(", ");
+  }
+
+  /* ---- Car: ONE searchable dropdown of the enterprise's own cars ---- */
+  function populateCarSelect(selectedVin = ""){
+    const sel = $("#special-car-select");
+    if (!sel) return;
+    const ph = `<option value="" disabled${selectedVin ? "" : " selected"} hidden>${escape(t("special.car.ph"))}</option>`;
+    const opts = _cars.map(c =>
+      `<option value="${escape(c.vin)}"${c.vin === selectedVin ? " selected" : ""}>${escape(carLabel(c))}</option>`
+    ).join("");
+    sel.innerHTML = ph + opts;
+    // First render wraps the <select> in a SearchSelect; later option swaps are
+    // picked up by its MutationObserver, but sync() makes it instant. Scope the
+    // enhance to this field so other panels' selects aren't wrapped early.
+    if (!sel.dataset.ssEnhanced && typeof enhanceSelects === "function"){
+      enhanceSelects(sel.parentElement || document);
+    }
+    sel._ss?.sync?.();
+    updateNoCarsHint();
+  }
+  function getCarVin(){
+    const sel = $("#special-car-select");
+    return sel && sel.value ? sel.value : "";
+  }
+  function updateNoCarsHint(){
+    const hint = $("#special-no-cars");
+    const sel = $("#special-car-select");
+    const empty = _cars.length === 0;
+    if (hint) hint.hidden = !empty;
+    if (sel) sel.disabled = empty;
+  }
+
+  // Resolve a record's car VIN (new single column, legacy CSV as fallback).
+  function recordVin(r){
+    if (r.car_vin) return r.car_vin;
+    const first = String(r.car_vins || "").split(",")[0];
+    return (first || "").trim();
+  }
+
+  function renderRecords(){
+    const tb = $("#special-rows");
+    if (!tb) return;
+    if (!_records.length){
+      tb.innerHTML = `<tr class="empty-row"><td colspan="10">${escape(t("special.empty"))}</td></tr>`;
+      return;
+    }
+    const carByVin = {};
+    _cars.forEach(c => { carByVin[c.vin] = c; });
+    const splitCsv = (s) => String(s || "").split(",").map(x => x.trim()).filter(Boolean);
+    const dash = '<span class="muted-cell">—</span>';
+    const ltr = (v) => `<span class="ltr">${escape(v)}</span>`;
+    const day = (d) => d ? ltr(String(d).slice(0, 10)) : dash;
+
+    tb.innerHTML = _records.map((r, i) => {
+      const phones = r.phones ? splitCsv(r.phones) : [r.phone, r.extra_phone].filter(Boolean);
+      const phoneHtml = phones.length
+        ? phones.map(p => `<a href="tel:${escape(p)}" class="ltr">${escape(p)}</a>`).join(" · ")
+        : dash;
+      const c = carByVin[recordVin(r)] || {};
+      const gps = c.has_gps
+        ? `<span class="badge yes">${escape(t("yes"))}</span>`
+        : `<span class="badge no">${escape(t("no"))}</span>`;
+
+      return `<tr>
+        <td data-col="company"><strong>${escape(r.company_name)}</strong></td>
+        <td data-col="owner">${r.owner_name ? escape(r.owner_name) : dash}</td>
+        <td data-col="phone">${phoneHtml}</td>
+        <td data-col="model">${c.model ? escape(c.model) : dash}</td>
+        <td data-col="color">${c.color ? escape(c.color) : dash}</td>
+        <td data-col="plate">${c.platenumber ? ltr(c.platenumber) : dash}</td>
+        <td data-col="gps">${gps}</td>
+        <td data-col="from">${day(r.start_date)}</td>
+        <td data-col="to">${day(r.end_date)}</td>
+        <td data-col="view">
+          <button type="button" class="row-btn special-view" data-idx="${i}"
+                  title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">👁</button>
+        </td>
+      </tr>`;
+    }).join("");
+    if (typeof applyTranslations === "function") applyTranslations();
+  }
+
+  function resetForm(){
+    const form = $("#form-special-rental");
+    if (form) form.reset();
+    PhoneList.setPhones("#special-phones", "");
+    setBranches("");
+    populateCarSelect("");
+    $("#special-x").value = "";
+    $("#special-y").value = "";
+    const ms = $("#special-map-loc-status");
+    if (ms){ ms.classList.add("empty"); ms.classList.remove("filled"); ms.textContent = t("companies.maploc.empty"); }
+  }
+
+  async function refresh(){
+    const u = (typeof AUTH !== "undefined") ? AUTH.user() : null;
+    if (!u || u.role !== "company" || !u.company_id) return;
+    try { _cars = await API.listCars(u.company_id); } catch (e){ _cars = []; }
+    try { _records = await API.listSpecialRentals(); } catch (e){ _records = []; }
+    // Refresh the car dropdown with the current car list, keeping the pick.
+    populateCarSelect(getCarVin());
+    renderRecords();
+  }
+
+  async function submit(e){
+    e.preventDefault();
+    setStatus("");
+    const form = e.target;
+    const fd = new FormData(form);
+    const company_name = (fd.get("company_name") || "").toString().trim();
+    const errEl = $('[data-error-for="sr_company_name"]');
+    if (!company_name){
+      if (errEl){ errEl.textContent = t("special.err.company"); errEl.hidden = false; }
+      return;
+    }
+    if (errEl){ errEl.textContent = ""; errEl.hidden = true; }
+
+    const body = {
+      company_name,
+      owner_name: (fd.get("owner_name") || "").toString().trim(),
+      location:   (fd.get("location") || "").toString().trim(),
+      phones:     PhoneList.getPhones("#special-phones"),
+      branches:   getBranches(),
+      x:          (fd.get("x") || "").toString().trim(),
+      y:          (fd.get("y") || "").toString().trim(),
+      notes:      (fd.get("notes") || "").toString().trim(),
+      car_vin:    getCarVin(),
+      start_date: (fd.get("start_date") || "").toString().trim(),
+      end_date:   (fd.get("end_date") || "").toString().trim(),
+    };
+    try {
+      await API.addSpecialRental(body);
+      toast(t("special.saved"), "success");
+      resetForm();
+      await refresh();
+    } catch (err){
+      setStatus(err.message || "Save failed", "error");
+    }
+  }
+
+  function setup(){
+    const form = $("#form-special-rental");
+    if (!form) return;
+    form.addEventListener("submit", submit);
+
+    // Phones — reuse the shared multi-phone widget (country dial-code dropdown
+    // with search + "+ Add phone").
+    PhoneList.setPhones("#special-phones", "");
+    PhoneList.bind("#special-phones", "#special-add-phone");
+
+    // Branches — repeatable text rows.
+    setBranches("");
+    $("#special-add-branch")?.addEventListener("click", () => {
+      $("#special-branches")?.insertAdjacentHTML("beforeend", branchRowHtml(""));
+      $("#special-branches").lastElementChild.querySelector(".special-branch-input")?.focus();
+    });
+    $("#special-branches")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".special-branch-remove");
+      if (!btn) return;
+      const c = $("#special-branches");
+      const row = btn.closest(".special-branch-row");
+      if (c.querySelectorAll(".special-branch-row").length <= 1){
+        const inp = row.querySelector(".special-branch-input");
+        if (inp) inp.value = "";
+      } else { row.remove(); }
+    });
+
+    // Car — one searchable dropdown (populated from the enterprise's cars).
+    populateCarSelect("");
+
+    $("#btn-pick-special-map")?.addEventListener("click", () => {
+      MapPicker.openPick({ xSel: "#special-x", ySel: "#special-y", statusSel: "#special-map-loc-status" });
+    });
+
+    // View a recorded rental (eye icon) → detail modal with car photos/videos.
+    // Records are view-only here: no delete.
+    $("#special-rows")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".special-view");
+      if (!btn) return;
+      const rec = _records[Number(btn.dataset.idx)];
+      if (rec) SpecialDetail.open(rec, _cars);
+    });
+  }
+
+  return { setup, refresh };
+})();
+
+/* ============== ADMIN: CARS RENTED BY COMPANIES (B2B report) ==============
+   Admin-wide, read-only list of every special_company_rentals record across
+   ALL companies. The backend joins each record's car, so model/color/plate/GPS
+   ride on the row; the 👁 button reuses the shared SpecialDetail modal (admin
+   passes _can_edit_company, so it can view the record's photos/videos too). */
+const AdminSpecial = (() => {
+  let _all = [];       // every record fetched from the admin endpoint
+  let _view = [];      // the current filtered list (what the eye button indexes)
+  let _wired = false;
+
+  // SpecialDetail.carOf() resolves the car by VIN from a list; the admin row
+  // already carries the car fields, so hand it a synthetic one-car list.
+  function carsFor(r){
+    return [{
+      vin: r.car_vin, model: r.model, color: r.color,
+      platenumber: r.platenumber, has_gps: r.has_gps, type: r.type,
+    }];
+  }
+
+  // Per-car-unique label for the "Filter by car" dropdown: "Model — Plate".
+  function carLabelOf(r){
+    if (!r || !r.model) return "";
+    return r.platenumber ? `${r.model} — ${r.platenumber}` : r.model;
+  }
+
+  function populateFilters(){
+    if (typeof populateFilterSelect !== "function") return;
+    populateFilterSelect($("#filter-special-company"), _all.map(r => r.company_name));
+    populateFilterSelect($("#filter-special-car"),     _all.map(carLabelOf));
+  }
+
+  // Apply the toolbar filters. Dates use the same "active in range" overlap
+  // rule as the rental report: From keeps rows still running on/after it,
+  // To keeps rows that started on/before it.
+  function filtered(){
+    let rows = _all.slice();
+    const company = $("#filter-special-company")?.value || "";
+    const car     = $("#filter-special-car")?.value     || "";
+    const from    = ($("#special-from")?.value || "").trim();
+    const to      = ($("#special-to")?.value   || "").trim();
+    const d = (v) => v ? String(v).slice(0, 10) : "";
+    if (company) rows = rows.filter(r => r.company_name === company);
+    if (car)     rows = rows.filter(r => carLabelOf(r) === car);
+    if (from)    rows = rows.filter(r => r.end_date   && d(r.end_date)   >= from);
+    if (to)      rows = rows.filter(r => r.start_date && d(r.start_date) <= to);
+    return rows;
+  }
+
+  function render(){
+    const tb = $("#admin-special-rows");
+    if (!tb) return;
+    _view = filtered();
+    if (!_view.length){
+      tb.innerHTML = `<tr class="empty-row"><td colspan="10">${escape(t("adminSpecial.empty"))}</td></tr>`;
+      const pt = $("#pager-top-admin-special"); if (pt) pt.hidden = true;
+      const pb = $("#pager-admin-special");     if (pb) pb.hidden = true;
+      return;
+    }
+    const info = Pager.slice("admin-special", _view);
+    const dash = '<span class="muted-cell">—</span>';
+    const ltr = (v) => `<span class="ltr">${escape(v)}</span>`;
+    const day = (d) => d ? ltr(String(d).slice(0, 10)) : dash;
+    const splitCsv = (s) => String(s || "").split(",").map(x => x.trim()).filter(Boolean);
+
+    tb.innerHTML = info.rows.map((r, i) => {
+      const idx = (info.page - 1) * info.size + i;   // absolute index into _view
+      const phones = r.phones ? splitCsv(r.phones) : [r.phone, r.extra_phone].filter(Boolean);
+      const phoneHtml = phones.length
+        ? phones.map(p => `<a href="tel:${escape(p)}" class="ltr">${escape(p)}</a>`).join(" · ")
+        : dash;
+      const gps = r.has_gps
+        ? `<span class="badge yes">${escape(t("yes"))}</span>`
+        : `<span class="badge no">${escape(t("no"))}</span>`;
+      return `<tr>
+        <td data-col="company"><strong>${escape(r.company_name)}</strong></td>
+        <td data-col="owner">${r.owner_name ? escape(r.owner_name) : dash}</td>
+        <td data-col="phone">${phoneHtml}</td>
+        <td data-col="model">${r.model ? escape(r.model) : dash}</td>
+        <td data-col="color">${r.color ? escape(r.color) : dash}</td>
+        <td data-col="plate">${r.platenumber ? ltr(r.platenumber) : dash}</td>
+        <td data-col="from">${day(r.start_date)}</td>
+        <td data-col="to">${day(r.end_date)}</td>
+        <td data-col="gps">${gps}</td>
+        <td data-col="view">
+          <button type="button" class="row-btn admin-special-view" data-idx="${idx}"
+                  title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">👁</button>
+        </td>
+      </tr>`;
+    }).join("");
+    Pager.render("admin-special", "#pager-top-admin-special", "#pager-admin-special", info, render);
+    if (typeof applyTranslations === "function") applyTranslations();
+  }
+
+  async function refresh(){
+    const u = (typeof AUTH !== "undefined") ? AUTH.user() : null;
+    if (!u || u.role !== "admin") return;
+    try { _all = await API.listAdminSpecialRentals(); }
+    catch (e){ _all = []; }
+    populateFilters();
+    Pager.reset("admin-special");
+    render();
+  }
+
+  function setup(){
+    if (_wired) return;
+    _wired = true;
+    $("#admin-special-rows")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".admin-special-view");
+      if (!btn) return;
+      const rec = _view[Number(btn.dataset.idx)];
+      if (rec) SpecialDetail.open(rec, carsFor(rec));
+    });
+    // Filters: any change resets to page 1 and re-renders.
+    ["#filter-special-company", "#filter-special-car", "#special-from", "#special-to"].forEach(sel => {
+      $(sel)?.addEventListener("change", () => { Pager.reset("admin-special"); render(); });
+    });
+    $("#special-reset")?.addEventListener("click", () => {
+      ["#filter-special-company", "#filter-special-car"].forEach(sel => {
+        const el = $(sel);
+        if (el){ el.value = ""; el._ss?.sync?.(); }
+      });
+      const f = $("#special-from"); if (f) f.value = "";
+      const tt = $("#special-to");  if (tt) tt.value = "";
+      Pager.reset("admin-special");
+      render();
+    });
+  }
+
+  return { setup, refresh };
+})();
+
+/* ============== B2B RENTAL DETAIL (view + car media) ==============
+   Read-only view of one "cars rented to companies" record, plus photo /
+   video upload for the car — mirrors the regular rental Detail modal but
+   hits the /api/special-rentals/<id>/media endpoints. */
+const SpecialDetail = (() => {
+  let currentId = null;
+
+  function carOf(rec, cars){
+    const vin = rec.car_vin || String(rec.car_vins || "").split(",")[0]?.trim();
+    return (cars || []).find(c => c.vin === vin) || {};
+  }
+
+  function bodyHtml(rec, cars){
+    const k = (key) => escape(t(key));
+    const v = (x) => (x == null || x === "") ? "—" : escape(String(x));
+    const day = (d) => d ? escape(String(d).slice(0, 10)) : "—";
+    const c = carOf(rec, cars);
+    const splitCsv = (s) => String(s || "").split(",").map(x => x.trim()).filter(Boolean);
+    const phones = rec.phones ? splitCsv(rec.phones) : [rec.phone, rec.extra_phone].filter(Boolean);
+    const branches = rec.branches ? splitCsv(rec.branches) : [rec.branch, rec.extra_branch].filter(Boolean);
+    const gps = c.has_gps
+      ? `<span class="badge yes">${k("yes")}</span>`
+      : `<span class="badge no">${k("no")}</span>`;
+    return `
+      <dl class="detail-grid">
+        <dt>${k("special.th.company")}</dt> <dd><strong>${v(rec.company_name)}</strong></dd>
+        <dt>${k("special.th.owner")}</dt>   <dd>${v(rec.owner_name)}</dd>
+        <dt>${k("special.th.phone")}</dt>   <dd class="ltr">${phones.length ? phones.map(escape).join(" · ") : "—"}</dd>
+        <dt>${k("special.f.branches")}</dt> <dd>${branches.length ? branches.map(escape).join(" · ") : "—"}</dd>
+        <dt>${k("special.f.address")}</dt>  <dd>${v(rec.location)}</dd>
+        <div class="full"></div>
+        <dt>${k("special.th.model")}</dt>   <dd>${v(c.model)}</dd>
+        <dt>${k("special.th.color")}</dt>   <dd>${v(c.color)}</dd>
+        <dt>${k("special.th.plate")}</dt>   <dd class="ltr">${v(c.platenumber)}</dd>
+        <dt>${k("cars.f.vin")}</dt>         <dd><code>${v(c.vin || rec.car_vin)}</code></dd>
+        <dt>${k("special.th.gps")}</dt>     <dd>${gps}</dd>
+        <div class="full"></div>
+        <dt>${k("special.th.from")}</dt>    <dd class="ltr">${day(rec.start_date)}</dd>
+        <dt>${k("special.th.to")}</dt>      <dd class="ltr">${day(rec.end_date)}</dd>
+        ${rec.notes ? `<div class="full"></div><dt>${k("special.f.notes")}</dt><dd>${v(rec.notes)}</dd>` : ""}
+      </dl>`;
+  }
+
+  async function loadMedia(id){
+    const photosGrid = $("#special-photos-grid");
+    const videosGrid = $("#special-videos-grid");
+    if (photosGrid) photosGrid.innerHTML = "";
+    if (videosGrid) videosGrid.innerHTML = "";
+    if (!id) return;
+    try {
+      const r = await fetch(API.url(`/api/special-rentals/${id}/media`), { headers: { ...authHeaders() } });
+      if (!r.ok) return;
+      const list = await r.json();
+      list.forEach(m => {
+        const grid = m.kind === "photo" ? photosGrid : videosGrid;
+        if (!grid) return;
+        const cell = document.createElement("div");
+        cell.className = `media-cell media-cell-${m.kind}`;
+        const url = API.url(m.url);
+        cell.innerHTML = m.kind === "photo"
+          ? `<img src="${escape(url)}" alt="${escape(m.original_name || "")}">
+             <button type="button" class="media-remove" data-id="${m.id}" title="${escape(t("action.delete"))}">&times;</button>`
+          : `<video src="${escape(url)}" controls></video>
+             <button type="button" class="media-remove" data-id="${m.id}" title="${escape(t("action.delete"))}">&times;</button>`;
+        grid.appendChild(cell);
+      });
+    } catch (e){ /* soft-fail */ }
+  }
+
+  async function uploadMedia(file, kind){
+    if (!currentId) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("kind", kind);
+    try {
+      const r = await fetch(API.url(`/api/special-rentals/${currentId}/media`), {
+        method: "POST", headers: { ...authHeaders() }, body: fd,
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok){ toast(data.error || t("toast.error"), "error"); return; }
+      toast(t("detail.uploaded"), "success");
+      await loadMedia(currentId);
+    } catch (err){ toast(err.message || t("toast.error"), "error"); }
+  }
+
+  async function deleteMedia(mediaId){
+    if (!currentId) return;
+    if (!confirm(t("confirm.delete"))) return;
+    try {
+      const r = await fetch(API.url(`/api/special-rentals/${currentId}/media/${mediaId}`), {
+        method: "DELETE", headers: { ...authHeaders() },
+      });
+      if (!r.ok && r.status !== 204){
+        const err = await r.json().catch(() => ({ error: r.statusText }));
+        toast(err.error || t("toast.error"), "error"); return;
+      }
+      toast(t("toast.deleted"), "success");
+      await loadMedia(currentId);
+    } catch (err){ toast(err.message || t("toast.error"), "error"); }
+  }
+
+  function open(rec, cars){
+    currentId = rec.id;
+    $("#special-detail-body").innerHTML = bodyHtml(rec, cars);
+    loadMedia(rec.id);
+    showModal("#special-detail-modal");
+  }
+
+  function setup(){
+    $("#special-detail-close")?.addEventListener("click", () => hideModal("#special-detail-modal"));
+    $("#special-detail-cancel")?.addEventListener("click", () => hideModal("#special-detail-modal"));
+    $("#special-upload-photo")?.addEventListener("change", async (e) => {
+      const files = Array.from(e.target.files || []);
+      for (const f of files) await uploadMedia(f, "photo");
+      e.target.value = "";
+    });
+    $("#special-upload-video")?.addEventListener("change", async (e) => {
+      const f = e.target.files?.[0];
+      if (f) await uploadMedia(f, "video");
+      e.target.value = "";
+    });
+    ["#special-photos-grid", "#special-videos-grid"].forEach(sel => {
+      $(sel)?.addEventListener("click", (e) => {
+        const btn = e.target.closest(".media-remove");
+        if (btn) deleteMedia(btn.dataset.id);
+      });
+    });
+  }
+
+  return { open, setup };
+})();
+
 async function init(){
   setupAuth();
   setupMobileNav();
@@ -6330,6 +7508,8 @@ async function init(){
   setupCreateRentalForm();
   Reservations.setup();
   Returns.setup();
+  SpecialRentals.setup();
+  SpecialDetail.setup();
   setupSupportForm();
   setupReportSearch();
   MapPicker.setup();
@@ -6338,8 +7518,8 @@ async function init(){
 
   // Enhance every <select> on the page with a searchable dropdown.
   if (typeof enhanceSelects === "function") enhanceSelects();
-  // The VIN dropdown starts disabled until a company is picked.
-  rebuildCarsVinDropdown();
+  // The car dropdown starts disabled until a company is picked.
+  rebuildCarsVehicleDropdown();
 
   if (AUTH.isAuthed()){
     await enterApp();
