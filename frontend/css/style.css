@@ -289,7 +289,7 @@ tbody td{
 }
 /* A few columns hold long unbreakable identifiers (VIN). Let those wrap
    character-by-character so they never push the table sideways. */
-#tbl-cars tbody td:nth-child(3){ overflow-wrap: anywhere; }
+#tbl-cars tbody td:nth-child(4){ overflow-wrap: anywhere; }
 /* Light-theme zebra for scanning wide rows. The signed-in admin/company dark
    themes define their own (richer) striping + hover on the row, so this is the
    public/light fallback only. Skip helper rows so they keep their own look. */
@@ -389,6 +389,33 @@ tbody tr.report-row:hover{ background: rgba(99,102,241,.06); }
   color: var(--ink); font-weight: 700;
 }
 #tbl-report-co tbody td[data-col="color"]{ color: var(--ink-soft); }
+
+/* Admin "Cars rented by companies / individuals" are wide (10–11 cols). Give
+   the short columns (dates, GPS, action) tight widths and keep phone/plate on
+   one line so the renter + car columns get the room — otherwise every cell
+   wraps into cramped slivers and the table reads as noise. Names lead the row. */
+#tbl-admin-special   tbody td[data-col="from"],
+#tbl-admin-special   tbody td[data-col="to"],
+#tbl-admin-individual tbody td[data-col="from"],
+#tbl-admin-individual tbody td[data-col="to"]{
+  white-space: nowrap; width: 1%;
+  color: var(--ink-soft); font-variant-numeric: tabular-nums;
+}
+#tbl-admin-special   tbody td[data-col="gps"],
+#tbl-admin-special   tbody td[data-col="view"],
+#tbl-admin-individual tbody td[data-col="gps"]{
+  white-space: nowrap; width: 1%; text-align: center;
+}
+#tbl-admin-special   tbody td[data-col="phone"],
+#tbl-admin-special   tbody td[data-col="plate"],
+#tbl-admin-individual tbody td[data-col="phone"],
+#tbl-admin-individual tbody td[data-col="plate"]{ white-space: nowrap; }
+#tbl-admin-special   tbody td[data-col="color"],
+#tbl-admin-individual tbody td[data-col="color"]{ color: var(--ink-soft); }
+#tbl-admin-special   tbody td[data-col="company"] strong,
+#tbl-admin-individual tbody td[data-col="client"]  strong{ color: var(--ink); font-weight: 700; }
+/* Whole row opens the detail modal — show it's clickable. */
+.al-click-row{ cursor: pointer; }
 
 /* --- Expandable detail row --- */
 /* The 👁 button pairs an eye with a chevron that rotates + a filled look
@@ -506,6 +533,8 @@ tbody tr.report-row:hover{ background: rgba(99,102,241,.06); }
   transition: all .12s;
 }
 .row-btn:hover{ background: var(--surface-2); color: var(--ink); }
+/* Three-dot ("more") icon for admin table row-view buttons (replaces the old 👁). */
+.row-btn .row-more-ico{ width: 18px; height: 18px; display: block; margin: 0 auto; }
 .row-btn.edit:hover  { color: var(--primary); border-color: var(--primary); background: var(--primary-lt); }
 .row-btn.delete:hover{ color: var(--danger);  border-color: var(--danger);  background: var(--danger-lt); }
 .row-btn.pdf:hover   { color: var(--primary-dk); border-color: var(--primary-dk); background: var(--primary-lt); }
@@ -955,8 +984,6 @@ body.role-admin #form-car,
 body.role-admin #form-client,
 body.role-admin #rent,
 body.role-admin #upload,
-body.role-admin #tbl-companies th:last-child,
-body.role-admin #tbl-companies td:last-child,
 body.role-admin #tbl-cars th:last-child,
 body.role-admin #tbl-cars td:last-child { display: none !important; }
 
@@ -1065,9 +1092,10 @@ html[dir="rtl"] body.role-company .site-footer{
 .ent-card-icon{
   flex: 0 0 auto; width: 58px; height: 58px; border-radius: 15px;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 1.7rem; background: rgba(255,255,255,.18);
+  background: rgba(255,255,255,.18);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
 }
+.ent-card-icon svg{ width: 27px; height: 27px; display: block; }
 .ent-card-body{ display: flex; flex-direction: column; gap: .28rem; min-width: 0; flex: 1; }
 .ent-card-title{ font-size: 1.18rem; font-weight: 800; letter-spacing: -.01em; }
 .ent-card-desc{ font-size: .9rem; line-height: 1.45; color: rgba(255,255,255,.85); }
@@ -1121,6 +1149,8 @@ html[dir="rtl"] .ent-back:hover{ transform: translateX(3px); }
 
 /* Extra home-card colour for the special-companies (B2B) tile */
 .ent-card-special{ background: linear-gradient(135deg, #0f766e 0%, #0ea5a4 55%, #22d3ee 100%); }
+/* Cars rented by individuals — warm orange so it's visible in light mode too */
+.ent-card-individual{ background: linear-gradient(135deg, #ea580c 0%, #f97316 100%); }
 
 /* Admin home-card colours */
 .ent-card-dashboard{ background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%); }
@@ -1294,19 +1324,98 @@ html[dir="rtl"] .vin-serial-input{
 }
 
 .branch-inline-form{
-  position: relative; background: var(--surface-2);
-  border: 1px solid var(--line); border-radius: 12px;
-  padding: 1rem 1.1rem; margin: 0 0 1rem;
+  position: relative; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 14px;
+  padding: 1.15rem 1.25rem 1.25rem; margin: 0 0 1rem;
+  box-shadow: var(--shadow);
 }
+
+/* Header strip: icon + title/subtitle + close, spanning the whole grid */
+.branch-form-head{
+  grid-column: 1 / -1;
+  display: flex; align-items: center; gap: .75rem;
+  padding-bottom: .9rem; margin-bottom: .1rem;
+  border-bottom: 1px solid var(--line);
+}
+.branch-form-icon{
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; border-radius: 10px;
+  background: var(--primary-lt); color: var(--primary);
+}
+.branch-form-titles{ display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+.branch-form-titles strong{ font-size: 1rem; font-weight: 700; color: var(--ink); }
+.branch-form-titles small{ font-size: .8rem; color: var(--ink-soft); }
+
 .branch-close-btn{
-  position: absolute; top: .5rem; right: .5rem;
-  width: 26px; height: 26px;
+  margin-inline-start: auto; flex: 0 0 auto;
+  width: 30px; height: 30px;
   display: inline-flex; align-items: center; justify-content: center;
   background: transparent; border: 1px solid var(--line);
-  border-radius: 6px; color: inherit;
-  font-size: 1rem; line-height: 1; cursor: pointer; padding: 0;
+  border-radius: 8px; color: var(--ink-soft);
+  font-size: 1.15rem; line-height: 1; cursor: pointer; padding: 0;
+  transition: background .15s, color .15s, border-color .15s;
 }
-.branch-close-btn:hover{ background: var(--surface-3); }
+.branch-close-btn:hover{ background: var(--surface-2); color: var(--ink); border-color: var(--muted); }
+
+/* Map field spans full width; the Pick button sits beneath the status pill */
+.map-status-field{ grid-column: 1 / -1; }
+.branch-map-btn{ align-self: start; margin-top: .15rem; }
+
+/* Main-office selectable card. Always shown on every open branch form; ticking
+   one unticks the others (radio-like, enforced in JS) so a company only ever
+   has ONE main office. The whole card is the click target. */
+.branch-head-card{
+  grid-column: 1 / -1; position: relative;
+  display: flex; align-items: center; gap: .8rem;
+  padding: .85rem 1rem; cursor: pointer;
+  border: 1.5px solid var(--line); border-radius: 12px;
+  background: var(--surface-2);
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.branch-head-card:hover{ border-color: var(--primary); }
+.branch-head-card .branch-head-check{ position: absolute; opacity: 0; pointer-events: none; }
+.branch-head-card-mark{
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 7px;
+  border: 1.5px solid var(--muted); color: #fff; background: transparent;
+  transition: background .15s, border-color .15s;
+}
+.branch-head-card-mark svg{ opacity: 0; transition: opacity .15s; }
+.branch-head-card-body{ display: flex; flex-direction: column; gap: .12rem; min-width: 0; }
+.branch-head-card-title{ font-weight: 600; color: var(--ink); font-size: .92rem; }
+.branch-head-card-hint{ color: var(--ink-soft); font-size: .78rem; line-height: 1.4; }
+.branch-head-card-hint:empty{ display: none; }
+.branch-head-card-badge{
+  margin-inline-start: auto; flex: 0 0 auto;
+  font-size: .66rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  padding: .24rem .55rem; border-radius: 999px;
+  background: var(--surface-3); color: var(--muted);
+  transition: background .15s, color .15s;
+}
+/* Checked (this branch is the main office) */
+.branch-head-card:has(.branch-head-check:checked){
+  border-color: var(--primary); background: var(--primary-lt);
+}
+.branch-head-card:has(.branch-head-check:checked) .branch-head-card-mark{
+  background: var(--primary); border-color: var(--primary);
+}
+.branch-head-card:has(.branch-head-check:checked) .branch-head-card-mark svg{ opacity: 1; }
+.branch-head-card:has(.branch-head-check:checked) .branch-head-card-badge{
+  background: var(--primary); color: #fff;
+}
+.branch-head-card:has(.branch-head-check:focus-visible){ box-shadow: 0 0 0 3px var(--primary-lt); }
+.branch-head-note{ font-style: italic; }
+
+/* Footer action bar */
+.branch-form-actions{
+  grid-column: 1 / -1;
+  display: flex; justify-content: flex-end; gap: .6rem;
+  padding-top: 1rem; margin-top: .1rem;
+  border-top: 1px solid var(--line);
+}
+.branch-form-actions .btn{ min-width: 150px; }
 
 /* Multi-phone */
 .phones-field{ grid-column: 1 / -1; }
@@ -1369,7 +1478,153 @@ html[dir="rtl"] .vin-serial-input{
   box-shadow: 0 0 0 3px var(--primary-lt);
 }
 .filter-clear-btn{ height: 42px; align-self: end; }
+.filter-apply-btn{ height: 42px; align-self: end; white-space: nowrap; }
+/* Dropdown-only filter bar (companies + cars admin tables): the selects (already
+   themed via .field select) size to their label and wrap neatly, while the
+   Search/Clear buttons stay on the baseline. */
+.filter-toolbar .table-search-field-narrow{ flex: 0 1 170px; min-width: 150px; }
+.filter-toolbar select{ width: 100%; }
 .report-count{ color: var(--ink-soft); font-size: .85rem; align-self: center; }
+
+/* Icon-prefixed live search box */
+.search-input-wrap{ position: relative; display: block; }
+.search-input-wrap .search-input-ico{
+  position: absolute; inset-inline-start: .7rem; top: 50%; transform: translateY(-50%);
+  width: 17px; height: 17px; color: var(--ink-soft); pointer-events: none; opacity: .8;
+}
+.search-input-wrap input{ padding-inline-start: 2.2rem; }
+.search-input-wrap input::-webkit-search-cancel-button{ cursor: pointer; }
+
+/* Toolbar sizing: let the global search take the lead, keep the GPS select tight
+   so a wide toolbar (search + 2 dropdowns + GPS) stays balanced on one row. */
+.table-search-field-wide{ flex: 2 1 320px; max-width: 520px; }
+.table-search-field-narrow{ flex: 0 1 150px; min-width: 130px; }
+
+/* Cars table — readable, scannable identifiers at 100+ rows per company.
+   VIN reads as a fixed-width token; the plate is a bordered pill so it stands
+   out from ordinary text; company + model get gentle weight so the eye lands
+   on the two fields an admin actually scans by. */
+.vin-code{
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  font-size: .82rem; letter-spacing: .01em; color: var(--ink-soft);
+}
+.cars-company-cell{ font-weight: 600; }
+.car-model-cell{ font-weight: 500; }
+.plate-pill{
+  display: inline-block; white-space: nowrap;
+  padding: .12rem .5rem; border-radius: 6px;
+  border: 1.5px solid var(--line); background: var(--surface-2);
+  font-variant-numeric: tabular-nums; font-weight: 600; font-size: .82rem;
+  letter-spacing: .03em; color: var(--ink);
+}
+/* Branch tag: a filled pill for a real branch, a quiet outlined one for the
+   "Main" head-office fallback so it reads as a default, not a named place. */
+.branch-pill{
+  display: inline-block; white-space: nowrap; max-width: 15rem;
+  overflow: hidden; text-overflow: ellipsis; vertical-align: bottom;
+  padding: .12rem .5rem; border-radius: 999px;
+  background: var(--primary-lt); color: var(--primary);
+  font-weight: 600; font-size: .8rem;
+}
+.branch-pill-main{
+  background: transparent; color: var(--ink-soft);
+  border: 1px dashed var(--line); font-weight: 500;
+}
+
+/* ===== Admin fleet tree (Company → Branch → Cars) =========================
+   Grouped, expandable view so a company with 100+ cars stays one readable line
+   until drilled into. Uses the shared theme tokens, so it inherits the admin
+   dark theme automatically; a few indigo accents live in the role-admin block
+   further down. */
+.fleet-tree{ display: flex; flex-direction: column; gap: .55rem; }
+.fleet-empty{
+  padding: 1.6rem; text-align: center; color: var(--ink-soft);
+  border: 1px dashed var(--line); border-radius: 12px;
+}
+
+/* Company card */
+.fleet-co{
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); overflow: hidden;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.fleet-co.is-open{
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--line));
+  box-shadow: 0 6px 20px -14px rgba(0,0,0,.5);
+}
+.fleet-co-head{
+  display: flex; align-items: center; gap: .7rem; width: 100%;
+  padding: .7rem .9rem; border: 0; cursor: pointer; text-align: start;
+  background: transparent; color: inherit; font: inherit;
+  transition: background .12s ease;
+}
+.fleet-co-head:hover{ background: var(--primary-lt); }
+.fleet-co-logo{
+  width: 30px; height: 30px; border-radius: 8px; object-fit: cover;
+  flex: 0 0 auto;
+}
+.fleet-co-logo-empty{
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 700; font-size: .78rem;
+}
+.fleet-co-name{ font-weight: 650; font-size: .96rem; flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fleet-co-meta{ display: inline-flex; align-items: center; gap: .4rem; flex: 0 0 auto; }
+
+/* Shared chevron for both levels */
+.fleet-chevron{ width: 15px; height: 15px; flex: 0 0 auto; color: var(--ink-soft);
+  transition: transform .18s ease; }
+.fleet-co.is-open > .fleet-co-head .fleet-chevron,
+.fleet-br.is-open > .fleet-br-head .fleet-chevron{ transform: rotate(90deg); }
+html[dir="rtl"] .fleet-chevron{ transform: scaleX(-1); }
+html[dir="rtl"] .fleet-co.is-open > .fleet-co-head .fleet-chevron,
+html[dir="rtl"] .fleet-br.is-open > .fleet-br-head .fleet-chevron{ transform: rotate(90deg); }
+
+/* Count pills */
+.fleet-pill{
+  display: inline-flex; align-items: center; white-space: nowrap;
+  padding: .12rem .55rem; border-radius: 999px;
+  font-size: .74rem; font-weight: 700; letter-spacing: .01em;
+}
+.fleet-pill-cars{ background: var(--primary-lt); color: var(--primary); }
+.fleet-pill-br{
+  background: transparent; color: var(--ink-soft);
+  box-shadow: inset 0 0 0 1px var(--line); font-weight: 600;
+}
+
+/* Company body holds the branch groups, indented under the header */
+.fleet-co-body{
+  padding: .2rem .6rem .6rem 1.1rem;
+  display: flex; flex-direction: column; gap: .35rem;
+}
+
+/* Branch group */
+.fleet-br{ border-radius: 10px; overflow: hidden; }
+.fleet-br-head{
+  display: flex; align-items: center; gap: .55rem; width: 100%;
+  padding: .48rem .6rem; border: 0; cursor: pointer; text-align: start;
+  background: var(--surface-2); color: inherit; font: inherit;
+  border-radius: 8px; transition: background .12s ease;
+}
+.fleet-br-head:hover{ background: var(--primary-lt); }
+.fleet-br-ico{ width: 16px; height: 16px; flex: 0 0 auto; color: var(--primary); }
+.fleet-br-name{ font-weight: 600; font-size: .88rem; }
+.fleet-br-loc{ color: var(--ink-soft); font-size: .78rem; margin-inline-start: .1rem; }
+.fleet-br .fleet-pill-cars{ margin-inline-start: auto; }
+.fleet-br.is-head-office .fleet-br-name{ color: var(--ink-soft); font-style: italic; }
+
+/* Cars table inside a branch */
+.fleet-br-body{ padding: .3rem 0 .1rem; }
+.fleet-cars-wrap{ overflow-x: auto; }
+.fleet-cars-table{ font-size: .84rem; }
+.fleet-cars-table th{ font-size: .72rem; }
+.fleet-cars-table td:first-child, .fleet-cars-table th:first-child{
+  width: 1%; white-space: nowrap; color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.fleet-cars-table td:nth-child(2){ overflow-wrap: anywhere; }
+.fleet-loading{ padding: .7rem .3rem; color: var(--ink-soft); font-size: .84rem; }
+.fleet-br-empty{ padding: .6rem .3rem; color: var(--ink-soft); font-size: .82rem; }
 
 /* Register modal */
 .register-card{ max-width: 440px; width: min(440px, 92vw); }
@@ -1387,10 +1642,37 @@ html[dir="rtl"] .vin-serial-input{
 /* Create-rental panel */
 .create-rental-panel{
   background: var(--surface-2); border: 1px solid var(--line);
-  border-radius: 12px; padding: .9rem 1rem 1.1rem; margin-bottom: 1.2rem;
+  border-radius: 14px; padding: 1.4rem 1.5rem 1.5rem; margin-bottom: 1.4rem;
 }
-.create-rental-panel .card-head{ margin-bottom: .7rem; }
+.create-rental-panel .card-head{ margin-bottom: 1rem; }
 .create-rental-panel .card-head p{ margin: 0; color: var(--ink-soft); font-size: .85rem; }
+
+/* ===== Company data-entry form panels =====
+   Wraps the main entry forms (Add car, Add client, B2B, Create rental) in a
+   padded surface panel so the fields read as one grouped card instead of
+   floating loose on the section background — matching the tables below. */
+.entry-form-panel{
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.5rem 1.6rem 1.6rem;
+  margin-bottom: 1.4rem;
+  row-gap: 1.15rem;
+  column-gap: 1.1rem;
+}
+/* Buttons live in their own full-width footer, separated by a divider. */
+.entry-form-actions{
+  grid-column: 1 / -1;
+  display: flex; flex-wrap: wrap; align-items: center; gap: .75rem;
+  margin-top: .35rem; padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+.entry-form-actions .btn{ min-width: 132px; }
+@media (max-width: 640px){
+  .entry-form-panel{ padding: 1.15rem 1.15rem 1.25rem; }
+  .create-rental-panel{ padding: 1.15rem 1.15rem 1.25rem; }
+  .entry-form-actions .btn{ flex: 1 1 100%; }
+}
 
 /* Report company header */
 .report-company-head{
@@ -1492,15 +1774,64 @@ body.role-admin .media-remove{ display: none; }
 .client-doc-pdf{ display: inline-flex; }
 .client-doc-empty{ margin: 0; color: var(--ink-soft); font-size: .9rem; }
 
-/* Branch rows */
+/* Company name cell + branch-count badge on the parent row */
+.company-name-cell{ display: inline-flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.company-name-text{ font-weight: 600; }
+/* Expand/collapse toggle — chevron + branch-count badge as one pill button */
+.branch-toggle{
+  display: inline-flex; align-items: center; gap: .3rem;
+  padding: .1rem .5rem .1rem .28rem; border: 0; cursor: pointer;
+  background: var(--primary-lt); border-radius: 999px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 22%, transparent);
+  transition: background .15s ease, box-shadow .15s ease;
+}
+.branch-toggle:hover{ box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 45%, transparent); }
+.branch-toggle .branch-chevron{
+  width: 13px; height: 13px; color: var(--primary); flex: 0 0 auto;
+  transition: transform .18s ease;
+}
+.branch-toggle.is-open .branch-chevron{ transform: rotate(90deg); }
+html[dir="rtl"] .branch-toggle .branch-chevron{ transform: scaleX(-1); }
+html[dir="rtl"] .branch-toggle.is-open .branch-chevron{ transform: rotate(90deg); }
+.branch-count-badge{
+  display: inline-flex; align-items: center;
+  font-size: .68rem; font-weight: 700; letter-spacing: .01em;
+  color: var(--primary); background: transparent;
+  white-space: nowrap;
+}
+/* Collapsed branch rows stay out of the flow entirely */
+#tbl-companies tr.company-branch-row[hidden]{ display: none; }
+
+/* Branch rows — grouped, indented, connected to the parent by a tree rail */
 #tbl-companies tr.company-branch-row > td{
   background: var(--surface-2); font-size: .85rem;
-  color: var(--ink-soft); border-top: 1px dashed var(--line);
+  color: var(--ink-soft); border-top: 0;
+  padding-top: .28rem; padding-bottom: .28rem;
 }
-#tbl-companies tr.company-branch-row .branch-marker{
-  color: var(--primary); font-weight: 700; margin-inline-end: .3rem;
+#tbl-companies tr.company-branch-last > td{ padding-bottom: .55rem; }
+#tbl-companies tr.company-branch-row .branch-cell{
+  position: relative; padding-inline-start: 2.5rem;
 }
-#tbl-companies tr.company-branch-row .branch-cell{ padding-inline-start: 1.4rem; }
+/* continuous vertical rail: each row's full-height segment meets the next */
+#tbl-companies .company-branch-row .branch-cell::before{
+  content: ""; position: absolute; inset-inline-start: 1.15rem;
+  top: 0; bottom: 0; width: 2px; background: var(--line);
+}
+/* horizontal elbow tick into each branch tag */
+#tbl-companies .company-branch-row .branch-cell::after{
+  content: ""; position: absolute; inset-inline-start: 1.15rem;
+  top: 50%; width: .7rem; height: 2px; background: var(--line);
+}
+/* last branch closes the rail into an L (line stops at the elbow) */
+#tbl-companies .company-branch-last .branch-cell::before{ bottom: 50%; }
+.branch-tag{
+  display: inline-flex; align-items: center; gap: .4rem;
+  padding: .2rem .6rem; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--line);
+  color: var(--ink-soft); font-weight: 600; font-size: .8rem;
+}
+.branch-tag .branch-ico{ width: 15px; height: 15px; color: var(--primary); flex: 0 0 auto; }
+html[dir="rtl"] .branch-tag .branch-ico{ transform: scaleX(-1); }
 
 .color-swatch{
   display: inline-block; width: 13px; height: 13px; border-radius: 50%;
@@ -1650,6 +1981,23 @@ body.role-admin .media-remove{ display: none; }
 .ss-item:hover,.ss-item.hover{ background: var(--surface-2); }
 .ss-item.active{ background: var(--primary-lt); color: var(--primary-dk); font-weight: 600; }
 .ss-empty{ padding: .7rem .9rem; color: var(--muted); font-size: .85rem; text-align: center; }
+/* Manufacturer / section header inside a grouped picker (e.g. car models). */
+.ss-group{
+  position: sticky; top: 0; z-index: 1;
+  padding: .5rem .9rem .3rem;
+  font-size: .66rem; font-weight: 800; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--muted);
+  background: var(--surface);
+  border-top: 1px solid var(--line-soft);
+}
+.ss-list .ss-group:first-child{ border-top: 0; }
+/* Native <select> option popups: keep the option list legible in both themes —
+   dark text on the light page, near-white text on the dark page (browsers draw
+   these OS popups and don't reliably inherit the token colour). */
+select option{ color: #1f2937; background: #ffffff; }
+body:is(.role-company, .role-admin):not(.theme-light) select option{
+  color: #eaf0fb; background: #1b2438;
+}
 
 html[dir="rtl"] .ss-trigger,
 html[dir="rtl"] .ss-search,
@@ -1735,10 +2083,13 @@ html[dir="rtl"] thead th{ text-align: start; }
           mask-image: radial-gradient(120% 120% at 100% 0%, #000, transparent 60%);
 }
 .dash-hero-mark{
-  position: absolute; z-index: 1; right: 1.6rem; bottom: -.4rem;
-  font-size: 5.5rem; line-height: 1; opacity: .12;
+  position: absolute; z-index: 1; right: 1.8rem; bottom: 1rem;
+  width: 5.5rem; height: 5.5rem; line-height: 1; opacity: .14;
+  color: var(--ink);
   transform: rotate(-8deg); pointer-events: none; user-select: none;
 }
+.dash-hero-mark svg{ width: 100%; height: 100%; display: block; }
+body.role-admin .dash-hero-mark{ color: #c4b5fd; opacity: .16; }
 html[dir="rtl"] .dash-hero-mark{ right: auto; left: 1.6rem; transform: rotate(8deg) scaleX(-1); }
 
 /* Stat cards */
@@ -1769,10 +2120,11 @@ html[dir="rtl"] .dash-hero-mark{ right: auto; left: 1.6rem; transform: rotate(8d
   width: 46px; height: 46px; display: grid; place-items: center;
   border-radius: 12px; flex: 0 0 auto;
 }
-.stat-companies .stat-icon{ background: rgba(99,102,241,.08); }
-.stat-cars .stat-icon     { background: rgba(245,158,11,.08); }
-.stat-clients .stat-icon  { background: rgba(16,185,129,.08); }
-.stat-rentals .stat-icon  { background: rgba(139,92,246,.08); }
+.stat-icon svg{ width: 26px; height: 26px; display: block; }
+.stat-companies .stat-icon{ background: rgba(99,102,241,.08); color: #6366f1; }
+.stat-cars .stat-icon     { background: rgba(245,158,11,.08); color: #ea8a04; }
+.stat-clients .stat-icon  { background: rgba(16,185,129,.08); color: #0f9d6e; }
+.stat-rentals .stat-icon  { background: rgba(139,92,246,.08); color: #8b5cf6; }
 .stat-body{ display: flex; flex-direction: column; min-width: 0; }
 .stat-value{
   font-size: 1.5rem; font-weight: 800;
@@ -1792,7 +2144,10 @@ html[dir="rtl"] .dash-hero-mark{ right: auto; left: 1.6rem; transform: rotate(8d
 /* Two-column panels */
 .dash-columns{
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  /* auto-fit so a single visible panel (the common case — no inactive
+     companies) fills the full width instead of leaving the right half blank;
+     two panels split evenly, and they stack when the row gets narrow. */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
   gap: 1rem;
   align-items: start;
 }
@@ -1821,7 +2176,11 @@ html[dir="rtl"] .dash-hero-mark{ right: auto; left: 1.6rem; transform: rotate(8d
   margin: 0; font-size: .92rem; font-weight: 700; color: var(--ink);
   display: flex; align-items: center; gap: .4rem;
 }
-.dash-panel-icon{ font-size: 1rem; }
+.dash-panel-icon{ font-size: 1rem; display: inline-flex; align-items: center; color: #10b981; }
+.dash-panel-icon svg{ width: 18px; height: 18px; display: block; }
+.dash-panel-warn .dash-panel-icon{ color: #d97706; }
+body.role-admin .dash-panel-icon{ color: #34d399; }
+body.role-admin .dash-panel-warn .dash-panel-icon{ color: #fbbf24; }
 /* Panel toggle */
 .dash-panel-actions{
   display: flex; align-items: center; gap: .4rem;
@@ -1862,6 +2221,163 @@ html[dir="rtl"] .dash-panel.collapsed .dash-toggle-icon{
 .dash-panel.collapsed{
   box-shadow: var(--shadow-xs);
 }
+
+/* ============== ENTERPRISE AUDIT LOG ============== */
+.dash-panel-audit{ margin-bottom: 1.25rem; }
+/* The audit body is taller than the shared 600px cap; the stream scrolls
+   inside it. ID specificity keeps the collapse animation working below. */
+#panel-audit .dash-panel-body{ max-height: 760px; }
+#panel-audit.collapsed .dash-panel-body{ max-height: 0; }
+
+/* Live badge with a pulsing dot */
+.dash-live-badge{
+  display: inline-flex; align-items: center; gap: .35rem;
+  background: rgba(16,185,129,.15); color: #10b981;
+}
+.dash-live-dot{
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #10b981; box-shadow: 0 0 0 0 rgba(16,185,129,.55);
+  animation: auditPulse 1.8s infinite;
+}
+@keyframes auditPulse{
+  0%{ box-shadow: 0 0 0 0 rgba(16,185,129,.55); }
+  70%{ box-shadow: 0 0 0 6px rgba(16,185,129,0); }
+  100%{ box-shadow: 0 0 0 0 rgba(16,185,129,0); }
+}
+
+/* KPI strip */
+.audit-kpis{
+  display: grid; grid-template-columns: repeat(6, 1fr);
+  gap: .6rem; padding: .9rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+.audit-kpi{
+  display: flex; flex-direction: column; gap: .1rem;
+  padding: .6rem .7rem; border-radius: 10px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+}
+.audit-kpi-value{ font-size: 1.35rem; font-weight: 800; color: var(--ink); line-height: 1; }
+.audit-kpi-label{ font-size: .68rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.audit-kpi-events{ border-left-color: var(--accent); }
+.audit-kpi-logins{ border-left-color: #10b981; }
+.audit-kpi-created{ border-left-color: #3b82f6; }
+.audit-kpi-edits{ border-left-color: #f59e0b; }
+.audit-kpi-deletes{ border-left-color: #ef4444; }
+.audit-kpi-companies{ border-left-color: #8b5cf6; }
+
+/* Filters */
+.audit-filters{
+  display: flex; flex-wrap: wrap; gap: .5rem;
+  padding: .8rem 1rem; border-bottom: 1px solid var(--line);
+}
+.audit-filters .dash-company-select{ min-width: 190px; flex: 1 1 190px; }
+.audit-select{
+  flex: 0 0 auto; min-width: 130px;
+  padding: .5rem .7rem; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink); font-size: .84rem; font-weight: 600; cursor: pointer;
+}
+.audit-search{
+  flex: 2 1 200px; min-width: 180px;
+  padding: .5rem .8rem; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink); font-size: .85rem;
+}
+.audit-search:focus, .audit-select:focus{
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-lt);
+}
+/* The company filter's custom dropdown must float ABOVE the event stream and
+   not be clipped by the panel body's collapse overflow. We only lift the clip
+   while a dropdown is actually open, so the collapse animation is untouched. */
+.audit-filters{ position: relative; z-index: 20; }
+.audit-filters .ss-panel{ z-index: 200; }
+#panel-audit .dash-panel-body:has(.audit-filters .ss-wrapper.open){ overflow: visible; }
+
+/* Stream */
+.audit-stream{
+  max-height: 440px; overflow-y: auto;
+  padding: .3rem .5rem;
+}
+.audit-row{
+  display: grid;
+  grid-template-columns: 52px 84px 74px minmax(0,1fr) auto;
+  align-items: center; gap: .7rem;
+  padding: .55rem .6rem; border-bottom: 1px solid var(--line);
+  font-size: .84rem; cursor: pointer;
+  border-radius: 8px; transition: background .12s ease;
+}
+.audit-row:last-child{ border-bottom: none; }
+.audit-row:hover{ background: var(--surface-2); }
+.audit-time{ color: var(--muted); font-size: .76rem; font-weight: 600; white-space: nowrap; }
+.audit-badge{
+  justify-self: start; white-space: nowrap;
+  padding: .18rem .5rem; border-radius: 999px;
+  font-size: .7rem; font-weight: 700; text-transform: capitalize;
+}
+.audit-badge-login  { background: rgba(16,185,129,.16);  color: #10b981; }
+.audit-badge-logout { background: rgba(100,116,139,.18); color: #94a3b8; }
+.audit-badge-create { background: rgba(59,130,246,.16);  color: #3b82f6; }
+.audit-badge-update { background: rgba(245,158,11,.18);  color: #f59e0b; }
+.audit-badge-delete { background: rgba(239,68,68,.16);   color: #ef4444; }
+.audit-ent{ color: var(--muted); font-size: .78rem; font-weight: 600; white-space: nowrap; }
+.audit-main{ display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+.audit-company{ font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.audit-detail{ color: var(--ink-soft); font-size: .8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.audit-detail-muted{ color: var(--muted); font-style: italic; }
+.audit-user{ color: var(--muted); font-size: .78rem; font-weight: 600; white-space: nowrap; justify-self: end; }
+
+@media (max-width: 720px){
+  .audit-kpis{ grid-template-columns: repeat(3, 1fr); }
+  .audit-row{
+    grid-template-columns: 46px 74px minmax(0,1fr);
+    grid-template-areas:
+      "time badge main"
+      "time ent   user";
+    row-gap: .2rem;
+  }
+  .audit-time{ grid-area: time; }
+  .audit-badge{ grid-area: badge; }
+  .audit-ent{ grid-area: ent; }
+  .audit-main{ grid-area: main; }
+  .audit-user{ grid-area: user; justify-self: start; }
+}
+
+/* Audit event detail modal */
+.audit-dl{ display: flex; flex-direction: column; gap: 0; margin: 0; }
+.audit-dl-row{
+  display: grid; grid-template-columns: 120px 1fr; gap: .8rem;
+  align-items: center; padding: .55rem .2rem;
+  border-bottom: 1px solid var(--line);
+}
+.audit-dl-row dt{ color: var(--muted); font-size: .78rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; margin: 0; }
+.audit-dl-row dd{ color: var(--ink); font-size: .9rem; font-weight: 600; margin: 0; word-break: break-word; }
+.audit-dl-rel{ color: var(--muted); font-weight: 500; font-size: .8rem; }
+.audit-dl-h{
+  margin: 1rem 0 .4rem; font-size: .78rem; font-weight: 700;
+  color: var(--muted); text-transform: uppercase; letter-spacing: .03em;
+}
+.audit-detail-full{
+  margin: 0; padding: .7rem .8rem; border-radius: 10px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  color: var(--ink); font-size: .84rem; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+  font-family: inherit;
+}
+/* "View car / client / branch" drill button under an audit / timeline detail */
+.audit-drill-row{ margin-top: .8rem; display: flex; }
+.audit-drill-btn{ font-size: .82rem; padding: .45rem .8rem; }
+.dash-timeline-detail .audit-drill-row{ margin-top: .5rem; }
+.dash-timeline-detail .audit-drill-btn{ font-size: .78rem; padding: .35rem .7rem; }
+/* Head-office pill in the branch detail modal */
+.rd-badge{
+  display: inline-block; margin-inline-start: .4rem; vertical-align: middle;
+  padding: .12rem .5rem; border-radius: 999px;
+  background: var(--success-lt); color: #059669;
+  font-size: .68rem; font-weight: 800;
+}
+body:is(.role-admin,.role-company) .rd-badge{ background: rgba(16,185,129,.18); color: #a7f3d0; }
 
 .dash-panel-badge{
   background: var(--primary); color: #fff;
@@ -1913,7 +2429,7 @@ html[dir="rtl"] .dash-search-input{
 
 /* Activity feed */
 .dash-activity-list{
-  padding: .4rem 0;
+  padding: .4rem 0 .6rem;
   max-height: 380px; overflow-y: auto;
 }
 .dash-empty{
@@ -1932,9 +2448,14 @@ html[dir="rtl"] .dash-search-input{
 }
 .dash-activity-row:hover{ background: var(--primary-lt); }
 .dash-activity-expand{
+  display: inline-block;
   font-size: .7rem; color: var(--muted);
-  transition: transform .15s;
+  transition: transform .18s ease;
 }
+/* Expanded state: flip the caret and keep the row highlighted so it's clearly
+   a pressable toggle. */
+.dash-activity-item.expanded .dash-activity-expand{ transform: rotate(180deg); color: var(--primary); }
+.dash-activity-item.expanded .dash-activity-row{ background: var(--primary-lt); }
 .dash-activity-sub{
   font-size: .74rem; color: var(--muted);
 }
@@ -1952,6 +2473,21 @@ html[dir="rtl"] .dash-search-input{
   font-weight: 700; color: var(--muted);
 }
 .dash-timeline-text{ flex: 1; min-width: 0; }
+/* Detail-bearing entries toggle their data open on press. */
+.dash-timeline-item.has-detail{ cursor: pointer; align-items: flex-start; }
+.dash-timeline-body{ flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .2rem; }
+.dash-timeline-caret{
+  display: inline-block; font-size: .62rem; color: var(--muted);
+  transition: transform .18s ease; margin-inline-start: .1rem;
+}
+.dash-timeline-item.has-detail:hover .dash-timeline-text{ color: var(--ink); }
+.dash-timeline-item.has-detail.expanded .dash-timeline-caret{ transform: rotate(180deg); color: var(--primary); }
+.dash-timeline-detail{
+  padding: .4rem .55rem; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--line-soft);
+  color: var(--ink-soft); font-size: .76rem; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+}
 .dash-activity-dot{
   width: 8px; height: 8px; border-radius: 50%;
   flex: 0 0 auto;
@@ -2083,6 +2619,195 @@ body.role-company .return-badge.today{    background: rgba(245,158,11,.20); colo
 body.role-company .return-badge.upcoming{ background: rgba(16,185,129,.18); color: #a7f3d0; }
 body.role-company #tbl-returns tr.returns-row:has(.return-badge.overdue) td{
   background: rgba(239,68,68,.10);
+}
+/* "Returned" status (B2B records handed back) — muted, neutral. */
+.return-badge.returned{ background: #e2e8f0; color: #475569; }
+body.role-company .return-badge.returned{ background: rgba(148,163,184,.18); color: #cbd5e1; }
+/* A returned B2B row is history — dim it so active rows stand out. */
+tr.special-returned-row td{ opacity: .58; }
+
+/* =================== NOTIFICATION BELL (company header) =================== */
+.notif-bell{ display: none; }
+body.role-company .notif-bell{
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; border-radius: 10px; cursor: pointer;
+  color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line);
+  transition: background .15s, border-color .15s, color .15s;
+}
+.notif-bell:hover{ border-color: var(--primary); color: var(--primary); }
+.notif-bell svg{ width: 19px; height: 19px; }
+.notif-bell.has-alerts{ animation: bell-swing 1.6s ease-in-out 1; }
+@keyframes bell-swing{
+  0%,100%{ transform: rotate(0); }
+  15%{ transform: rotate(11deg); } 30%{ transform: rotate(-9deg); }
+  45%{ transform: rotate(6deg); }  60%{ transform: rotate(-4deg); }
+}
+.notif-badge{
+  position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px;
+  padding: 0 4px; border-radius: 999px;
+  background: #ef4444; color: #fff;
+  font-size: .66rem; font-weight: 800; line-height: 17px; text-align: center;
+  box-shadow: 0 0 0 2px var(--bg, #0b1220);
+}
+
+/* =================== LOGIN ALERTS PANEL =================== */
+.alerts-card .alerts-body{ padding: 1rem .95rem .3rem; display: flex; flex-direction: column; gap: 1.1rem; }
+.alert-block{ border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--surface); }
+.alert-block-head{ display: flex; align-items: center; gap: .7rem; padding: .8rem .9rem; }
+.alert-ico{
+  flex: 0 0 auto; width: 38px; height: 38px; border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 1.15rem;
+  background: var(--accent-lt);
+}
+.alert-ico.reservations{ background: var(--success-lt); }
+.alert-block-titles{ flex: 1 1 auto; min-width: 0; }
+.alert-block-titles h4{ margin: 0; font-size: .96rem; }
+.alert-block-sub{ margin: .12rem 0 0; font-size: .8rem; color: var(--muted, #94a3b8); }
+.alert-jump{ flex: 0 0 auto; padding: .38rem .7rem !important; font-size: .78rem !important; }
+.alert-list{ list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.alert-item{
+  display: flex; align-items: center; gap: .65rem;
+  padding: .6rem .9rem; border-bottom: 1px solid var(--line);
+}
+.alert-item:last-child{ border-bottom: 0; }
+.alert-item-ico{ flex: 0 0 auto; font-size: 1.05rem; }
+.alert-item-main{ flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.alert-item-title{ font-weight: 700; font-size: .88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.alert-item-sub{ font-size: .78rem; color: var(--muted, #94a3b8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.alerts-empty{ text-align: center; color: var(--muted, #94a3b8); padding: 1.4rem .5rem; margin: 0; }
+
+/* Alert-list "Back to office" button (return a car straight from the alert). */
+.alert-return-btn{
+  flex: 0 0 auto; cursor: pointer; font-weight: 700; font-size: .76rem;
+  color: #fff; background: linear-gradient(135deg, #2563eb, #3b82f6);
+  border: 0; border-radius: 8px; padding: .4rem .7rem;
+  transition: filter .15s, transform .15s;
+}
+.alert-return-btn:hover{ filter: brightness(1.08); transform: translateY(-1px); }
+
+/* The return-branch picker can be summoned from the alerts modal, so it has to
+   stack above the other .modal overlays (all default to z-index 300). */
+#return-branch-modal{ z-index: 320; }
+
+/* Return-to-branch picker: every branch shown as a big, visible radio card
+   (Main + all branches) instead of a cramped dropdown. */
+.rb-list{
+  display: flex; flex-direction: column; gap: .5rem;
+  max-height: 46vh; overflow-y: auto; margin-top: .4rem; padding: .1rem;
+}
+.rb-option{
+  position: relative; display: flex; align-items: center; gap: .75rem;
+  padding: .7rem .85rem; border-radius: 12px; cursor: pointer;
+  border: 1.5px solid var(--line);
+  background: var(--surface-2, var(--surface));
+  transition: border-color .15s, background .15s;
+}
+.rb-option:hover{ border-color: var(--primary); }
+.rb-option input{ position: absolute; opacity: 0; width: 0; height: 0; }
+.rb-option-mark{
+  flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%;
+  border: 2px solid var(--line); position: relative; transition: border-color .15s;
+}
+.rb-option-mark::after{
+  content: ""; position: absolute; inset: 4px; border-radius: 50%;
+  background: var(--primary); transform: scale(0); transition: transform .15s;
+}
+.rb-option-body{ display: flex; flex-direction: column; min-width: 0; }
+.rb-option-name{ font-weight: 700; font-size: .92rem; color: var(--ink); }
+.rb-option-sub{ font-size: .78rem; color: var(--ink-soft, var(--muted)); }
+.rb-option.selected{
+  border-color: var(--primary);
+  background: var(--primary-lt, rgba(59,130,246,.14));
+}
+.rb-option.selected .rb-option-mark{ border-color: var(--primary); }
+.rb-option.selected .rb-option-mark::after{ transform: scale(1); }
+.rb-option:focus-within{ outline: 2px solid var(--primary); outline-offset: 1px; }
+
+/* ---- Return Due widget (company home dashboard) ---- */
+.return-due-card{
+  margin: 0 0 1.4rem;
+  padding: 1.1rem 1.2rem 1rem;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(30,41,59,.72), rgba(15,23,42,.72));
+  box-shadow: 0 18px 40px -26px rgba(0,0,0,.85);
+  animation: entCardIn .45s cubic-bezier(.2,.7,.3,1) both;
+}
+.rd-widget-head{ display: flex; align-items: center; gap: .8rem; margin-bottom: .9rem; }
+.rd-widget-ico{
+  flex: 0 0 auto; width: 42px; height: 42px; border-radius: 12px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fbbf24; background: rgba(245,158,11,.18);
+  box-shadow: inset 0 0 0 1px rgba(245,158,11,.35);
+}
+.rd-widget-ico svg{ width: 22px; height: 22px; }
+html[dir="rtl"] .rd-widget-ico svg{ transform: scaleX(-1); }
+.rd-widget-titles{ flex: 1 1 auto; min-width: 0; }
+.rd-widget-titles h2{ margin: 0; font-size: 1.1rem; font-weight: 800; color: #fff; letter-spacing: -.01em; }
+.rd-widget-sub{ margin: .12rem 0 0; font-size: .82rem; color: rgba(255,255,255,.7); }
+.rd-widget-all{
+  flex: 0 0 auto; cursor: pointer; font-weight: 700; font-size: .82rem;
+  color: rgba(255,255,255,.9); background: rgba(255,255,255,.1);
+  border: 1px solid rgba(255,255,255,.16); border-radius: 10px;
+  padding: .45rem .8rem; transition: background .15s, transform .15s;
+}
+.rd-widget-all:hover{ background: rgba(255,255,255,.18); transform: translateY(-1px); }
+html[dir="rtl"] .rd-widget-all span[aria-hidden]{ display: inline-block; transform: scaleX(-1); }
+
+.rd-widget-list{ list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
+.rd-item{
+  display: flex; align-items: center; gap: .7rem;
+  padding: .6rem .75rem; border-radius: 12px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.08);
+  border-left: 3px solid rgba(255,255,255,.2);
+  transition: background .15s;
+}
+.rd-item:hover{ background: rgba(255,255,255,.09); }
+.rd-item.overdue{  border-left-color: #ef4444; }
+.rd-item.today{    border-left-color: #f59e0b; }
+.rd-item.soon{     border-left-color: #3b82f6; }
+.rd-item.upcoming{ border-left-color: #34d399; }
+.rd-item-ico{ flex: 0 0 auto; display: inline-flex; color: rgba(255,255,255,.78); }
+.rd-item-ico svg{ width: 19px; height: 19px; }
+.rd-item-main{ flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.rd-item-car{ font-weight: 700; font-size: .9rem; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rd-item-who{ font-size: .76rem; color: rgba(255,255,255,.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rd-rel{
+  flex: 0 0 auto; font-size: .72rem; font-weight: 800; letter-spacing: .02em;
+  padding: .28rem .6rem; border-radius: 999px; white-space: nowrap;
+}
+.rd-rel.overdue{  background: rgba(239,68,68,.20);  color: #fecaca; }
+.rd-rel.today{    background: rgba(245,158,11,.20); color: #fde68a; }
+.rd-rel.soon{     background: rgba(59,130,246,.22); color: #bfdbfe; }
+.rd-rel.upcoming{ background: rgba(16,185,129,.18); color: #a7f3d0; }
+.rd-return-btn{
+  flex: 0 0 auto; cursor: pointer; font-weight: 700; font-size: .78rem;
+  color: #fff; background: linear-gradient(135deg, #2563eb, #3b82f6);
+  border: 0; border-radius: 9px; padding: .48rem .8rem;
+  transition: filter .15s, transform .15s;
+}
+.rd-return-btn:hover{ filter: brightness(1.08); transform: translateY(-1px); }
+.rd-more{ text-align: center; }
+.rd-more button{
+  cursor: pointer; background: none; border: 0; color: rgba(255,255,255,.75);
+  font-weight: 700; font-size: .82rem; padding: .4rem;
+}
+.rd-more button:hover{ color: #fff; text-decoration: underline; }
+
+html[dir="rtl"] .rd-item{ border-left: 1px solid rgba(255,255,255,.08); border-right: 3px solid rgba(255,255,255,.2); }
+html[dir="rtl"] .rd-item.overdue{  border-right-color: #ef4444; }
+html[dir="rtl"] .rd-item.today{    border-right-color: #f59e0b; }
+html[dir="rtl"] .rd-item.soon{     border-right-color: #3b82f6; }
+html[dir="rtl"] .rd-item.upcoming{ border-right-color: #34d399; }
+
+@media (max-width: 640px){
+  .rd-item{ flex-wrap: wrap; }
+  .rd-item-main{ order: 1; flex: 1 1 55%; }
+  .rd-rel{ order: 2; }
+  .rd-return-btn{ order: 3; flex: 1 1 100%; margin-top: .35rem; }
 }
 
 /* ---- Returns KPI summary cards ---- */
@@ -2873,10 +3598,10 @@ body.role-admin .stat-cars:hover     { box-shadow: 0 12px 30px rgba(245,158,11,.
 body.role-admin .stat-clients:hover  { box-shadow: 0 12px 30px rgba(16,185,129,.28); }
 body.role-admin .stat-rentals:hover  { box-shadow: 0 12px 30px rgba(139,92,246,.30); }
 /* brighten icon tiles on dark */
-body.role-admin .stat-companies .stat-icon{ background: rgba(99,102,241,.18); }
-body.role-admin .stat-cars .stat-icon     { background: rgba(245,158,11,.18); }
-body.role-admin .stat-clients .stat-icon  { background: rgba(16,185,129,.18); }
-body.role-admin .stat-rentals .stat-icon  { background: rgba(139,92,246,.20); }
+body.role-admin .stat-companies .stat-icon{ background: rgba(99,102,241,.18); color: #a5b4fc; }
+body.role-admin .stat-cars .stat-icon     { background: rgba(245,158,11,.18); color: #fbbf60; }
+body.role-admin .stat-clients .stat-icon  { background: rgba(16,185,129,.18); color: #6ee7b7; }
+body.role-admin .stat-rentals .stat-icon  { background: rgba(139,92,246,.20); color: #c4b5fd; }
 body.role-admin .stat-value{ font-variant-numeric: tabular-nums; }
 
 /* ---- Two-column panels: staggered entrance + glow on hover ---- */
@@ -3313,9 +4038,46 @@ body.role-admin .pager-btn:hover:not([disabled]):not(.active){ transform: transl
 
 /* Keep the special admin rows distinct over the new zebra/hover */
 body.role-admin #tbl-companies tr.company-branch-row > td{
-  background: rgba(129,140,248,.06);
-  border-top: 1px dashed var(--line);
+  background: rgba(129,140,248,.05);
+  border-top: 0;
 }
+body.role-admin #tbl-companies .company-branch-row .branch-cell::before,
+body.role-admin #tbl-companies .company-branch-row .branch-cell::after{
+  background: rgba(129,140,248,.32);
+}
+body.role-admin #tbl-companies .branch-tag{
+  background: rgba(129,140,248,.10); border-color: rgba(129,140,248,.20);
+  color: var(--ink);
+}
+body.role-admin #tbl-companies .branch-toggle{
+  background: rgba(129,140,248,.16);
+  box-shadow: inset 0 0 0 1px rgba(129,140,248,.28);
+}
+body.role-admin #tbl-companies .branch-toggle:hover{
+  box-shadow: inset 0 0 0 1px rgba(129,140,248,.55);
+}
+body.role-admin #tbl-companies .branch-toggle .branch-chevron{ color: #c4b5fd; }
+body.role-admin #tbl-companies .branch-count-badge{
+  background: transparent; color: #c4b5fd;
+}
+/* Cars-table branch tag in the admin dark theme */
+body.role-admin #tbl-cars .branch-pill{
+  background: rgba(129,140,248,.16); color: #c4b5fd;
+}
+body.role-admin #tbl-cars .branch-pill-main{
+  background: transparent; color: var(--ink-soft);
+  border: 1px dashed rgba(148,163,184,.4);
+}
+/* Fleet tree — indigo accents to match the admin dark theme */
+body.role-admin .fleet-co{ background: rgba(148,163,184,.05); }
+body.role-admin .fleet-co.is-open{ border-color: rgba(129,140,248,.45); }
+body.role-admin .fleet-co-head:hover,
+body.role-admin .fleet-br-head:hover{ background: rgba(129,140,248,.12); }
+body.role-admin .fleet-br-head{ background: rgba(148,163,184,.07); }
+body.role-admin .fleet-pill-cars{ background: rgba(129,140,248,.18); color: #c4b5fd; }
+body.role-admin .fleet-pill-br{ box-shadow: inset 0 0 0 1px rgba(148,163,184,.28); }
+body.role-admin .fleet-br-ico{ color: #c4b5fd; }
+body.role-admin .fleet-co.is-open > .fleet-co-head .fleet-chevron{ color: #c4b5fd; }
 body.role-admin #tbl-admin-reservations tr.rv-row-today td{
   background: rgba(52,211,153,.12);
 }
@@ -3419,6 +4181,102 @@ body.role-admin #tbl-admin-reservations tr.rv-row-today td{
 }
 
 /* -----------------------------------------------------
+   TABLET DATA TABLES (721–1024px) — a plain data table has too
+   many columns to fit an iPad / small-laptop width, so it would
+   scroll sideways inside its frame (LICENSE, PHONE, etc. clipped).
+   Give those tables the SAME responsive card-grid the bento tables
+   use above 720px, so every record reads as a self-contained card
+   with no horizontal scroll. Desktop (≥1025px) keeps the dense table.
+   Bento tables already handle this range, so exclude them.
+----------------------------------------------------- */
+@media (min-width: 721px) and (max-width: 1024px){
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table){
+    border: 0; background: transparent; box-shadow: none;
+    overflow: visible; border-radius: 0;
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) table{
+    /* !important beats id-specificity desktop rules such as
+       #tbl-admin-reservations{ min-width:1240px } that would otherwise force
+       the card grid wider than the viewport and clip the right column. */
+    display: block; min-width: 0 !important; font-size: .9rem;
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody td,
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) thead th{
+    white-space: normal !important;
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) thead{
+    position: absolute; width: 1px; height: 1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody{
+    display: grid; gap: 1rem;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody tr,
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody tr:nth-child(even){
+    display: flex; flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: var(--shadow-xs);
+    padding: .35rem 1.1rem;
+    overflow: hidden;
+    transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody tr:hover,
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody tr:nth-child(even):hover{
+    transform: translateY(-3px);
+    border-color: rgba(129,140,248,.5);
+    box-shadow: 0 10px 26px rgba(0,0,0,.28);
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody td{
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 1rem; text-align: end;
+    padding: .6rem 0; min-height: 0;
+    /* Every row spans the full card — override desktop-table column sizing
+       (e.g. width:1% on photo/view cells) that would otherwise collapse the
+       cell and stack its label one character per line. */
+    width: auto !important;
+    border: 0; border-bottom: 1px solid var(--line-soft) !important;
+    background: transparent !important;
+    font-size: .9rem; font-weight: 500; white-space: normal;
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody td:last-child{
+    border-bottom: 0 !important;
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody td::before{
+    content: attr(data-label);
+    flex: 0 0 42%; text-align: start;
+    font-size: .66rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--ink-soft); word-break: break-word;
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody td[data-label="#"]{ display: none; }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody td:not([data-label]){
+    justify-content: flex-end;
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody td:not([data-label])::before{
+    display: none;
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody td .row-actions{
+    justify-content: flex-end; flex-wrap: wrap; gap: .4rem;
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody tr.empty-row,
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody tr.empty-row:hover{
+    grid-column: 1 / -1;
+    display: block; text-align: center; transform: none;
+    border: 1px dashed var(--line); box-shadow: none; background: transparent;
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody tr.empty-row td{
+    display: block; text-align: center; border: 0 !important;
+    color: var(--muted); padding: 2rem 1rem;
+  }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody tr.empty-row td::before{ display: none; }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody td img{
+    max-height: 46px; width: auto; border-radius: 8px;
+  }
+}
+
+/* -----------------------------------------------------
    "Cars Rented to Companies" (B2B) list renders as a real,
    dense data-table (not bento cards) so it stays scannable as
    the record count grows. A few per-column touches keep the
@@ -3438,6 +4296,11 @@ body.role-admin #tbl-admin-reservations tr.rv-row-today td{
    the full-record modal (father/mother, DOB, document type + document photo,
    and license dates that were dropped from the row to keep it friendly).
 ----------------------------------------------------- */
+/* API-doc endpoint table: the route/body cells hold long code tokens
+   (JSON snippets, query strings). Let them wrap so they never push the
+   cell — and the page — wider than a phone viewport. */
+.api-endpoints code{ white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+
 #tbl-clients tbody td[data-col="photo"]{ width: 1%; }
 #tbl-clients tbody td[data-col="view"]{ width: 1%; white-space: nowrap; text-align: center; }
 #tbl-clients .client-view{ font-size: 1rem; line-height: 1; padding: .35rem .6rem; }
@@ -3785,6 +4648,19 @@ body.nav-open .mobile-nav-backdrop{ opacity: 1; pointer-events: auto; }
   .report-search-field,
   .report-date-field,
   .rv-date-field{ width: 100%; max-width: none; min-width: 0; }
+  /* A field's row flex-basis (e.g. 220px) is its MAIN-axis size — once the
+     toolbar stacks into a column that basis becomes the field's HEIGHT, leaving
+     big vertical gaps between filters. Reset every toolbar field to content
+     height, full width. */
+  .table-toolbar .field,
+  .filter-toolbar .field,
+  .table-search-field,
+  .table-search-field-wide,
+  .table-search-field-narrow,
+  .filter-toolbar .table-search-field-narrow,
+  .report-search-field,
+  .report-date-field,
+  .rv-date-field{ flex: 0 0 auto; width: 100%; max-width: none; min-width: 0; }
   .upload-actions .btn,
   .rv-filter-bar .btn{ width: 100%; }
 
@@ -3818,6 +4694,9 @@ body.nav-open .mobile-nav-backdrop{ opacity: 1; pointer-events: auto; }
     display: flex; align-items: center; justify-content: space-between;
     gap: 1rem; text-align: end;
     padding: .6rem 0;
+    /* Full-width rows: override desktop column widths (e.g. width:1% on
+       photo/view cells) so no cell collapses in the stacked-card view. */
+    width: auto !important;
     border: 0; border-bottom: 1px solid var(--line-soft);
     font-size: .9rem; font-weight: 500; white-space: normal; min-height: 0;
     /* In card view each row is its own block, so reset the desktop zebra tint. */
@@ -3896,6 +4775,22 @@ body.nav-open .mobile-nav-backdrop{ opacity: 1; pointer-events: auto; }
   .login-card .field{ gap: .25rem; }
   .login-card .field input{ height: 44px; }
   .login-btn{ height: 44px; margin-top: .2rem; }
+}
+
+/* Very small phones (≤430px): the signed-in header packs profile, theme,
+   language and logout into one row — compress spacing and controls so the
+   bar can't overflow the viewport (which would scroll the whole page). */
+@media (max-width: 430px){
+  .header-inner{ gap: .5rem; padding: .55rem 0; }
+  .header-actions{ gap: .3rem; }
+  .lang-btn{ padding: .3rem .55rem; font-size: .78rem; }
+  .btn-logout{ padding: .4rem .6rem; font-size: .78rem; }
+  body:is(.role-admin, .role-company) .theme-toggle{ padding: .38rem .5rem; }
+}
+/* Narrowest phones (≤380px): drop the wordmark to the logo mark alone so the
+   header actions always have the room they need. */
+@media (max-width: 380px){
+  .brand-text{ display: none; }
 }
 
 /* Smaller / shorter phones: compress the login card further so it still fits
@@ -4037,6 +4932,44 @@ html[dir="rtl"] .ra-donut-center{ left: auto; right: 61px; transform: translate(
 .ltr{ unicode-bidi: isolate; direction: ltr; }
 .cell-dash{ color: var(--muted); }
 .cell-muted{ color: var(--muted); font-size: .82em; }
+
+/* Clickable company / car / client values in the admin report + reservation
+   tables — they open that entity's detail modal. Styled as an inline link that
+   inherits the row's text so it reads as data, not a button, until hovered. */
+.cell-drill{
+  border: 0; background: none; padding: 0; margin: 0; font: inherit;
+  color: var(--primary); cursor: pointer; text-align: inherit;
+  border-radius: 4px; text-decoration: none; max-width: 100%;
+}
+.cell-drill.is-strong{ font-weight: 700; }
+.cell-drill:hover,
+.cell-drill:focus-visible{ text-decoration: underline; text-underline-offset: 2px; }
+.cell-drill:focus-visible{ outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* Entity-detail modal helpers (company / car). */
+.rd-idhead{ display: flex; align-items: center; gap: .7rem; margin-bottom: .9rem; }
+.rd-logo-img{
+  width: 46px; height: 46px; border-radius: 10px; object-fit: cover; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 800; font-size: .95rem;
+}
+.rd-idname{ font-size: 1.05rem; font-weight: 800; color: var(--ink); }
+.rd-branch-section{ margin-top: 1rem; }
+.rd-branch-list{ list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+.rd-branch-list li{
+  display: flex; justify-content: space-between; gap: .8rem;
+  padding: .45rem .6rem; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-2);
+}
+.rd-branch-n{ font-weight: 700; color: var(--ink); }
+.rd-branch-v{ color: var(--ink-soft); text-align: right; }
+.rd-loading{ color: var(--muted); padding: .6rem 0; }
+.rd-maplink{
+  color: var(--primary); font-weight: 600; text-decoration: none;
+  display: inline-flex; align-items: center; gap: .35ch;
+}
+.rd-maplink::before{ content: "📍"; }
+.rd-maplink:hover{ text-decoration: underline; text-underline-offset: 2px; }
 
 /* Arabic is cursive: letter-spacing + uppercase break the joins and read
    as broken glyphs. Neutralize them on table headers in RTL. */
@@ -4347,13 +5280,37 @@ body:is(.role-company,.role-admin) .reservation-status-badge.inactive{ color: #9
 }
 .rvd-notes{ margin: 0; color: var(--ink-soft); font-size: .9rem; white-space: pre-wrap; }
 
-/* ---- Coordinates link in the Companies table → a tidy map chip ---- */
-body:is(.role-company,.role-admin) .company-coord-link{
-  display: inline-flex; align-items: center; gap: .35rem;
-  text-decoration: none; font-weight: 600;
+/* ---- Map-pin inside the company detail modal (location + each branch) ---- */
+.rd-loc-pin{
+  flex: 0 0 auto; vertical-align: middle;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0; margin-inline-start: .35rem;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: var(--primary-lt); color: var(--primary);
+  cursor: pointer; transition: background .15s, color .15s, transform .15s, border-color .15s;
 }
-body:is(.role-company,.role-admin) .company-coord-link code{
-  font-size: .76rem; color: var(--primary);
-  background: var(--primary-lt); padding: .15rem .5rem; border-radius: 6px;
+.rd-loc-pin svg{ width: 15px; height: 15px; display: block; }
+.rd-loc-pin:hover{ background: var(--primary); color: #fff; border-color: var(--primary); transform: translateY(-1px); }
+.rd-loc-pin:focus-visible{ outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* ---- Location cell in the Companies table: clickable pin + place name ----
+   The whole cell is a button — click it to open the location on the map. */
+.company-loc-td{ white-space: nowrap; }
+.company-loc-link{
+  display: inline-flex; align-items: center; gap: .4rem;
+  max-width: 100%; padding: .28rem .55rem;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--primary-lt); color: var(--primary);
+  font: inherit; font-size: .9rem; line-height: 1.2; text-align: left;
+  cursor: pointer; transition: background .15s, color .15s, transform .15s, border-color .15s;
 }
-body:is(.role-company,.role-admin) .company-coord-link:hover code{ background: var(--primary-glow); color: #fff; }
+.company-loc-link-ico{ flex: 0 0 auto; width: 16px; height: 16px; display: block; }
+.company-loc-link-text{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.company-loc-link:hover{
+  background: var(--primary); color: #fff; border-color: var(--primary);
+  transform: translateY(-1px);
+}
+.company-loc-link:focus-visible{ outline: 2px solid var(--primary); outline-offset: 2px; }
+body:is(.role-company,.role-admin) .company-loc-link{
+  border-color: rgba(129,140,248,.24);
+}

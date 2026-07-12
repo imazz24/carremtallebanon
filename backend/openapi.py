@@ -30,6 +30,30 @@ _BRANCH_EXAMPLE = {
     "location": "Beirut",
     "phonenumber": "+9611000000",
 }
+_RENTAL_EXAMPLE = {
+    "client_id": 101,
+    "car_vin": "1HGCM82633A004352",
+    "start_date": "2026-08-01",
+    "end_date": "2026-08-07",
+}
+_RESERVATION_EXAMPLE = {
+    "car_vin": "1HGCM82633A004352",
+    "client_id": 101,
+    "start_date": "2026-08-10",
+    "end_date": "2026-08-14",
+    "notes": "Airport pickup",
+}
+_COMPANY_RENTAL_EXAMPLE = {
+    "company_name": "Cedar Fleet Co",
+    "owner_name": "Rami Aoun",
+    "location": "Tripoli",
+    "phones": ["+9616000000"],
+    "branches": ["Tripoli Center"],
+    "car_vin": "1HGCM82633A004352",
+    "start_date": "2026-09-01",
+    "end_date": "2026-09-30",
+    "notes": "Monthly corporate lease",
+}
 
 
 def _batch_endpoint(tag, key, item_schema, item_example, summary, success_desc):
@@ -95,9 +119,17 @@ def build_spec():
             "title": "Car Rental — External Integration API",
             "version": "1.0.0",
             "description": (
-                "Push your fleet **cars, clients and branches** into Car Rental, "
-                "and pull **reservation & rental reports** back out — all with a "
-                "single secret API key.\n\n"
+                "Push **everything** into Car Rental with a single secret API key — "
+                "your fleet **cars, clients and branches**, plus the day-to-day "
+                "records: **rentals to individuals, reservations, and B2B cars "
+                "rented out to other companies** — and pull the matching "
+                "**reports** back out.\n\n"
+                "Every write endpoint is a **bulk / batch** import (up to 500 rows) "
+                "and is safe to call **concurrently**: many companies — and many "
+                "requests from the same company — can import at the same time. "
+                "Bookings for the same car are serialised per-car so a car can "
+                "never be double-booked, while different cars import fully in "
+                "parallel.\n\n"
                 "## Getting your key\n"
                 "1. Sign in to the dashboard with your company account.\n"
                 "2. Open the **🔑 Generate Secret Key** tab in the sidebar.\n"
@@ -118,8 +150,9 @@ def build_spec():
         },
         "servers": [{"url": "/", "description": "This server"}],
         "tags": [
-            {"name": "Import", "description": "Push cars / clients / branches in."},
-            {"name": "Reports", "description": "Read your reservations & rentals."},
+            {"name": "Import", "description": "Push cars, clients, branches, rentals, "
+                                             "reservations & B2B company rentals in (bulk)."},
+            {"name": "Reports", "description": "Read your cars, reservations, rentals & B2B rentals."},
             {"name": "API key", "description": "Inspect or rotate your key."},
         ],
         "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
@@ -178,6 +211,21 @@ def build_spec():
                     },
                 }
             },
+            "/api/rentals/batch": _batch_endpoint(
+                "Import", "rentals",
+                {"$ref": "#/components/schemas/RentalInput"}, _RENTAL_EXAMPLE,
+                "Rent cars to individuals in bulk",
+                "Rentals recorded."),
+            "/api/reservations/batch": _batch_endpoint(
+                "Import", "reservations",
+                {"$ref": "#/components/schemas/ReservationInput"}, _RESERVATION_EXAMPLE,
+                "Reserve cars in bulk",
+                "Reservations recorded."),
+            "/api/company-rentals/batch": _batch_endpoint(
+                "Import", "company_rentals",
+                {"$ref": "#/components/schemas/CompanyRentalInput"}, _COMPANY_RENTAL_EXAMPLE,
+                "Rent cars out to other companies (B2B) in bulk",
+                "B2B rentals recorded."),
             "/api/reports/reservations": {
                 "get": {
                     "tags": ["Reports"],
@@ -213,6 +261,50 @@ def build_spec():
                                 "content": {"application/json": {"schema": {
                                     "type": "array",
                                     "items": {"$ref": "#/components/schemas/Rental"}}}}},
+                        "401": {"$ref": "#/components/responses/Unauthorized"},
+                        "403": {"$ref": "#/components/responses/Forbidden"},
+                    },
+                }
+            },
+            "/api/reports/cars": {
+                "get": {
+                    "tags": ["Reports"],
+                    "summary": "Fleet report",
+                    "description": ("Every car in your fleet with the branch it "
+                                    "currently belongs to (branch_id null = the "
+                                    "head office, shown as \"Main\") and its last "
+                                    "GPS point. Returns 403 until your company has "
+                                    "data."),
+                    "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+                    "parameters": [{
+                        "name": "branch_id", "in": "query", "required": False,
+                        "schema": {"type": "string"},
+                        "description": "Filter to one branch. Use 'main' or 0 for the head office.",
+                    }],
+                    "responses": {
+                        "200": {"description": "List of cars with branch.",
+                                "content": {"application/json": {"schema": {
+                                    "type": "array",
+                                    "items": {"$ref": "#/components/schemas/CarReport"}}}}},
+                        "401": {"$ref": "#/components/responses/Unauthorized"},
+                        "403": {"$ref": "#/components/responses/Forbidden"},
+                    },
+                }
+            },
+            "/api/reports/company-rentals": {
+                "get": {
+                    "tags": ["Reports"],
+                    "summary": "B2B rental report",
+                    "description": ("Every car you've rented OUT to another company, "
+                                    "with the car detail, the rental period, whether "
+                                    "it's been returned and to which branch. Returns "
+                                    "403 until your company has data."),
+                    "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+                    "responses": {
+                        "200": {"description": "List of B2B rentals.",
+                                "content": {"application/json": {"schema": {
+                                    "type": "array",
+                                    "items": {"$ref": "#/components/schemas/CompanyRental"}}}}},
                         "401": {"$ref": "#/components/responses/Unauthorized"},
                         "403": {"$ref": "#/components/responses/Forbidden"},
                     },
@@ -307,6 +399,61 @@ def build_spec():
                     },
                     "example": _BRANCH_EXAMPLE,
                 },
+                "RentalInput": {
+                    "type": "object",
+                    "description": "Book one of your cars for one of your clients (a car rented to an individual).",
+                    "required": ["client_id", "car_vin", "start_date", "end_date"],
+                    "properties": {
+                        "client_id": {"type": "integer", "example": 101,
+                                      "description": "Id of a client already linked to your company."},
+                        "car_vin": {"type": "string", "example": "1HGCM82633A004352",
+                                    "description": "VIN of one of your active cars."},
+                        "start_date": {"type": "string", "format": "date", "example": "2026-08-01"},
+                        "end_date": {"type": "string", "format": "date", "example": "2026-08-07",
+                                     "description": "On or after start_date. Must not overlap another booking of the same car."},
+                    },
+                    "example": _RENTAL_EXAMPLE,
+                },
+                "ReservationInput": {
+                    "type": "object",
+                    "description": "A future booking (reservation) for one of your cars.",
+                    "required": ["car_vin", "client_id", "start_date", "end_date"],
+                    "properties": {
+                        "car_vin": {"type": "string", "example": "1HGCM82633A004352"},
+                        "client_id": {"type": "integer", "example": 101,
+                                      "description": "Id of a client already linked to your company."},
+                        "start_date": {"type": "string", "format": "date", "example": "2026-08-10"},
+                        "end_date": {"type": "string", "format": "date", "example": "2026-08-14",
+                                     "description": "On or after start_date. Must not overlap another booking of the same car."},
+                        "notes": {"type": "string", "nullable": True, "example": "Airport pickup"},
+                    },
+                    "example": _RESERVATION_EXAMPLE,
+                },
+                "CompanyRentalInput": {
+                    "type": "object",
+                    "description": "A car of yours rented OUT to another company (B2B).",
+                    "required": ["company_name"],
+                    "properties": {
+                        "company_name": {"type": "string", "example": "Cedar Fleet Co",
+                                         "description": "The company holding your car."},
+                        "owner_name": {"type": "string", "example": "Rami Aoun"},
+                        "location": {"type": "string", "example": "Tripoli"},
+                        "x": {"type": "number", "description": "Longitude (optional)."},
+                        "y": {"type": "number", "description": "Latitude (optional)."},
+                        "phones": {"type": "array", "items": {"type": "string"},
+                                   "description": "One or more phone numbers (array or comma-joined string).",
+                                   "example": ["+9616000000"]},
+                        "branches": {"type": "array", "items": {"type": "string"},
+                                     "description": "One or more branch labels (array or comma-joined string).",
+                                     "example": ["Tripoli Center"]},
+                        "car_vin": {"type": "string", "example": "1HGCM82633A004352",
+                                    "description": "VIN of one of your active cars (optional)."},
+                        "start_date": {"type": "string", "format": "date", "example": "2026-09-01"},
+                        "end_date": {"type": "string", "format": "date", "example": "2026-09-30"},
+                        "notes": {"type": "string", "nullable": True},
+                    },
+                    "example": _COMPANY_RENTAL_EXAMPLE,
+                },
                 "UnifiedBatchBody": {
                     "type": "object",
                     "properties": {
@@ -348,22 +495,76 @@ def build_spec():
                         "start_date": {"type": "string", "format": "date"},
                         "end_date": {"type": "string", "format": "date"},
                         "status": {"type": "string"},
+                        "notes": {"type": "string", "nullable": True},
                         "created_at": {"type": "string", "format": "date-time"},
                         "client_name": {"type": "string"},
                         "client_phone": {"type": "string"},
                         "car_model": {"type": "string"},
                         "car_plate": {"type": "string"},
+                        "car_branch_id": {"type": "integer", "nullable": True,
+                                          "description": "Branch the car belongs to (null = head office)."},
+                        "car_branch_name": {"type": "string", "example": "Main"},
                     },
                 },
                 "Rental": {
                     "type": "object",
-                    "description": "A row from the rental report view (client + car + dates).",
+                    "description": "A row from the rental report view (client + car + dates + branch).",
                     "properties": {
                         "client_id": {"type": "integer"},
                         "client_name": {"type": "string"},
                         "car_vin": {"type": "string"},
+                        "car_model": {"type": "string"},
+                        "car_plate": {"type": "string"},
                         "start_date": {"type": "string", "format": "date"},
                         "end_date": {"type": "string", "format": "date"},
+                        "car_branch_id": {"type": "integer", "nullable": True,
+                                          "description": "Branch the car belongs to (null = head office)."},
+                        "car_branch_name": {"type": "string", "example": "Main"},
+                        "returned_at": {"type": "string", "format": "date-time", "nullable": True,
+                                        "description": "When the car was handed back (null = still out)."},
+                        "return_branch_id": {"type": "integer", "nullable": True,
+                                             "description": "Branch it was returned to (null = not returned, or returned to head office)."},
+                        "return_branch_name": {"type": "string", "nullable": True},
+                    },
+                },
+                "CarReport": {
+                    "type": "object",
+                    "description": "A fleet car with the branch it belongs to.",
+                    "properties": {
+                        "vin": {"type": "string"},
+                        "type": {"type": "string"},
+                        "model": {"type": "string"},
+                        "color": {"type": "string"},
+                        "platenumber": {"type": "string"},
+                        "has_gps": {"type": "boolean"},
+                        "gps_lat": {"type": "number", "nullable": True},
+                        "gps_lng": {"type": "number", "nullable": True},
+                        "gps_updated_at": {"type": "string", "format": "date-time", "nullable": True},
+                        "branch_id": {"type": "integer", "nullable": True,
+                                      "description": "Branch the car belongs to (null = head office)."},
+                        "branch_name": {"type": "string", "example": "Main"},
+                        "branch_location": {"type": "string", "nullable": True},
+                    },
+                },
+                "CompanyRental": {
+                    "type": "object",
+                    "description": "A car rented OUT to another company (B2B), with return status.",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "company_name": {"type": "string", "description": "The company the car is rented to."},
+                        "owner_name": {"type": "string", "nullable": True},
+                        "car_vin": {"type": "string"},
+                        "car_model": {"type": "string", "nullable": True},
+                        "car_plate": {"type": "string", "nullable": True},
+                        "car_branch_id": {"type": "integer", "nullable": True},
+                        "car_branch_name": {"type": "string", "example": "Main"},
+                        "start_date": {"type": "string", "format": "date"},
+                        "end_date": {"type": "string", "format": "date"},
+                        "returned_at": {"type": "string", "format": "date-time", "nullable": True,
+                                        "description": "When the car came back (null = still out)."},
+                        "return_branch_id": {"type": "integer", "nullable": True},
+                        "return_branch_name": {"type": "string", "nullable": True},
+                        "notes": {"type": "string", "nullable": True},
                     },
                 },
                 "KeyStatus": {
@@ -393,7 +594,9 @@ def build_spec():
                                                                   "example": {"error": "Not authenticated"}}}},
                 "Forbidden": {"description": "Not allowed (e.g. an admin key, or company has no data yet).",
                               "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
-                "Conflict": {"description": "A database conflict (e.g. a duplicate VIN/plate). Nothing saved.",
+                "Conflict": {"description": "A conflict — a duplicate VIN/plate, or a car already "
+                                            "booked for the requested dates. Nothing was saved; the "
+                                            "clashing rows are listed under `failed`.",
                              "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
                 "BatchRejected": {
                     "description": "One or more rows are invalid — nothing was saved.",

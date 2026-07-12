@@ -18,6 +18,8 @@ const API = (() => {
 
     listCars:      (companyId) => fetch(url("/api/cars" + (companyId ? `?company_id=${companyId}` : "")), { headers: authHeaders() }).then(json),
     listCarsPaged: (qs) => fetch(url("/api/cars?" + qs), { headers: authHeaders() }).then(json),
+    listCarsFiltered: (qs) => fetch(url("/api/cars?" + qs), { headers: authHeaders() }).then(json),
+    carsSummary:   (qs) => fetch(url("/api/cars/summary" + (qs ? "?" + qs : "")), { headers: authHeaders() }).then(json),
     listGpsCars:   () => fetch(url("/api/cars?gps=1"), { headers: authHeaders() }).then(json),
     addCar:        (b) => fetch(url("/api/cars"),      { method:"POST", headers:{ "Content-Type":"application/json"}, body: JSON.stringify(b)}).then(json),
 
@@ -25,12 +27,14 @@ const API = (() => {
     addClient:     (b) => fetch(url("/api/clients"),   { method:"POST", headers:{ "Content-Type":"application/json"}, body: JSON.stringify(b)}).then(json),
 
     listBranches:  () => fetch(url("/api/branches")).then(json),
+    setHeadOffice: (id) => fetch(url(`/api/branches/${id}/head-office`), { method:"PUT", headers: authHeaders() }).then(json),
 
     addRental:     (b) => fetch(url("/api/rentals"),   { method:"POST", headers:{ "Content-Type":"application/json"}, body: JSON.stringify(b)}).then(json),
     report:        () => fetch(url("/api/rentals/report"), { headers: authHeaders() }).then(json),
 
     listSpecialRentals: () => fetch(url("/api/special-rentals"), { headers: authHeaders() }).then(json),
     listAdminSpecialRentals: () => fetch(url("/api/admin/special-rentals"), { headers: authHeaders() }).then(json),
+    listAdminActiveRentals: () => fetch(url("/api/admin/active-rentals"), { headers: authHeaders() }).then(json),
     addSpecialRental:   (b) => fetch(url("/api/special-rentals"), { method:"POST", headers:{ "Content-Type":"application/json", ...authHeaders() }, body: JSON.stringify(b)}).then(json),
     updSpecialRental:   (id, b) => fetch(url(`/api/special-rentals/${id}`), { method:"PUT", headers:{ "Content-Type":"application/json", ...authHeaders() }, body: JSON.stringify(b)}).then(json),
     delSpecialRental:   (id) => fetch(url(`/api/special-rentals/${id}`), { method:"DELETE", headers: authHeaders() }),
@@ -229,6 +233,15 @@ const COLOR_SWATCH = {
   "pearl black":   "#1a1a1a",
 };
 
+// A car sits at a named branch, or — when unassigned / its company has no
+// branches — at "Main" (the head office). The two render distinctly so the
+// admin can tell a real branch from the default at a glance.
+function branchCell(name){
+  const s = String(name || "").trim();
+  if (!s) return `<span class="branch-pill branch-pill-main">${escape(t("cars.branch.main"))}</span>`;
+  return `<span class="branch-pill">${escape(s)}</span>`;
+}
+
 function formatColorCell(name){
   const s = String(name || "").trim();
   if (!s) return `<span class="badge no">—</span>`;
@@ -309,6 +322,53 @@ function carLabel(r){
   return r.car_plate ? `${r.car_model} — ${r.car_plate}` : r.car_model;
 }
 
+/* A clickable value in the admin report / reservation tables. Clicking it opens
+   the matching entity's read-only detail modal (company / car / client).
+   `key` is the id (company/client) or VIN (car) the modal loads from; `text` is
+   what the cell shows. Empty key or text falls back to a plain dash. */
+function drillCell(kind, key, text, strong){
+  const disp = text == null ? "" : String(text).trim();
+  const id   = key  == null ? "" : String(key).trim();
+  if (!disp || !id) return `<span class="cell-dash">—</span>`;
+  const cls = "cell-drill" + (strong ? " is-strong" : "");
+  return `<button type="button" class="${cls}" data-drill="${escape(kind)}"`
+       + ` data-drillkey="${escape(id)}" title="${escape(t("detail.viewInfo"))}">${escape(disp)}</button>`;
+}
+
+// Parse an activity "kind:key" ref (e.g. "car:<vin>", "client:42", "branch:7")
+// into { kind, key } for a drill-down, or null if it isn't a known drillable ref.
+function _parseRef(ref){
+  if (!ref || typeof ref !== "string") return null;
+  const i = ref.indexOf(":");
+  if (i < 0) return null;
+  const kind = ref.slice(0, i), key = ref.slice(i + 1);
+  if (!key) return null;
+  return ["car", "client", "branch", "company"].includes(kind) ? { kind, key } : null;
+}
+
+// A "View details" button that opens the referenced car / client / branch.
+function refDrillButton(ref){
+  const p = _parseRef(ref);
+  if (!p) return "";
+  const label = t("audit.view." + p.kind) || t("detail.viewInfo");
+  const ico = p.kind === "car" ? "🚗" : p.kind === "client" ? "👤"
+            : p.kind === "branch" ? "📍" : "🏢";
+  return `<button type="button" class="btn btn-primary audit-drill-btn"`
+       + ` data-drill="${escape(p.kind)}" data-drillkey="${escape(p.key)}">`
+       + `${ico} ${escape(label)}</button>`;
+}
+
+// Wire every .audit-drill-btn inside `root` to open its entity's detail modal.
+function wireRefDrills(root){
+  if (!root) return;
+  root.querySelectorAll(".audit-drill-btn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      EntityDetail.open(btn.dataset.drill, btn.dataset.drillkey);
+    });
+  });
+}
+
 function refreshFilterDropdowns(){
   const companyNames = state.companies.map(c => c.companyname);
   const clientNames  = state.clients.map(c => c.name);
@@ -317,8 +377,16 @@ function refreshFilterDropdowns(){
   const reportClients   = (state.report || []).map(r => r.client_name);
   const reportLics      = (state.report || []).map(r => r.client_licenseid);
 
-  populateFilterSelect($("#filter-companies-name"), companyNames);
   populateFilterSelect($("#filter-cars-company"),   companyNames);
+  // Companies-table dropdown filters (name / owner / location union).
+  populateFilterSelect($("#filter-companies-name"),  companyNames);
+  populateFilterSelect($("#filter-companies-owner"), state.companies.map(c => c.owner_name));
+  populateFilterSelect($("#filter-companies-loc"), [
+    ...state.companies.map(c => c.location),
+    ...(state.branches || []).map(b => b.location),
+  ]);
+  // Cars type/model dropdowns need every car's distinct values → fetched async.
+  populateCarTypeModelFilters();
   populateFilterSelect($("#filter-clients-lic"),    clientLics);
   populateFilterSelect($("#filter-clients-name"),   clientNames);
   populateFilterSelect($("#filter-report-company"), reportCompanies);
@@ -335,78 +403,162 @@ function refreshFilterDropdowns(){
   populateFilterSelect($("#filter-report-car-co"),    coRows.map(carLabel));
 }
 
-function getCompaniesRows(){
-  const company = $("#filter-companies-name")?.value || "";
-  if (!company) return state.companies;
-  return state.companies.filter(c => c.companyname === company);
+// Applied companies-table filters. Only updated when the admin clicks "Search",
+// so opening/changing a dropdown changes nothing until they commit — and there
+// is no free-text box, every filter is a dropdown pick.
+const companyFilters = { name: "", owner: "", location: "" };
+
+function companyFiltersActive(){
+  return !!(companyFilters.name || companyFilters.owner || companyFilters.location);
 }
+
+function getCompaniesRows(){
+  const f = companyFilters;
+  if (!companyFiltersActive()) return state.companies;
+  return (state.companies || []).filter(c => {
+    if (f.name  && c.companyname !== f.name)   return false;
+    if (f.owner && c.owner_name  !== f.owner)  return false;
+    if (f.location){
+      // A location match keeps the company if EITHER its own location or any of
+      // its branches sits at that place, so a branch location still surfaces it.
+      const own = (c.location || "") === f.location;
+      const inBranch = (state.branches || []).some(b =>
+        b.company_id === c.id && (b.location || "") === f.location);
+      if (!own && !inBranch) return false;
+    }
+    return true;
+  });
+}
+
+// Fill the companies-table filter dropdowns from the loaded data. Locations are
+// the union of company + branch locations so a branch-only place is selectable.
+function populateCompanyFilters(){
+  populateFilterSelect($("#filter-companies-name"),  (state.companies || []).map(c => c.companyname));
+  populateFilterSelect($("#filter-companies-owner"), (state.companies || []).map(c => c.owner_name));
+  populateFilterSelect($("#filter-companies-loc"), [
+    ...(state.companies || []).map(c => c.location),
+    ...(state.branches  || []).map(b => b.location),
+  ]);
+}
+
+// Companies whose branch sub-rows are currently expanded. Collapsed by default
+// so the table stays one line per company — essential at 100+ companies.
+const expandedCompanies = new Set();
 
 function renderCompanies(){
   const tbl = $("#tbl-companies");
   const rows = getCompaniesRows();
+  const searching = companyFiltersActive();
+  const countEl = $("#companies-count");
+  if (countEl){
+    const total = (state.companies || []).length;
+    countEl.textContent = searching ? `${rows.length} / ${total}` : String(total);
+  }
   if (!rows.length){
     const pt = $("#pager-top-companies"); if (pt) pt.hidden = true;
     const pb = $("#pager-companies"); if (pb) pb.hidden = true;
-    return emptyRow(tbl, 9);
+    return emptyRow(tbl, 7);
   }
 
   const info = Pager.slice("companies", rows);
   const html = [];
+  // The whole Location cell is clickable: it shows a map pin + the place name,
+  // and opens the map on click. If exact coordinates are stored we drop the pin
+  // there directly; otherwise we geocode the place name on the fly — so every
+  // named location opens a map, whether or not it was pinned when registered.
+  const locCell = (name, x, y) => {
+    if (!name) return `<span class="badge no">—</span>`;
+    const hasCoords = x != null && y != null;
+    const coordAttrs = hasCoords ? ` data-x="${x}" data-y="${y}"` : "";
+    return `<button type="button" class="company-loc-link" data-name="${escape(name)}"${coordAttrs} title="${escape(t("companies.viewOnMap"))}" aria-label="${escape(t("companies.viewOnMap"))}">
+        <svg class="company-loc-link-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s7-6.5 7-11.5A7 7 0 0 0 5 9.5C5 14.5 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
+        <span class="company-loc-link-text">${escape(name)}</span>
+      </button>`;
+  };
+
   info.rows.forEach((c, i) => {
-    const hasCoords = c.x != null && c.y != null;
-    const coords = hasCoords
-      ? `<a href="#" class="company-coord-link" data-x="${c.x}" data-y="${c.y}" data-name="${escape(c.companyname)}">
-           <code>${Number(c.y).toFixed(4)}, ${Number(c.x).toFixed(4)}</code>
-         </a>`
-      : `<span class="badge no">—</span>`;
     const phone = formatPhonesCell(c.phonenumber);
     const logo = c.logo
       ? `<img src="${escape(c.logo)}" alt="${escape(c.companyname)}" class="company-logo-thumb">`
       : `<span class="company-logo-thumb company-logo-thumb-empty" style="background:${_avatarColor(c.companyname)}">${escape(_initials(c.companyname))}</span>`;
 
-    // Main company row
+    // Branches belonging to this company → grouped, readable sub-rows. Head
+    // office first so it reads as the company's primary location.
+    const branches = (state.branches || [])
+      .filter(b => b.company_id === c.id)
+      .sort((a, b) => (b.is_head_office ? 1 : 0) - (a.is_head_office ? 1 : 0));
+    const hasBranches = branches.length > 0;
+    const expanded = hasBranches && expandedCompanies.has(c.id);
+    // Expand/collapse toggle + branch-count badge (one combined control).
+    const branchToggle = hasBranches
+      ? `<button type="button" class="branch-toggle${expanded ? " is-open" : ""}" data-company="${c.id}" aria-expanded="${expanded}" title="${escape(t("companies.toggleBranches"))}" aria-label="${escape(t("companies.toggleBranches"))}">
+           <svg class="branch-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+           <span class="branch-count-badge">${branches.length} ${escape(t(branches.length === 1 ? "companies.branchOne" : "companies.branchMany"))}</span>
+         </button>`
+      : "";
+
+    // Main company row. When NO branch is flagged head office, the company's
+    // MAIN location IS the head office — badge it so the admin can see it.
     const owner = c.owner_name ? escape(c.owner_name) : `<span class="badge no">—</span>`;
+    const mainIsHead = !branches.some(b => b.is_head_office);
+    const mainHeadBadge = mainIsHead
+      ? `<span class="branch-head-badge" title="${escape(t("companyInfo.branch.headOffice"))}">★ ${escape(t("fleet.headOffice"))}</span>`
+      : "";
     html.push(`
-      <tr class="company-main-row">
+      <tr class="company-main-row${hasBranches ? " company-has-branches" : ""}${expanded ? " is-expanded" : ""}">
         <td>${(info.page - 1) * info.size + i + 1}</td>
         <td>${logo}</td>
-        <td>${escape(c.companyname)}</td>
+        <td><span class="company-name-cell"><span class="company-name-text">${escape(c.companyname)}</span>${branchToggle}</span></td>
         <td>${owner}</td>
-        <td>${escape(c.location)}</td>
+        <td class="company-loc-td">${locCell(c.location, c.x, c.y)}${mainHeadBadge}</td>
         <td>${escape(c.companyid)}</td>
         <td>${phone}</td>
-        <td>${coords}</td>
-        <td>${rowActionsHtml("companies", c.id)}</td>
       </tr>`);
 
-    // Branches belonging to this company → render as indented sub-rows.
-    const branches = (state.branches || []).filter(b => b.company_id === c.id);
-    branches.forEach(b => {
-      const bCoords = (b.x != null && b.y != null)
-        ? `<code>${Number(b.y).toFixed(4)}, ${Number(b.x).toFixed(4)}</code>`
-        : `<span class="badge no">—</span>`;
+    branches.forEach((b, bi) => {
+      const last = bi === branches.length - 1;
       html.push(`
-        <tr class="company-branch-row">
+        <tr class="company-branch-row${last ? " company-branch-last" : ""}" data-branch-of="${c.id}"${expanded ? "" : " hidden"}>
           <td></td>
           <td></td>
-          <td class="branch-cell"><span class="branch-marker">↳</span> ${escape(t("companies.branchOf"))} <strong>${escape(c.companyname)}</strong></td>
+          <td class="branch-cell">
+            <span class="branch-tag${b.is_head_office ? " branch-tag-head" : ""}">
+              <svg class="branch-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4v10a3 3 0 0 0 3 3h6"/><circle cx="6" cy="4" r="1.6"/><circle cx="18" cy="17" r="1.6"/></svg>
+              <span class="branch-name">${escape(t("companies.branch"))} ${bi + 1}</span>
+              ${b.is_head_office ? `<span class="branch-head-badge" title="${escape(t("companyInfo.branch.headOffice"))}">★ ${escape(t("fleet.headOffice"))}</span>` : ""}
+            </span>
+          </td>
           <td></td>
-          <td>${escape(b.location)}</td>
-          <td>${escape(c.companyid)}</td>
+          <td class="company-loc-td">${locCell(b.location, b.x, b.y)}</td>
+          <td></td>
           <td>${formatPhonesCell(b.phonenumber)}</td>
-          <td>${bCoords}</td>
-          <td></td>
         </tr>`);
     });
   });
   tbl.tBodies[0].innerHTML = html.join("");
 
-  $$(".company-coord-link", tbl).forEach(a => {
+  // Expand / collapse a company's branch rows in place (no full re-render).
+  $$(".branch-toggle", tbl).forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = Number(btn.dataset.company);
+      const open = !expandedCompanies.has(id);
+      if (open) expandedCompanies.add(id); else expandedCompanies.delete(id);
+      btn.classList.toggle("is-open", open);
+      btn.setAttribute("aria-expanded", String(open));
+      btn.closest("tr")?.classList.toggle("is-expanded", open);
+      $$(`.company-branch-row[data-branch-of="${id}"]`, tbl)
+        .forEach(r => { r.hidden = !open; });
+    });
+  });
+
+  // Clicking a Location cell opens the map. Exact coordinates open instantly;
+  // a name without coordinates is geocoded first (openLocation handles both).
+  $$(".company-loc-link", tbl).forEach(a => {
     a.addEventListener("click", (e) => {
       e.preventDefault();
-      MapPicker.openView({
-        x: Number(a.dataset.x),
-        y: Number(a.dataset.y),
+      MapPicker.openLocation({
+        x: a.dataset.x != null ? Number(a.dataset.x) : null,
+        y: a.dataset.y != null ? Number(a.dataset.y) : null,
         label: a.dataset.name,
       });
     });
@@ -438,67 +590,263 @@ function companyIdByName(name){
   return c ? c.id : "";
 }
 
-// Fetch one page of the admin fleet from the server, honoring the current
-// company / search filters and the pager's page + page-size. Company users
-// never reach this table, so this path is admin-only.
-async function loadCarsPage(){
-  const tbl = $("#tbl-cars");
-  if (!tbl) return;
-  const s = Pager.state("cars");
-  const params = new URLSearchParams();
-  params.set("page", s.page);
-  params.set("page_size", s.size);
-  const cid = companyIdByName($("#filter-cars-company")?.value || "");
-  if (cid) params.set("company_id", cid);
-  const vin = $("#filter-cars-vehicle")?.value || "";
-  if (vin) params.set("vin", vin);
+/* ============== ADMIN FLEET (grouped Company → Branch → Cars tree) ========
+   At 100+ cars per company a flat table repeats the company name on every row
+   and is unreadable. Instead the admin fleet is an expandable tree: companies
+   collapse to one line, expand to their branches, and each branch expands to
+   its own small cars table. Counts come from a single /api/cars/summary
+   aggregate (no car rows shipped); the actual cars of ONE branch are fetched
+   lazily only when that branch is opened — so the view scales indefinitely. */
+const fleet = {
+  summary: {},              // { "<cid>": {total, unassigned, branches:{"<bid>":n}} }
+  openCompanies: new Set(), // company ids currently expanded
+  openBranches: new Set(),  // keys "cid:bid" currently expanded (bid = id or "none")
+  cars: new Map(),          // key "cid:bid" -> lazily-loaded car array
+};
+
+const FLEET_CHEVRON = `<svg class="fleet-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
+// Three-dot ("more") icon used by admin table row actions in place of the old 👁.
+const ROW_MORE_ICO = `<svg class="row-more-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`;
+const FLEET_BRANCH_ICO = `<svg class="fleet-br-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4v10a3 3 0 0 0 3 3h6"/><circle cx="6" cy="4" r="1.6"/><circle cx="18" cy="17" r="1.6"/></svg>`;
+const FLEET_HEAD_ICO = `<svg class="fleet-br-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21h18M5 21V8l7-5 7 5v13M9 21v-6h6v6"/></svg>`;
+
+// Applied cars-toolbar filters. Like the companies table these are all
+// dropdown picks (no free-text) committed only on "Search".
+const carFilters = { company: "", type: "", model: "", gps: "" };
+
+// Current toolbar filters as query params, shared by the summary fetch and each
+// branch's lazy car fetch so counts always match the drill-down.
+function fleetParams(){
+  const p = new URLSearchParams();
+  if (carFilters.company){
+    const co = (state.companies || []).find(c => c.companyname === carFilters.company);
+    if (co) p.set("company_id", co.id);
+  }
+  if (carFilters.type)  p.set("type",  carFilters.type);
+  if (carFilters.model) p.set("model", carFilters.model);
+  if (carFilters.gps)   p.set("gps",   carFilters.gps);
+  return p;
+}
+
+// The distinct type/model lists need every car, so fetch the flat list once.
+// (Company is populated from loaded state in refreshFilterDropdowns.) Admin-only
+// endpoint — silently skipped for company users, who never see this toolbar.
+// refreshFilterDropdowns runs on every data refresh, so we fetch the (large)
+// car list at most once and reuse it; `force` re-fetches after a car changes.
+let _carFilterOptions = null;
+async function populateCarTypeModelFilters(force){
+  const typeSel = $("#filter-cars-type"); const modelSel = $("#filter-cars-model");
+  if (!typeSel || !modelSel) return;
+  if (force) _carFilterOptions = null;
+  if (!_carFilterOptions){
+    try { _carFilterOptions = await API.listCars() || []; }
+    catch (e){ return; /* dropdowns just stay at "All" if the fetch fails */ }
+  }
+  populateFilterSelect(typeSel,  _carFilterOptions.map(c => c.type));
+  populateFilterSelect(modelSel, _carFilterOptions.map(c => c.model));
+}
+
+// (Re)load the whole tree: fetch the aggregate, drop stale branch caches, and
+// re-render. Any filter change routes here. Company users never reach this.
+async function loadFleet(){
+  const host = $("#cars-tree");
+  if (!host) return;
+  const p = fleetParams();
+  const anyFilter = [...p.keys()].length > 0;
   try {
-    const data = await API.listCarsPaged(params.toString());
-    state.cars   = data.rows  || [];
-    _carsTotal   = data.total || 0;
-    // When nothing is filtered, the page total IS the whole fleet size — keep
-    // the dashboard stat in sync for free.
-    if (!cid && !vin) _carsCount = _carsTotal;
-  } catch (e){
-    state.cars = []; _carsTotal = 0;
+    const data = await API.carsSummary(p.toString());
+    fleet.summary = data.companies || {};
+  } catch (e){ fleet.summary = {}; }
+  // A filter change invalidates any cached branch cars and open branch rows.
+  fleet.cars.clear();
+  fleet.openBranches.clear();
+  // Filtering: auto-expand every matching company so hits are immediately
+  // visible. No filter: keep whatever the admin had open (or all collapsed).
+  if (anyFilter){
+    fleet.openCompanies = new Set(Object.keys(fleet.summary).map(Number));
   }
-  renderCars();
+  // Keep the dashboard "Cars" stat in sync only when nothing is filtered.
+  if (!anyFilter){
+    _carsCount = Object.values(fleet.summary).reduce((s, e) => s + (e.total || 0), 0);
+  }
+  renderFleet();
 }
 
-async function refreshCars(){
-  Pager.reset("cars");
-  await loadCarsPage();
-}
+// Back-compat aliases: existing callers (panel nav, afterEdit/Delete, language
+// switch) still call these names.
+async function refreshCars(){ await loadFleet(); }
+function loadCarsPage(){ return loadFleet(); }
+function renderCars(){ renderFleet(); }
 
-function renderCars(){
-  const tbl = $("#tbl-cars");
-  if (!tbl) return;
-  const rows = state.cars || [];
+function renderFleet(){
+  const host = $("#cars-tree");
+  if (!host) return;
+  const sum = fleet.summary || {};
+  const companies = Object.keys(sum)
+    .map(id => (state.companies || []).find(c => String(c.id) === id))
+    .filter(Boolean)
+    .sort((a, b) => a.companyname.localeCompare(b.companyname, undefined, { sensitivity: "base" }));
+
   const countEl = $("#cars-count");
-  if (countEl) countEl.textContent = _carsTotal
-    ? `${_carsTotal} ${_carsTotal === 1 ? t("report.result") : t("report.results")}`
-    : "";
-  if (!rows.length){
-    const pt = $("#pager-top-cars"); if (pt) pt.hidden = true;
-    const pb = $("#pager-cars"); if (pb) pb.hidden = true;
-    return emptyRow(tbl, 9);
+  if (countEl){
+    const totalCars = Object.values(sum).reduce((s, e) => s + (e.total || 0), 0);
+    const nCo = companies.length;
+    countEl.textContent = totalCars
+      ? `${nCo} ${t(nCo === 1 ? "fleet.company" : "fleet.companies")} · ${totalCars} ${t(totalCars === 1 ? "fleet.carOne" : "fleet.carMany")}`
+      : "";
   }
 
-  const s = Pager.state("cars");
-  tbl.tBodies[0].innerHTML = rows.map((c,i) => `
+  if (!companies.length){
+    host.innerHTML = `<div class="fleet-empty">${escape(t("report.none"))}</div>`;
+    return;
+  }
+  host.innerHTML = companies.map(c => fleetCompanyBlock(c, sum[String(c.id)] || {})).join("");
+  $$(".fleet-co-head", host).forEach(btn =>
+    btn.addEventListener("click", () => fleetToggleCompany(Number(btn.dataset.coToggle))));
+  fleetBindBranches(host);
+}
+
+function fleetCarPill(n){
+  return `<span class="fleet-pill fleet-pill-cars">${n} ${escape(t(n === 1 ? "fleet.carOne" : "fleet.carMany"))}</span>`;
+}
+
+function fleetCompanyBlock(c, entry){
+  const open = fleet.openCompanies.has(c.id);
+  const total = entry.total || 0;
+  const branchCount = (state.branches || []).filter(b => b.company_id === c.id).length;
+  const logo = c.logo
+    ? `<img src="${escape(c.logo)}" alt="" class="fleet-co-logo">`
+    : `<span class="fleet-co-logo fleet-co-logo-empty" style="background:${_avatarColor(c.companyname)}">${escape(_initials(c.companyname))}</span>`;
+  const brPill = `<span class="fleet-pill fleet-pill-br">${branchCount} ${escape(t(branchCount === 1 ? "companies.branchOne" : "companies.branchMany"))}</span>`;
+  return `
+    <div class="fleet-co${open ? " is-open" : ""}" data-cid="${c.id}">
+      <button type="button" class="fleet-co-head" aria-expanded="${open}" data-co-toggle="${c.id}">
+        ${FLEET_CHEVRON}
+        ${logo}
+        <span class="fleet-co-name">${escape(c.companyname)}</span>
+        <span class="fleet-co-meta">${fleetCarPill(total)}${brPill}</span>
+      </button>
+      <div class="fleet-co-body"${open ? "" : " hidden"}>${open ? fleetBranchGroups(c, entry) : ""}</div>
+    </div>`;
+}
+
+function fleetBranchGroups(c, entry){
+  const groups = [];
+  (state.branches || [])
+    .filter(b => b.company_id === c.id)
+    .sort((a, b) => (a.branchname || "").localeCompare(b.branchname || "", undefined, { sensitivity: "base" }))
+    .forEach(b => {
+      const n = (entry.branches || {})[String(b.id)] || 0;
+      if (!n) return;   // hide branches with no matching cars
+      groups.push(fleetBranchGroup(c.id, String(b.id), b.branchname || t("companies.branch"), b.location, n, false));
+    });
+  if (entry.unassigned){
+    groups.push(fleetBranchGroup(c.id, "none", t("fleet.headOffice"), "", entry.unassigned, true));
+  }
+  return groups.join("") || `<div class="fleet-br-empty">${escape(t("report.none"))}</div>`;
+}
+
+function fleetBranchGroup(cid, bid, name, location, n, isHead){
+  const key = cid + ":" + bid;
+  const open = fleet.openBranches.has(key);
+  const cars = fleet.cars.get(key);
+  const loc = location && location !== name ? `<span class="fleet-br-loc">${escape(location)}</span>` : "";
+  const inner = open
+    ? (cars ? fleetCarsTable(cars) : `<div class="fleet-loading">${escape(t("fleet.loading"))}</div>`)
+    : "";
+  return `
+    <div class="fleet-br${open ? " is-open" : ""}${isHead ? " is-head-office" : ""}" data-key="${key}">
+      <button type="button" class="fleet-br-head" aria-expanded="${open}" data-cid="${cid}" data-bid="${bid}">
+        ${FLEET_CHEVRON}
+        ${isHead ? FLEET_HEAD_ICO : FLEET_BRANCH_ICO}
+        <span class="fleet-br-name">${escape(name)}</span>${loc}
+        ${fleetCarPill(n)}
+      </button>
+      <div class="fleet-br-body"${open ? "" : " hidden"}>${inner}</div>
+    </div>`;
+}
+
+function fleetCarsTable(cars){
+  if (!cars.length) return `<div class="fleet-br-empty">${escape(t("report.none"))}</div>`;
+  const rows = cars.map((c, i) => `
     <tr>
-      <td>${(s.page - 1) * s.size + i + 1}</td>
-      <td>${escape(c.companyname)}</td>
-      <td><code>${escape(c.vin)}</code></td>
+      <td>${i + 1}</td>
+      <td><code class="vin-code">${escape(c.vin)}</code></td>
       <td>${escape(c.type)}</td>
-      <td>${escape(c.model)}</td>
+      <td><span class="car-model-cell">${escape(c.model)}</span></td>
       <td>${formatColorCell(c.color)}</td>
-      <td>${escape(c.platenumber)}</td>
+      <td>${c.platenumber ? `<span class="plate-pill">${escape(c.platenumber)}</span>` : `<span class="badge no">—</span>`}</td>
       <td>${c.has_gps ? `<span class="badge yes">${t("yes")}</span>` : `<span class="badge no">${t("no")}</span>`}</td>
-      <td>${rowActionsHtml("cars", c.id)}</td>
     </tr>`).join("");
-  bindRowActions(tbl);
-  Pager.renderServer("cars", "#pager-top-cars", "#pager-cars", _carsTotal, loadCarsPage);
+  return `
+    <div class="fleet-cars-wrap">
+      <table class="data-table fleet-cars-table">
+        <thead><tr>
+          <th>#</th>
+          <th>${escape(t("cars.f.vin"))}</th>
+          <th>${escape(t("cars.f.type"))}</th>
+          <th>${escape(t("cars.f.model"))}</th>
+          <th>${escape(t("cars.f.color"))}</th>
+          <th>${escape(t("cars.f.plate"))}</th>
+          <th>${escape(t("cars.f.gps"))}</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function fleetBindBranches(scope){
+  $$(".fleet-br-head", scope).forEach(btn => {
+    if (btn._fleetBound) return;
+    btn._fleetBound = true;
+    btn.addEventListener("click", () => fleetToggleBranch(btn.dataset.cid, btn.dataset.bid));
+  });
+}
+
+function fleetToggleCompany(cid){
+  const open = !fleet.openCompanies.has(cid);
+  if (open) fleet.openCompanies.add(cid); else fleet.openCompanies.delete(cid);
+  const block = $(`.fleet-co[data-cid="${cid}"]`);
+  if (!block) return;
+  block.classList.toggle("is-open", open);
+  $(".fleet-co-head", block)?.setAttribute("aria-expanded", String(open));
+  const body = $(".fleet-co-body", block);
+  if (!body) return;
+  if (open){
+    const c = (state.companies || []).find(x => x.id === cid);
+    body.innerHTML = fleetBranchGroups(c, fleet.summary[String(cid)] || {});
+    body.hidden = false;
+    fleetBindBranches(body);
+  } else {
+    body.hidden = true;
+    body.innerHTML = "";
+  }
+}
+
+async function fleetToggleBranch(cid, bid){
+  const key = cid + ":" + bid;
+  const open = !fleet.openBranches.has(key);
+  if (open) fleet.openBranches.add(key); else fleet.openBranches.delete(key);
+  const block = $(`.fleet-br[data-key="${key}"]`);
+  if (!block) return;
+  block.classList.toggle("is-open", open);
+  $(".fleet-br-head", block)?.setAttribute("aria-expanded", String(open));
+  const body = $(".fleet-br-body", block);
+  if (!body) return;
+  if (!open){ body.hidden = true; body.innerHTML = ""; return; }
+  body.hidden = false;
+  let cars = fleet.cars.get(key);
+  if (!cars){
+    body.innerHTML = `<div class="fleet-loading">${escape(t("fleet.loading"))}</div>`;
+    const p = fleetParams();
+    p.set("company_id", cid);
+    p.set("branch_id", bid);   // "none" → the server's IS NULL / Head-office bucket
+    try { cars = await API.listCarsFiltered(p.toString()); } catch (e){ cars = []; }
+    cars = Array.isArray(cars) ? cars : [];
+    fleet.cars.set(key, cars);
+    if (!fleet.openBranches.has(key)) return;   // collapsed again while loading
+  }
+  body.innerHTML = fleetCarsTable(cars);
 }
 
 /* ============== BRANCHES (admin: shown as sub-rows in #tbl-companies) ===== */
@@ -510,6 +858,12 @@ async function refreshBranches(){
   }
   // Branches are now rendered inline beneath their parent company row.
   renderCompanies();
+  // Keep the location filter's options in sync with branch locations too
+  // (branches may resolve after the first dropdown fill).
+  populateFilterSelect($("#filter-companies-loc"), [
+    ...(state.companies || []).map(c => c.location),
+    ...(state.branches  || []).map(b => b.location),
+  ]);
 }
 
 /* ============== CLIENTS ============== */
@@ -529,10 +883,15 @@ function getClientsRows(){
   return rows;
 }
 
+/* The client record currently shown in the shared client-detail modal, so its
+   "Download PDF" button knows what to print (set on every open). */
+let _detailClient = null;
+
 /* Populate + open the shared client-detail modal for a full-record view. */
 function openClientDetail(cr){
   const body = $("#client-detail-body");
   if (!body || !cr) return;
+  _detailClient = cr;
   const k = (key) => escape(t(key));
   const v = (x) => x == null || x === "" ? "—" : escape(String(x));
   const name = [cr.firstname, cr.lastname].filter(Boolean).join(" ") || cr.name || "—";
@@ -576,6 +935,288 @@ function openClientDetail(cr){
   showModal("#client-detail-modal");
 }
 
+/* ============== SHARED PDF PRINT HELPERS ==============
+   Client-side "Download PDF" used by every detail modal (company / car / client
+   / B2B rental). Renders a clean one-page document into an off-screen iframe and
+   fires the browser's print → Save-as-PDF — no popup, no server, no library. */
+const _pdfEsc = (x) => escape(x == null || x === "" ? "—" : String(x));
+// Each pair is [label, value] or [label, rawHtml, true] to inject HTML (e.g. a link).
+function pdfRows(pairs){
+  return `<table class="pdf-tbl">${pairs.map(([k, val, isHtml]) =>
+    `<tr><th>${escape(k)}</th><td>${isHtml ? (val || "—") : _pdfEsc(val)}</td></tr>`).join("")}</table>`;
+}
+function printDoc(title, subtitle, bodyHtml){
+  const dir  = document.documentElement.dir  || "ltr";
+  const lang = document.documentElement.lang || "en";
+  const now  = new Date();
+  const stamp = `${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
+  const align = dir === "rtl" ? "right" : "left";
+  const doc = `<!doctype html><html dir="${dir}" lang="${lang}"><head><meta charset="utf-8">
+<title>${escape(title)}</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:'Inter','Cairo',Arial,sans-serif;color:#1a1d29;margin:32px}
+  .pdf-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:2px solid #4f46e5;padding-bottom:10px;margin-bottom:18px}
+  .pdf-brand{font-size:12px;font-weight:700;color:#4f46e5;letter-spacing:.05em;text-transform:uppercase}
+  .pdf-title{font-size:20px;font-weight:800;margin:2px 0 0}
+  .pdf-sub{color:#6b7180;font-size:13px;margin:3px 0 0}
+  .pdf-stamp{font-size:11px;color:#9096a5;white-space:nowrap}
+  .pdf-tbl{width:100%;border-collapse:collapse;margin:0 0 12px}
+  .pdf-tbl th,.pdf-tbl td{text-align:${align};padding:7px 10px;border-bottom:1px solid #e6e8ef;font-size:13px;vertical-align:top}
+  .pdf-tbl th{width:38%;color:#6b7180;font-weight:600}
+  .pdf-tbl td{color:#1a1d29;font-weight:600}
+  .pdf-h{font-size:14px;margin:18px 0 8px;color:#4f46e5}
+  .pdf-empty{color:#9096a5}
+  @media print{body{margin:14mm}}
+</style></head><body>
+  <div class="pdf-head">
+    <div>
+      <div class="pdf-brand">${escape(t("brand"))}</div>
+      <h1 class="pdf-title">${escape(title)}</h1>
+      ${subtitle ? `<p class="pdf-sub">${escape(subtitle)}</p>` : ""}
+    </div>
+    <div class="pdf-stamp">${escape(stamp)}</div>
+  </div>
+  ${bodyHtml}
+</body></html>`;
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;";
+  document.body.appendChild(iframe);
+  const w = iframe.contentWindow;
+  w.document.open(); w.document.write(doc); w.document.close();
+  const fire = () => { try { w.focus(); w.print(); } catch (e){} setTimeout(() => iframe.remove(), 1500); };
+  const imgs = Array.from(w.document.images || []);
+  if (!imgs.length){ setTimeout(fire, 200); return; }
+  let n = imgs.length;
+  const dec = () => { if (--n <= 0) fire(); };
+  imgs.forEach(im => { if (im.complete) dec(); else { im.onload = dec; im.onerror = dec; } });
+  setTimeout(fire, 2500);
+}
+
+/* ============== ENTITY DETAIL MODALS + PDF (admin cross-links) ==============
+   In the admin report and reservation tables the company, car and client
+   values are clickable (see drillCell). Each opens a read-only modal with the
+   full record: the company with its branches, the car with the branch + company
+   it belongs to, the client with everything the company entered. Every modal
+   has a "Download PDF" button that prints a clean one-page document via the
+   browser's Save-as-PDF (an off-screen iframe — no popup, no extra library). */
+const EntityDetail = (() => {
+  let curCompany = null, curCar = null;
+  const V = (x) => x == null || x === "" ? "—" : escape(String(x));
+  const K = (key) => escape(t(key));
+
+  /* A saved company/branch coordinate is (x = lng, y = lat) — Google Maps wants
+     "lat,lng", so the query is y,x. Returns a "See location" link, or a dash. */
+  const mapsUrl = (x, y) => (x != null && y != null)
+    ? `https://www.google.com/maps?q=${encodeURIComponent(y)},${encodeURIComponent(x)}` : "";
+  const mapsLink = (x, y) => {
+    const u = mapsUrl(x, y);
+    return u
+      ? `<a href="${escape(u)}" target="_blank" rel="noopener" class="rd-maplink">${K("companies.seeLoc")}</a>`
+      : "—";
+  };
+
+  /* A clickable map-pin that opens the location on the in-app map. Coordinates
+     open it directly; a bare place name is geocoded (MapPicker.openLocation
+     handles both). Only rendered when there's something to locate. */
+  const locPin = (name, x, y) => {
+    if (!name && (x == null || y == null)) return "";
+    const coordAttrs = (x != null && y != null) ? ` data-x="${x}" data-y="${y}"` : "";
+    return ` <button type="button" class="rd-loc-pin" data-name="${escape(name || "")}"${coordAttrs} title="${K("companies.viewOnMap")}" aria-label="${K("companies.viewOnMap")}">`
+      + `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s7-6.5 7-11.5A7 7 0 0 0 5 9.5C5 14.5 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>`
+      + `</button>`;
+  };
+
+  /* ---- Company (from already-loaded state) ---- */
+  function companyBody(c, branches){
+    const logo = c.logo
+      ? `<img src="${escape(c.logo)}" alt="" class="rd-logo-img">`
+      : `<span class="rd-logo-img rd-logo-empty" style="background:${_avatarColor(c.companyname)}">${escape(_initials(c.companyname))}</span>`;
+    const brHtml = branches.length
+      ? `<ul class="rd-branch-list">${branches.map((b, i) =>
+          `<li><span class="rd-branch-n">${K("companies.branch")} ${i + 1}</span>`
+          + `<span class="rd-branch-v">${V(b.location)}`
+          + `${b.phonenumber ? ` · <span class="ltr">${escape(b.phonenumber)}</span>` : ""}`
+          + `${locPin(b.location, b.x, b.y)}</span></li>`).join("")}</ul>`
+      : `<p class="client-doc-empty">${K("detail.noBranches")}</p>`;
+    return `
+      <div class="rd-idhead">${logo}<div class="rd-idname">${escape(c.companyname)}</div></div>
+      <dl class="detail-grid">
+        <dt>${K("register.f.owner")}</dt>  <dd>${V(c.owner_name)}</dd>
+        <dt>${K("companies.f.cid")}</dt>   <dd>${V(c.companyid)}</dd>
+        <dt>${K("companies.f.loc")}</dt>   <dd>${V(c.location)}${locPin(c.location, c.x, c.y)}</dd>
+        <dt>${K("companies.f.phone")}</dt> <dd>${c.phonenumber ? formatPhonesCell(c.phonenumber) : "—"}</dd>
+        <dt>${K("companies.f.maploc")}</dt><dd>${mapsLink(c.x, c.y)}</dd>
+      </dl>
+      <section class="rd-branch-section">
+        <h4 class="rd-h">${K("detail.branches")} (${branches.length})</h4>
+        ${brHtml}
+      </section>`;
+  }
+  // Wire every map-pin in the company modal to open the in-app map viewer.
+  function bindLocPins(root){
+    $$(".rd-loc-pin", root).forEach(btn => {
+      btn.addEventListener("click", () => {
+        MapPicker.openLocation({
+          x: btn.dataset.x != null ? Number(btn.dataset.x) : null,
+          y: btn.dataset.y != null ? Number(btn.dataset.y) : null,
+          label: btn.dataset.name,
+        });
+      });
+    });
+  }
+  function openCompany(companyId){
+    const c = (state.companies || []).find(co => co.id === Number(companyId));
+    if (!c){ toast(t("toast.error"), "error"); return; }
+    const branches = (state.branches || []).filter(b => b.company_id === c.id);
+    curCompany = { c, branches };
+    const body = $("#company-detail-body");
+    body.innerHTML = companyBody(c, branches);
+    bindLocPins(body);
+    showModal("#company-detail-modal");
+  }
+
+  /* ---- Car (fetched by VIN so we get its branch + company) ---- */
+  function carBody(car){
+    return `
+      <dl class="detail-grid">
+        <dt>${K("cars.f.company")}</dt><dd><strong>${V(car.companyname)}</strong></dd>
+        <dt>${K("cars.f.branch")}</dt> <dd>${car.branchname ? V(car.branchname) : K("detail.mainOffice")}</dd>
+        <dt>${K("cars.f.vin")}</dt>    <dd><code>${V(car.vin)}</code></dd>
+        <dt>${K("cars.f.type")}</dt>   <dd>${V(car.type)}</dd>
+        <dt>${K("cars.f.model")}</dt>  <dd>${V(car.model)}</dd>
+        <dt>${K("cars.f.color")}</dt>  <dd>${V(car.color)}</dd>
+        <dt>${K("cars.f.plate")}</dt>  <dd><span class="ltr">${V(car.platenumber)}</span></dd>
+        <dt>${K("cars.f.gps")}</dt>    <dd>${car.has_gps ? K("yes") : K("no")}</dd>
+      </dl>`;
+  }
+  async function openCar(vin){
+    curCar = null;
+    const body = $("#car-detail-body");
+    if (body) body.innerHTML = `<p class="rd-loading">…</p>`;
+    showModal("#car-detail-modal");
+    try {
+      const d = await API.listCarsPaged(`page=1&page_size=1&vin=${encodeURIComponent(vin)}`);
+      const car = (d.rows || [])[0];
+      if (!car){ if (body) body.innerHTML = `<p class="client-doc-empty">${K("toast.error")}</p>`; return; }
+      curCar = car;
+      if (body) body.innerHTML = carBody(car);
+    } catch (e){
+      if (body) body.innerHTML = `<p class="client-doc-empty">${K("toast.error")}</p>`;
+    }
+  }
+
+  /* ---- Client (reuse the existing rich client modal) ---- */
+  function openClient(clientId){
+    const cr = (state.clients || []).find(c => c.id === Number(clientId));
+    if (!cr){ toast(t("toast.error"), "error"); return; }
+    openClientDetail(cr);   // sets _detailClient for the PDF button
+  }
+
+  /* ---- Branch (from already-loaded state.branches) with a map pin ---- */
+  function branchBody(b){
+    const head = b.is_head_office
+      ? ` <span class="rd-badge">${K("detail.headOffice")}</span>` : "";
+    return `
+      <div class="rd-idhead"><div class="rd-idname">${V(b.branchname)}${head}</div></div>
+      <dl class="detail-grid">
+        <dt>${K("cars.f.company")}</dt> <dd><strong>${V(b.companyname)}</strong></dd>
+        <dt>${K("companies.f.loc")}</dt> <dd>${V(b.location)}${locPin(b.location, b.x, b.y)}</dd>
+        <dt>${K("companies.f.phone")}</dt> <dd>${b.phonenumber ? `<span class="ltr">${escape(b.phonenumber)}</span>` : "—"}</dd>
+        <dt>${K("companies.f.maploc")}</dt> <dd>${mapsLink(b.x, b.y)}</dd>
+      </dl>`;
+  }
+  function openBranch(branchId){
+    const b = (state.branches || []).find(x => x.id === Number(branchId));
+    const body = $("#branch-detail-body");
+    if (!body) return;
+    if (!b){ toast(t("toast.error"), "error"); return; }
+    body.innerHTML = branchBody(b);
+    bindLocPins(body);
+    showModal("#branch-detail-modal");
+  }
+
+  function open(kind, key){
+    if (kind === "company") openCompany(key);
+    else if (kind === "car") openCar(key);
+    else if (kind === "client") openClient(key);
+    else if (kind === "branch") openBranch(key);
+  }
+
+  /* ---- PDF (shared client-side print helpers: pdfRows / printDoc) ---- */
+  function companyPdf(){
+    if (!curCompany) return;
+    const { c, branches } = curCompany;
+    const mUrl = mapsUrl(c.x, c.y);
+    let html = pdfRows([
+      [t("companies.f.name"),  c.companyname],
+      [t("register.f.owner"),  c.owner_name],
+      [t("companies.f.cid"),   c.companyid],
+      [t("companies.f.loc"),   c.location],
+      [t("companies.f.phone"), c.phonenumber],
+      // Keep the map link clickable in the saved PDF.
+      [t("companies.f.maploc"), mUrl ? `<a href="${escape(mUrl)}">${escape(t("companies.seeLoc"))}</a>` : "—", true],
+    ]);
+    html += `<h3 class="pdf-h">${escape(t("detail.branches"))} (${branches.length})</h3>`;
+    html += branches.length
+      ? pdfRows(branches.map((b, i) => [`${t("companies.branch")} ${i + 1}`,
+          [b.location, b.phonenumber].filter(Boolean).join(" · ")]))
+      : `<p class="pdf-empty">—</p>`;
+    printDoc(t("detail.companyInfo"), c.companyname, html);
+  }
+  function carPdf(){
+    if (!curCar) return;
+    const car = curCar;
+    printDoc(t("detail.carInfo"), [car.model, car.platenumber].filter(Boolean).join(" — "), pdfRows([
+      [t("cars.f.company"), car.companyname],
+      [t("cars.f.branch"),  car.branchname || t("detail.mainOffice")],
+      [t("cars.f.vin"),     car.vin],
+      [t("cars.f.type"),    car.type],
+      [t("cars.f.model"),   car.model],
+      [t("cars.f.color"),   car.color],
+      [t("cars.f.plate"),   car.platenumber],
+      [t("cars.f.gps"),     car.has_gps ? t("yes") : t("no")],
+    ]));
+  }
+  function clientPdf(){
+    const cr = _detailClient;
+    if (!cr) return;
+    const name = [cr.firstname, cr.lastname].filter(Boolean).join(" ") || cr.name || "";
+    const idTypeKeys = {
+      passport: "addClient.idType.passport", national_id: "addClient.idType.national",
+      license: "addClient.idType.license", international_license: "addClient.idType.international",
+    };
+    printDoc(t("detail.clientInfo"), name, pdfRows([
+      [t("clients.f.name"),        name],
+      [t("clients.f.pid"),         cr.personid],
+      [t("clients.f.father"),      cr.fathername],
+      [t("clients.f.mother"),      cr.mothername],
+      [t("addClient.nationality"), cr.nationality],
+      [t("clients.f.dob"),         cr.dateofbirth],
+      [t("clients.f.phone"),       cr.phonenumber],
+      [t("clients.f.lic"),         cr.licenseid],
+      [t("addClient.idType"),      cr.id_type ? t(idTypeKeys[cr.id_type] || cr.id_type) : ""],
+      [t("clients.f.licstart"),    cr.startdatelicense],
+      [t("clients.f.licend"),      cr.enddatelicense],
+    ]));
+  }
+
+  function setup(){
+    $("#company-detail-close") ?.addEventListener("click", () => hideModal("#company-detail-modal"));
+    $("#company-detail-cancel")?.addEventListener("click", () => hideModal("#company-detail-modal"));
+    $("#company-detail-pdf")   ?.addEventListener("click", companyPdf);
+    $("#car-detail-close")     ?.addEventListener("click", () => hideModal("#car-detail-modal"));
+    $("#car-detail-cancel")    ?.addEventListener("click", () => hideModal("#car-detail-modal"));
+    $("#car-detail-pdf")       ?.addEventListener("click", carPdf);
+    $("#client-detail-pdf")    ?.addEventListener("click", clientPdf);
+    $("#branch-detail-close")  ?.addEventListener("click", () => hideModal("#branch-detail-modal"));
+    $("#branch-detail-cancel") ?.addEventListener("click", () => hideModal("#branch-detail-modal"));
+  }
+
+  return { open, setup };
+})();
+
 function renderClients(){
   const tbl = $("#tbl-clients");
   const rows = getClientsRows();
@@ -604,7 +1245,7 @@ function renderClients(){
       <td>${cell(c.enddatelicense)}</td>
       <td data-col="view">
         <button type="button" class="row-btn client-view" data-id="${c.id}"
-                title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">👁</button>
+                title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">${ROW_MORE_ICO}</button>
       </td>
     </tr>`).join("");
   tbl.querySelectorAll(".client-view").forEach(btn => {
@@ -764,9 +1405,9 @@ function renderReport(){
       </div>`;
 
     return `<tr data-row="${idx}" class="report-row">
-        <td data-col="company"><strong>${escape(r.company_name) || "—"}</strong></td>
-        <td data-col="vehicle">${r.car_model ? escape(r.car_model) : dash}</td>
-        <td data-col="client"><strong>${escape(r.client_name) || "—"}</strong></td>
+        <td data-col="company">${drillCell("company", r.company_id, r.company_name, true)}</td>
+        <td data-col="vehicle">${drillCell("car", r.car_vin, r.car_model, false)}</td>
+        <td data-col="client">${drillCell("client", r.client_id, r.client_name, true)}</td>
         <td data-col="period">${period}</td>
         <td data-col="gps">${gps}</td>
         <td data-col="status">${status}</td>
@@ -774,7 +1415,7 @@ function renderReport(){
           <button type="button" class="row-btn report-view" data-detail="${idx}"
                   aria-expanded="false" aria-controls="report-detail-${idx}"
                   title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">
-            <span class="rv-eye" aria-hidden="true">👁</span>
+            <span class="rv-eye" aria-hidden="true">${ROW_MORE_ICO}</span>
             <span class="rv-chev" aria-hidden="true">⌄</span>
           </button>
         </td>
@@ -803,6 +1444,14 @@ function renderReport(){
     tr.addEventListener("click", (e) => {
       if (e.target.closest("a")) return;   // don't hijack tel: links
       toggleDetail(idx, btn);
+    });
+  });
+  // Company / car / client values jump to that entity's detail modal. Stop the
+  // click bubbling so it doesn't also toggle the inline detail row.
+  $$(".cell-drill", tbl).forEach(b => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      EntityDetail.open(b.dataset.drill, b.dataset.drillkey);
     });
   });
   // The detail panel's button opens the full modal (photos / video / extra driver).
@@ -853,7 +1502,7 @@ function renderReportCompany(rows){
       <td data-col="to">${day(r.end_date)}</td>
       <td data-col="view">
         <button type="button" class="row-btn report-view" data-detail="${idx}"
-                title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">👁</button>
+                title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">${ROW_MORE_ICO}</button>
       </td>
     </tr>`;
   }).join("");
@@ -1029,6 +1678,127 @@ function _raCountUp(host){
       if (p < 1) requestAnimationFrame(step);
     };
     requestAnimationFrame(step);
+  });
+}
+
+/* ============== SHARED RETURN / EXTEND PICKERS ==============
+   Both "Cars Rented by Individuals" (Returns) and "Cars Rented by Companies"
+   (SpecialRentals) hand cars back to a branch and can push the return date
+   out, so the branch picker and the extend-date picker live at module scope
+   and are reused by both. Each resolves a Promise on confirm, null on cancel. */
+
+// Ask which branch the car came back to. Resolves { branchId } (null = Main /
+// head office) on confirm, or null if cancelled. Falls back to Main if the
+// picker markup isn't present.
+function pickReturnBranch(label){
+  return new Promise((resolve) => {
+    const listEl = $("#return-branch-list");
+    const confirmBtn = $("#return-branch-confirm");
+    const cancelBtn = $("#return-branch-cancel");
+    const closeBtn = $("#return-branch-close");
+    if (!listEl || !confirmBtn){ resolve({ branchId: null }); return; }
+    const lab = $("#return-branch-carlabel");
+    if (lab) lab.textContent = label || "";
+    const u = AUTH.user();
+
+    // Render EVERY branch of this company as a visible, selectable card — Main
+    // (head office) first, then each branch — so the owner sees all options at
+    // once instead of hunting through a dropdown. Main is preselected.
+    const optionHtml = (val, name, sub, checked) => `
+      <label class="rb-option${checked ? " selected" : ""}">
+        <input type="radio" name="rb-branch" value="${val}"${checked ? " checked" : ""}>
+        <span class="rb-option-mark" aria-hidden="true"></span>
+        <span class="rb-option-body">
+          <span class="rb-option-name">${escape(name)}</span>
+          ${sub ? `<span class="rb-option-sub">${escape(sub)}</span>` : ""}
+        </span>
+      </label>`;
+    const fill = (branches) => {
+      const list = Array.isArray(branches) ? branches : [];
+      listEl.innerHTML =
+        optionHtml("", t("cars.branch.main"), t("returns.branch.mainSub"), true) +
+        list.map(b => optionHtml(String(b.id), b.branchname || t("cars.branch.main"),
+                                 b.location || "", false)).join("");
+      // Keep the selected card visually highlighted as the choice changes.
+      listEl.querySelectorAll("input[name='rb-branch']").forEach(inp => {
+        inp.addEventListener("change", () => {
+          listEl.querySelectorAll(".rb-option").forEach(o =>
+            o.classList.toggle("selected", o.contains(inp) && inp.checked));
+        });
+      });
+    };
+    // Show at least Main immediately, then fill in branches when they load.
+    fill([]);
+    fetch(API.url(`/api/branches?company_id=${u ? u.company_id : ""}`),
+          { headers: authHeaders() })
+      .then(r => r.json()).then(fill).catch(() => fill([]));
+
+    const cleanup = () => {
+      hideModal("#return-branch-modal");
+      confirmBtn.removeEventListener("click", onConfirm);
+      cancelBtn && cancelBtn.removeEventListener("click", onCancel);
+      closeBtn && closeBtn.removeEventListener("click", onCancel);
+    };
+    const onConfirm = () => {
+      const picked = listEl.querySelector("input[name='rb-branch']:checked");
+      const v = picked ? picked.value : "";
+      cleanup();
+      resolve({ branchId: v ? Number(v) : null });
+    };
+    const onCancel = () => { cleanup(); resolve(null); };
+    confirmBtn.addEventListener("click", onConfirm);
+    cancelBtn && cancelBtn.addEventListener("click", onCancel);
+    closeBtn && closeBtn.addEventListener("click", onCancel);
+    showModal("#return-branch-modal");
+  });
+}
+
+// Ask for a new (later) return date. `currentEnd` is the current YYYY-MM-DD.
+// Resolves the chosen YYYY-MM-DD on confirm (guaranteed > currentEnd), or null
+// on cancel. Falls back to null if the markup isn't present.
+function pickExtendDate(label, currentEnd){
+  return new Promise((resolve) => {
+    const dateEl = $("#extend-date");
+    const confirmBtn = $("#extend-confirm");
+    const cancelBtn = $("#extend-cancel");
+    const closeBtn = $("#extend-close");
+    const errEl = $("#extend-error");
+    if (!dateEl || !confirmBtn){ resolve(null); return; }
+    const lab = $("#extend-carlabel");
+    if (lab) lab.textContent = label || "";
+    const cur = $("#extend-current");
+    if (cur) cur.textContent = currentEnd
+      ? `${t("extend.current")}: ${currentEnd}` : "";
+    if (errEl){ errEl.hidden = true; errEl.textContent = ""; }
+    // The new date must be strictly after the current end; seed the min to the
+    // day after and prefill one day later as a sensible default. Parse at local
+    // noon and format in local time (not toISOString/UTC, which could shift the
+    // date a day in far-east/west timezones).
+    const _z = n => String(n).padStart(2, "0");
+    const day = (d) => {
+      const x = new Date(d + "T12:00:00"); x.setDate(x.getDate() + 1);
+      return `${x.getFullYear()}-${_z(x.getMonth() + 1)}-${_z(x.getDate())}`;
+    };
+    const minDate = currentEnd ? day(currentEnd) : "";
+    if (minDate){ dateEl.min = minDate; dateEl.value = minDate; }
+    else { dateEl.removeAttribute("min"); dateEl.value = ""; }
+    const cleanup = () => {
+      hideModal("#extend-modal");
+      confirmBtn.removeEventListener("click", onConfirm);
+      cancelBtn && cancelBtn.removeEventListener("click", onCancel);
+      closeBtn && closeBtn.removeEventListener("click", onCancel);
+    };
+    const onConfirm = () => {
+      const v = (dateEl.value || "").trim();
+      if (!v){ if (errEl){ errEl.hidden = false; errEl.textContent = t("extend.err.required"); } return; }
+      if (currentEnd && v <= currentEnd){ if (errEl){ errEl.hidden = false; errEl.textContent = t("extend.err.later"); } return; }
+      cleanup(); resolve(v);
+    };
+    const onCancel = () => { cleanup(); resolve(null); };
+    confirmBtn.addEventListener("click", onConfirm);
+    cancelBtn && cancelBtn.addEventListener("click", onCancel);
+    closeBtn && closeBtn.addEventListener("click", onCancel);
+    showModal("#extend-modal");
   });
 }
 
@@ -1234,6 +2004,7 @@ const Returns = (() => {
       <div class="rv-pop-row"><span class="rv-pop-ico">●</span><span>${badge}</span></div>
       <div class="rv-pop-actions">
         <button type="button" class="rv-action-btn" data-ret-open>${escape(t("action.open"))}</button>
+        <button type="button" class="rv-action-btn" data-ret-extend>${escape(t("extend.action"))}</button>
         <button type="button" class="rv-action-btn activate" data-ret-return>${escape(t("returns.backToOffice"))}</button>
       </div>`;
     p.hidden = false;
@@ -1248,6 +2019,7 @@ const Returns = (() => {
     p.style.top = top + "px";
     p.querySelector(".rv-pop-close")?.addEventListener("click", _closeRetPop);
     p.querySelector("[data-ret-open]")?.addEventListener("click", () => { _closeRetPop(); Detail.open(row); });
+    p.querySelector("[data-ret-extend]")?.addEventListener("click", () => { _closeRetPop(); _extend(row); });
     p.querySelector("[data-ret-return]")?.addEventListener("click", () => { _closeRetPop(); _markReturned(row); });
     setTimeout(() => {
       document.addEventListener("mousedown", _onRetDoc, true);
@@ -1296,6 +2068,7 @@ const Returns = (() => {
         <td>
           <div class="row-actions">
             <button type="button" class="row-btn pdf" data-detail="${idx}">${escape(t("action.open"))}</button>
+            <button type="button" class="row-btn extend-btn" data-extend="${idx}">${escape(t("extend.action"))}</button>
             <button type="button" class="row-btn return-btn" data-return="${idx}">${escape(t("returns.backToOffice"))}</button>
           </div>
         </td>
@@ -1303,8 +2076,8 @@ const Returns = (() => {
     }).join("");
     $$("tr.returns-row", tbl).forEach(tr => {
       tr.addEventListener("click", (e) => {
-        // Let the "Back to office" button run its own action.
-        if (e.target.closest(".return-btn")) return;
+        // Let the row's own action buttons run their handlers.
+        if (e.target.closest(".return-btn") || e.target.closest(".extend-btn")) return;
         Detail.open(rows[Number(tr.dataset.row)]);
       });
     });
@@ -1314,17 +2087,25 @@ const Returns = (() => {
         _markReturned(rows[Number(btn.dataset.return)]);
       });
     });
+    $$(".extend-btn", tbl).forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        _extend(rows[Number(btn.dataset.extend)]);
+      });
+    });
     Pager.render("returns", "#pager-top-returns", "#pager-returns", info, render);
   }
 
   async function _markReturned(row){
     if (!row || !row.rental_id) return;
     const label = carLabel(row) || row.car_plate || row.car_vin || "";
-    if (!confirm(t("returns.confirmReturn").replace("{car}", label))) return;
+    const pick = await pickReturnBranch(label);
+    if (pick === null) return;   // cancelled
     try {
       const r = await fetch(API.url(`/api/rentals/${row.rental_id}/return`), {
         method: "POST",
-        headers: { ...authHeaders() },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ return_branch_id: pick.branchId }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok){
@@ -1333,6 +2114,30 @@ const Returns = (() => {
       }
       toast(t("returns.returned"), "success");
       await refresh();
+      if (typeof Notifications !== "undefined") Notifications.refresh();
+      if (typeof ReturnDue !== "undefined") ReturnDue.render();
+    } catch (err){
+      toast(err.message || t("toast.error"), "error");
+    }
+  }
+
+  // Client keeps the car longer: pick a later return date, push end_date out.
+  async function _extend(row){
+    if (!row || !row.rental_id) return;
+    const label = carLabel(row) || row.car_plate || row.car_vin || "";
+    const newEnd = await pickExtendDate(label, row.end_date);
+    if (newEnd === null) return;   // cancelled
+    try {
+      const r = await fetch(API.url(`/api/rentals/${row.rental_id}/extend`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ end_date: newEnd }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok){ toast(data.error || t("toast.error"), "error"); return; }
+      toast(t("extend.done"), "success");
+      await refresh();
+      if (typeof Notifications !== "undefined") Notifications.refresh();
     } catch (err){
       toast(err.message || t("toast.error"), "error");
     }
@@ -1376,6 +2181,113 @@ const Returns = (() => {
   }
 
   return { render, refresh, setup };
+})();
+
+/* ============== RETURN DUE (company-home widget) ==============
+   A compact, professional card on the company dashboard that lists the owner's
+   OWN cars due back soon — overdue, today, tomorrow ("In 1 day") and the next
+   couple of weeks — each with a one-tap "Back to office" that opens the branch
+   picker so the returned car is placed at a branch. Reads the same rental
+   report the Returns tab uses. The login alert (Notifications) still fires for
+   cars due today; this is the always-on working view on the home screen. */
+const ReturnDue = (() => {
+  const WINDOW_DAYS = 14;   // how far ahead "upcoming" reaches
+  const MAX_ROWS = 6;       // rows shown before the "+N more" link
+  const _z = n => String(n).padStart(2, "0");
+  function _fmt(d){ return `${d.getFullYear()}-${_z(d.getMonth() + 1)}-${_z(d.getDate())}`; }
+  function _today(){ return _fmt(new Date()); }
+  function _shift(days){ const d = new Date(); d.setDate(d.getDate() + days); return _fmt(d); }
+  // Whole days from a→b (parsed at local noon to dodge DST edges).
+  function _diff(a, b){
+    const pa = new Date(a + "T12:00:00"), pb = new Date(b + "T12:00:00");
+    return Math.round((pb - pa) / 86400000);
+  }
+  // Relative label: overdue / today / in 1 day / in N days.
+  function _rel(diff){
+    if (diff < 0)  return { cls: "overdue", text: (-diff === 1) ? t("returnDue.rel.overdue") : t("returnDue.rel.overdueN").replace("{n}", -diff) };
+    if (diff === 0) return { cls: "today",   text: t("returnDue.rel.today") };
+    if (diff === 1) return { cls: "soon",    text: t("returnDue.rel.tomorrow") };
+    return { cls: "upcoming", text: t("returnDue.rel.inDays").replace("{n}", diff) };
+  }
+
+  function _rows(){
+    const u = AUTH.user();
+    if (!u || u.role !== "company") return [];
+    const horizon = _shift(WINDOW_DAYS);
+    // Own cars still out (not returned) due within the window; overdue included
+    // (end_date can be < today). Soonest / most-overdue first.
+    return (state.report || [])
+      .filter(r => Number(r.company_id) === Number(u.company_id) &&
+                   r.end_date && !r.returned_at && r.end_date <= horizon)
+      .sort((a, b) => (a.end_date < b.end_date ? -1 : a.end_date > b.end_date ? 1 : 0));
+  }
+
+  function render(){
+    const card = $("#return-due-card"), list = $("#return-due-list");
+    if (!card || !list) return;
+    const u = AUTH.user();
+    const rows = (!u || u.role !== "company") ? [] : _rows();
+    if (!rows.length){ card.hidden = true; list.innerHTML = ""; return; }
+    card.hidden = false;
+    const today = _today();
+    const shown = rows.slice(0, MAX_ROWS);
+    list.innerHTML = shown.map(r => {
+      const rel = _rel(_diff(today, r.end_date));
+      const car = escape(carLabel(r) || r.car_plate || r.car_vin || "");
+      const who = escape(r.client_name || "");
+      const meta = [who, r.end_date].filter(Boolean).map(escape).join(" · ");
+      return `<li class="rd-item ${rel.cls}">
+        <span class="rd-item-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 11l1.5-4.5A2 2 0 0 1 8.4 5h7.2a2 2 0 0 1 1.9 1.5L19 11"/><path d="M3 11h18v5a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-1H6v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><circle cx="7" cy="14" r="1"/><circle cx="17" cy="14" r="1"/></svg></span>
+        <div class="rd-item-main">
+          <span class="rd-item-car">${car}</span>
+          <span class="rd-item-who">${meta}</span>
+        </div>
+        <span class="rd-rel ${rel.cls}">${escape(rel.text)}</span>
+        <button type="button" class="rd-return-btn" data-rd-id="${r.rental_id}">${escape(t("returns.backToOffice"))}</button>
+      </li>`;
+    }).join("") + (rows.length > MAX_ROWS
+      ? `<li class="rd-more"><button type="button" data-cgo="company-returns">+${rows.length - MAX_ROWS} ${escape(t("returnDue.more"))}</button></li>`
+      : "");
+
+    list.querySelectorAll(".rd-return-btn").forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const row = rows.find(r => String(r.rental_id) === btn.dataset.rdId);
+        if (row) await _return(row);
+      });
+    });
+    list.querySelectorAll("[data-cgo]").forEach(btn => {
+      btn.addEventListener("click", () => { if (window.showCompanyPanel) showCompanyPanel(btn.dataset.cgo); });
+    });
+  }
+
+  async function _return(row){
+    if (!row || !row.rental_id) return;
+    const label = carLabel(row) || row.car_plate || row.car_vin || "";
+    const pick = await pickReturnBranch(label);
+    if (pick === null) return;   // cancelled
+    try {
+      const r = await fetch(API.url(`/api/rentals/${row.rental_id}/return`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ return_branch_id: pick.branchId }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok){ toast(data.error || t("toast.error"), "error"); return; }
+      toast(t("returns.returned"), "success");
+      await refresh();
+      if (typeof Notifications !== "undefined") Notifications.refresh();
+      if (typeof Returns !== "undefined") Returns.render();
+    } catch (err){ toast(err.message || t("toast.error"), "error"); }
+  }
+
+  // Pull fresh report rows, then render.
+  async function refresh(){
+    try { state.report = await API.report(); } catch (e){}
+    render();
+  }
+
+  return { render, refresh };
 })();
 
 /* ============== RENT FLOW ============== */
@@ -1427,6 +2339,9 @@ function setupRentFlow(){
   // when company changes, reload cars filtered to that company
   companySel.addEventListener("change", async () => {
     const cars = await API.listCars(companySel.value);
+    // The preview looks up the picked car in state.cars; the fleet tree no
+    // longer fills it, so stash this company's cars here for the lookup.
+    state.cars = Array.isArray(cars) ? cars : [];
     fillSelect(carSel, cars, "vin", c => `${c.model} — ${c.platenumber} (${c.vin})`);
     updatePreview();
   });
@@ -1941,6 +2856,8 @@ async function loadCompanyInfo(){
   resetCompanyInfoForm();
   hideCompanyInfoStatus();
   hideBranchStatus();
+  // Sync the "this is my head office" checkbox with the branch state.
+  refreshCompanyHeadOffice();
 }
 
 /* Empty every editable field on the Company Info form, leaving the
@@ -2012,6 +2929,8 @@ function setupCompanyInfo(){
       phonenumber: phones || null,
       x: fd.get("x") === "" ? null : Number(fd.get("x")),
       y: fd.get("y") === "" ? null : Number(fd.get("y")),
+      // Ticked = this main location is the head office (demotes any branch).
+      is_head_office: !!$("#company-head-check")?.checked,
     };
 
     try {
@@ -2035,6 +2954,7 @@ function setupCompanyInfo(){
       // After save: clear every editable field, keep only the company name,
       // and show the inline confirmation message.
       resetCompanyInfoForm();
+      refreshCompanyHeadOffice();
       showCompanyInfoStatus(t("companyInfo.saved"));
       toast(t("toast.saved"), "success");
     } catch (err){
@@ -2062,6 +2982,73 @@ function hideBranchStatus(){
 // Counter used to mint unique IDs for each cloned branch form so that
 // PhoneList / MapPicker selector-based bindings don't collide.
 let _branchFormSeq = 0;
+// Existing DB branches of the current company, cached while branch forms are
+// open. Drives the head-office control: with existing branches present the user
+// picks from a dropdown; with none, a single open form is head office
+// automatically and several open forms let the user tick which one is head.
+let _branchExisting = [];
+
+async function _loadBranchExisting(companyId){
+  try {
+    const d = await fetch(API.url(`/api/branches?company_id=${companyId}`),
+                          { headers: authHeaders() }).then(r => r.json());
+    _branchExisting = Array.isArray(d) ? d : [];
+  } catch (e){ _branchExisting = []; }
+  return _branchExisting;
+}
+
+// (Re)build the main-office control of every open branch form — called whenever
+// a form is added, removed, or saved. Every form shows a "main office" toggle
+// card; ticking one unticks the others so the company only ever has ONE main
+// office. The hint under the card explains the current situation:
+//   • company already has a main office   → no hint (ticking here moves it)
+//   • no main office yet, one open form    → this branch will be the main office
+//   • no main office yet, several forms    → tick which of them is the main office
+function refreshBranchHeadControls(){
+  const list = $("#branch-forms-list");
+  if (!list) return;
+  const forms = $$(".branch-inline-form", list);
+  // The company's MAIN location (the company-info form) is the default head
+  // office. Each branch form shows an UNticked head-office checkbox; ticking one
+  // promotes that branch to head office (demoting the main office / other
+  // branches). Only one branch may be ticked at a time (enforced below + alert).
+  forms.forEach((form) => {
+    const wrap = form.querySelector('[data-role="branch-head-wrap"]');
+    const hint = form.querySelector('[data-role="branch-head-hint"]');
+    if (!wrap) return;
+    wrap.hidden = false;                       // head-office card is always shown
+    if (hint){
+      hint.textContent = t("companyInfo.branch.headOffice.branchHint");
+      hint.classList.add("branch-head-note");
+    }
+  });
+
+  // Safety net: if two or more branch forms are somehow ticked, keep the first
+  // and clear the rest so at most one branch is ever the head office.
+  const checks = forms.map(f => f.querySelector('[data-role="branch-head-check"]'))
+                      .filter(Boolean);
+  const ticked = checks.filter(c => c.checked);
+  if (ticked.length > 1) ticked.slice(1).forEach(c => { c.checked = false; });
+}
+
+// Reflect the head-office state on the company-info form's checkbox. The MAIN
+// office is the company's earliest branch; the checkbox is ticked when that main
+// office is the head office (or the company has no branch yet). Unticked means a
+// specific later branch currently holds the head office. Called on load, when the
+// branch section opens, and after any branch is saved/deleted.
+async function refreshCompanyHeadOffice(){
+  const u = AUTH.user();
+  const cb = $("#company-head-check");
+  if (!u || u.role !== "company" || !u.company_id || !cb) return;
+  try {
+    const bs = await _loadBranchExisting(u.company_id);
+    if (!bs.length){ cb.checked = true; return; }   // no branch yet → main is head
+    const head = bs.find(b => b.is_head_office);
+    const earliestId = Math.min(...bs.map(b => Number(b.id)));
+    cb.checked = !head || Number(head.id) === earliestId;
+  } catch (e){ cb.checked = true; }
+}
+window.refreshCompanyHeadOffice = refreshCompanyHeadOffice;
 
 function appendInlineBranchForm(){
   const u = AUTH.user();
@@ -2088,8 +3075,14 @@ function appendInlineBranchForm(){
   PhoneList.setPhones(`#${idFor("branch-phones")}`, "");
   PhoneList.bind(`#${idFor("branch-phones")}`, `#${idFor("branch-add-phone")}`);
 
+  // Load the company's existing branches, then (re)build the head-office control
+  // of every open form so opening a second form flips the first one from "auto
+  // head office" to the "tick which one" state.
+  _loadBranchExisting(u.company_id).then(refreshBranchHeadControls);
+
   form.querySelector(".branch-close-btn")?.addEventListener("click", () => {
     form.remove();
+    refreshBranchHeadControls();
   });
 
   form.querySelector(`#${idFor("branch-pick-map")}`)?.addEventListener("click", () => {
@@ -2119,10 +3112,21 @@ function appendInlineBranchForm(){
       x: fd.get("x") === "" ? null : Number(fd.get("x")),
       y: fd.get("y") === "" ? null : Number(fd.get("y")),
     };
-    if (!body.location){
-      toast(t("toast.error"), "error");
+    // Every branch field is required: address, at least one phone number, and a
+    // picked map location. Block the save and point out what's missing.
+    const hasMap = fd.get("x") !== "" && fd.get("y") !== "" &&
+                   fd.get("x") !== null && fd.get("y") !== null;
+    if (!body.location || !phones || !hasMap){
+      showBranchStatus(t("companyInfo.branch.allRequired"));
+      toast(t("companyInfo.branch.allRequired"), "error");
       return;
     }
+
+    // The head-office checkbox on this form is the single source of truth: when
+    // ticked, this branch becomes the company's head office on save.
+    const headCheck = form.querySelector('[data-role="branch-head-check"]');
+    if (headCheck && headCheck.checked) body.is_head_office = true;
+
     try {
       const url    = editId ? `/api/branches/${editId}` : "/api/branches";
       const method = editId ? "PUT" : "POST";
@@ -2139,6 +3143,13 @@ function appendInlineBranchForm(){
       form.remove();
       showBranchStatus(t("companyInfo.branch.saved"));
       toast(editId ? t("toast.saved") : t("toast.added"), "success");
+      // A branch now exists — refresh remaining open forms and re-sync the
+      // company form's head-office checkbox (a branch may now hold the head office).
+      _loadBranchExisting(usr.company_id).then(() => {
+        refreshBranchHeadControls();
+        refreshCompanyHeadOffice();
+      });
+      if (typeof refreshBranches === "function") refreshBranches();
     } catch (err){
       toast(err.message || t("toast.error"), "error");
     }
@@ -2220,6 +3231,48 @@ const CAR_MODELS = [
   "BMW R1250GS", "BMW S1000RR",
 ];
 
+// Manufacturer prefixes used to group the model picker into tidy, branded
+// sections. Longest-match wins so "Range Rover Sport" groups under "Range
+// Rover", not "Range".
+const CAR_MAKES = [
+  "Mercedes", "BMW", "Audi", "Toyota", "Honda", "Tesla", "Hyundai", "Kia",
+  "Nissan", "Ford", "Chevrolet", "Volkswagen", "Lexus", "Range Rover",
+  "Porsche", "Mazda", "Mitsubishi", "Subaru", "Jeep", "Dodge", "Renault",
+  "Peugeot", "Suzuki", "Ferrari", "Lamborghini", "Yamaha", "Kawasaki",
+  "Ducati", "Harley-Davidson",
+];
+
+/* The manufacturer a model belongs to (longest matching prefix). */
+function _makeOf(model){
+  let best = "";
+  for (const mk of CAR_MAKES){
+    if ((model === mk || model.startsWith(mk + " ")) && mk.length > best.length) best = mk;
+  }
+  return best || (model.split(" ")[0] || "Other");
+}
+
+/* Fill the car-model <select> grouped by manufacturer via <optgroup>, so the
+   picker reads as a clean, branded list. Keeps the placeholder + re-syncs. */
+function fillModelSelect(selectEl){
+  if (!selectEl) return;
+  const cur = selectEl.value;
+  const placeholder = selectEl.querySelector('option[disabled][hidden]')?.outerHTML || "";
+  const groups = [];
+  const index = Object.create(null);
+  CAR_MODELS.forEach(m => {
+    const mk = _makeOf(m);
+    if (!(mk in index)){ index[mk] = groups.length; groups.push({ make: mk, models: [] }); }
+    groups[index[mk]].models.push(m);
+  });
+  selectEl.innerHTML = placeholder + groups.map(g =>
+    `<optgroup label="${escape(g.make)}">`
+    + g.models.map(v => `<option value="${escape(v)}">${escape(v)}</option>`).join("")
+    + `</optgroup>`
+  ).join("");
+  if (cur) selectEl.value = cur;
+  if (selectEl._ss) selectEl._ss.sync();
+}
+
 const PLATE_ICONS = ["M", "B", "T", "G", "N", "Y", "Z", "O"];
 
 const CAR_COLORS = [
@@ -2297,9 +3350,31 @@ function setupAddCarForm(){
 
   // Fill the four static dropdowns up-front.
   fillStaticSelect($("#add-car-type"),  CAR_TYPES);
-  fillStaticSelect($("#add-car-model"), CAR_MODELS);
+  fillModelSelect($("#add-car-model"));
   fillStaticSelect($("#add-car-color"), CAR_COLORS);
   fillStaticSelect($("#add-car-icon"),  PLATE_ICONS);
+
+  // The "based at" branch dropdown = this company's own branches, plus a
+  // leading "Main (head office)" option (value "") for cars not tied to a
+  // branch. Fetched WITH auth so the backend scopes it to the user's company
+  // (API.listBranches sends no header and would return every company's).
+  async function loadFormBranches(){
+    const sel = $("#add-car-branch");
+    if (!sel) return;
+    const u = AUTH.user();
+    if (!u || u.role !== "company" || !u.company_id) return;
+    let branches = [];
+    try {
+      branches = await fetch(API.url(`/api/branches?company_id=${u.company_id}`),
+                             { headers: authHeaders() }).then(r => r.json());
+    } catch (e){ branches = []; }
+    const main = `<option value="">${escape(t("cars.branch.main"))}</option>`;
+    sel.innerHTML = main + (Array.isArray(branches) ? branches : [])
+      .map(b => `<option value="${b.id}">${escape(b.branchname)}</option>`).join("");
+    if (sel._ss) sel._ss.sync();
+  }
+  loadFormBranches();
+  window.refreshAddCarBranches = loadFormBranches;
 
   /* Pre-known VIN registry (loaded from the backend). Lets the user pick
      a VIN from a searchable dropdown; selecting one auto-fills type,
@@ -2457,6 +3532,12 @@ function setupAddCarForm(){
 
     const gpsCb = $("#add-car-gps");
     if (gpsCb) gpsCb.checked = !!c.has_gps;
+
+    const branchSel = $("#add-car-branch");
+    if (branchSel){
+      branchSel.value = c.branch_id == null ? "" : String(c.branch_id);
+      if (branchSel._ss) branchSel._ss.sync();
+    }
 
     clearAllFieldErrors(form);
   }
@@ -2682,11 +3763,13 @@ function setupAddCarForm(){
     const plateRaw = (fd.get("plate_number") || "").toString().trim();
     const has_gps  = fd.get("has_gps") === "on";
     const platenumber = `${icon} ${plateRaw}`.trim();
+    // "" (Main) → null; the backend re-validates it belongs to this company.
+    const branch_id = (fd.get("branch_id") || "").toString().trim() || null;
 
     try {
       const body = editing
-        ? { type, model, color, platenumber, company_id: u.company_id, has_gps }
-        : { vin, type, model, color, platenumber, company_id: u.company_id, has_gps };
+        ? { type, model, color, platenumber, company_id: u.company_id, has_gps, branch_id }
+        : { vin, type, model, color, platenumber, company_id: u.company_id, has_gps, branch_id };
       const r = await fetch(
         editing ? API.url(`/api/cars/${editingCarId}`) : API.url("/api/cars"),
         {
@@ -2717,6 +3800,9 @@ function setupAddCarForm(){
         sel.value = "";
         if (sel._ss) sel._ss.sync();
       });
+      // Branch resets to Main (its first option), not an empty placeholder.
+      const branchSel = $("#add-car-branch");
+      if (branchSel){ branchSel.value = ""; if (branchSel._ss) branchSel._ss.sync(); }
       const vinHintEl = $("#add-car-vin-hint");
       if (vinHintEl){ vinHintEl.hidden = true; vinHintEl.textContent = ""; }
       lastVinSeen = "";
@@ -2790,27 +3876,26 @@ function setupAddCarForm(){
     } catch (e){ cars = []; }
     _myCars = Array.isArray(cars) ? cars : [];
     if (!_myCars.length){
-      tb.innerHTML = `<tr><td colspan="8" class="empty-cell">${escape(t("addCar.noCars"))}</td></tr>`;
+      tb.innerHTML = `<tr><td colspan="9" class="empty-cell">${escape(t("addCar.noCars"))}</td></tr>`;
       return;
     }
     const dash = `<span class="badge no">—</span>`;
     const cell = (v) => v ? escape(v) : dash;
     tb.innerHTML = _myCars.map(c => {
-      const left = Math.max(0, 2 - Number(c.edit_count || 0));
+      const edits = Number(c.edit_count || 0);
       const gps = c.has_gps
         ? `<span class="badge yes">${escape(t("yes"))}</span>`
         : `<span class="badge no">${escape(t("no"))}</span>`;
-      const action = left > 0
-        ? `<button type="button" class="row-btn my-car-edit" data-id="${c.id}">✎ ${escape(t("action.edit"))}</button>`
-        : `<span class="badge no">${escape(t("addClient.noEditsLeft"))}</span>`;
+      const action = `<button type="button" class="row-btn my-car-edit" data-id="${c.id}">✎ ${escape(t("action.edit"))}</button>`;
       return `<tr>
         <td class="ltr">${cell(c.vin)}</td>
         <td>${cell(c.type)}</td>
         <td>${cell(c.model)}</td>
         <td>${cell(c.color)}</td>
+        <td>${branchCell(c.branchname)}</td>
         <td class="ltr">${cell(c.platenumber)}</td>
         <td>${gps}</td>
-        <td><span class="badge ${left > 0 ? "yes" : "no"}">${left}</span></td>
+        <td>${edits}</td>
         <td class="my-car-action">${action}</td>
       </tr>`;
     }).join("");
@@ -3439,17 +4524,15 @@ function setupAddClientForm(){
     const dash = `<span class="badge no">—</span>`;
     const cell = (v) => v ? escape(v) : dash;
     tb.innerHTML = _myClients.map(c => {
-      const left = Math.max(0, 2 - Number(c.edit_count || 0));
-      const action = left > 0
-        ? `<button type="button" class="row-btn my-client-edit" data-id="${c.id}">✎ ${escape(t("action.edit"))}</button>`
-        : `<span class="badge no">${escape(t("addClient.noEditsLeft"))}</span>`;
+      const edits = Number(c.edit_count || 0);
+      const action = `<button type="button" class="row-btn my-client-edit" data-id="${c.id}">✎ ${escape(t("action.edit"))}</button>`;
       return `<tr>
         <td>${cell(c.name)}</td>
         <td class="ltr">${cell(c.personid)}</td>
         <td>${cell(c.nationality)}</td>
         <td class="ltr">${cell(c.phonenumber)}</td>
         <td class="ltr">${cell(c.licenseid)}</td>
-        <td><span class="badge ${left > 0 ? "yes" : "no"}">${left}</span></td>
+        <td>${edits}</td>
         <td class="my-client-action">${action}</td>
       </tr>`;
     }).join("");
@@ -3800,6 +4883,11 @@ function setupApiKey(){
   };
 
   async function refreshStatus(){
+    // The API-key panel is a company-user feature. An admin has no company_id,
+    // so hitting the endpoint would 400 ("company_id required") — skip it to
+    // keep the console clean.
+    const u = AUTH.user();
+    if (!u || u.role !== "company") return;
     try {
       const r = await fetch(API.url("/api/api-key"), { headers: authHeaders() });
       if (!r.ok) return;
@@ -3860,6 +4948,24 @@ function setupBranchModal(){
   // "+ Add Branch" appends a fresh form instance to #branch-forms-list, so
   // multiple branches can be filled in and saved independently.
   $("#btn-toggle-branch-form")?.addEventListener("click", appendInlineBranchForm);
+
+  // Only ONE branch may ever be the head office. When several new branch forms
+  // are open and the user tries to tick a SECOND "head office" box, we block it
+  // and alert them to pick just one — they must untick the other first. Unticking
+  // is always allowed: with no branch ticked, the main office is the head office.
+  $("#branch-forms-list")?.addEventListener("change", (e) => {
+    const cb = e.target.closest?.('[data-role="branch-head-check"]');
+    if (!cb) return;
+    if (cb.checked){
+      const others = $$('[data-role="branch-head-check"]', $("#branch-forms-list"))
+                       .filter(o => o !== cb);
+      if (others.some(o => o.checked)){
+        // A second head office isn't allowed — undo this tick and warn.
+        cb.checked = false;
+        toast(t("companyInfo.branch.headOffice.onlyOne"), "error");
+      }
+    }
+  });
 }
 
 /* ============== TABLE FILTERS (admin) ============== */
@@ -3905,29 +5011,38 @@ async function rebuildCarsVehicleDropdown(){
 }
 
 function setupReportSearch(){
-  // ---------- Companies toolbar ----------
-  $("#filter-companies-name")?.addEventListener("change", () => { Pager.reset("companies"); renderCompanies(); });
-  $("#filter-companies-clear")?.addEventListener("click", () => {
-    clearFilterSelect($("#filter-companies-name"));
+  // ---------- Companies toolbar (dropdown filters + Search button) ----------
+  // No free-text: the admin picks Company / Owner / Location from dropdowns and
+  // commits with Search. Nothing filters until Search is clicked.
+  const companyFilterSelects = ["#filter-companies-name", "#filter-companies-owner", "#filter-companies-loc"];
+  const applyCompanyFilters = () => {
+    companyFilters.name     = $("#filter-companies-name")?.value  || "";
+    companyFilters.owner    = $("#filter-companies-owner")?.value || "";
+    companyFilters.location = $("#filter-companies-loc")?.value   || "";
     Pager.reset("companies");
     renderCompanies();
+  };
+  $("#filter-companies-apply")?.addEventListener("click", applyCompanyFilters);
+  $("#filter-companies-clear")?.addEventListener("click", () => {
+    companyFilterSelects.forEach(s => { const el = $(s); if (el) el.value = ""; });
+    applyCompanyFilters();
   });
 
-  // ---------- Cars toolbar (server-side paging + cascading car dropdown) ----------
-  // Filters drive a fresh server query (page reset to 1), never an in-memory
-  // slice — so the table scales to very large fleets. The car dropdown cascades
-  // off the company pick (only that company's cars, kept searchable).
-  $("#filter-cars-company")?.addEventListener("change", async () => {
-    await rebuildCarsVehicleDropdown();
-    Pager.reset("cars");
-    loadCarsPage();
-  });
-  $("#filter-cars-vehicle")?.addEventListener("change", () => { Pager.reset("cars"); loadCarsPage(); });
-  $("#filter-cars-clear")?.addEventListener("click", async () => {
-    clearFilterSelect($("#filter-cars-company"));
-    await rebuildCarsVehicleDropdown();   // company now empty → dropdown resets to disabled
-    Pager.reset("cars");
-    loadCarsPage();
+  // ---------- Cars toolbar (dropdown filters + Search button) ----------
+  // Filters drive a fresh server query so the tree scales to very large fleets.
+  // All dropdowns; committed only on Search. Searching auto-expands matches.
+  const carFilterSelects = ["#filter-cars-company", "#filter-cars-type", "#filter-cars-model", "#filter-cars-gps"];
+  const applyCarFilters = () => {
+    carFilters.company = $("#filter-cars-company")?.value || "";
+    carFilters.type    = $("#filter-cars-type")?.value    || "";
+    carFilters.model   = $("#filter-cars-model")?.value    || "";
+    carFilters.gps     = $("#filter-cars-gps")?.value      || "";
+    loadFleet();
+  };
+  $("#filter-cars-apply")?.addEventListener("click", applyCarFilters);
+  $("#filter-cars-clear")?.addEventListener("click", () => {
+    carFilterSelects.forEach(s => { const el = $(s); if (el) el.value = ""; });
+    applyCarFilters();
   });
 
   // ---------- Clients toolbar ----------
@@ -4003,6 +5118,15 @@ const AUTH = {
     }
   },
   signOut(){
+    // Record the sign-out in the audit trail before we drop the identity.
+    // Best-effort with keepalive so it still fires as the view tears down.
+    try {
+      const u = this.user();
+      if (u && u.company_id){
+        fetch(API.url("/api/logout"),
+              { method: "POST", headers: authHeaders(), keepalive: true }).catch(() => {});
+      }
+    } catch (e){ /* never block sign-out */ }
     sessionStorage.removeItem(this.KEY);
     sessionStorage.removeItem(this.KEY + ".user");
   }
@@ -4141,16 +5265,49 @@ function _timeAgo(iso){
   return t("time.now");
 }
 
-/* One row in a company's expand-on-click activity timeline. */
+/* One row in a company's expand-on-click activity timeline. When the event
+   carries detail data (e.g. the client / car / dates behind an added car or a
+   reservation) the row becomes its own toggle — the detail is hidden until the
+   admin presses the entry. */
 function _timelineItemHtml(a){
   const verb = t(`activity.${a.action}`);
   const ent  = t(`activity.entity.${a.entity}`);
   const when = a.created_at ? _timeAgo(a.created_at) : "";
   const who  = a.username ? ` · ${escape(a.username)}` : "";
+  if (a.detail){
+    const drill = refDrillButton(a.ref);
+    return `<div class="dash-timeline-item has-detail" role="button" tabindex="0" title="${escape(t("dash.timeline.toggle"))}">
+      <span class="dash-timeline-when">${escape(when)}</span>
+      <div class="dash-timeline-body">
+        <span class="dash-timeline-text">${escape(verb)} ${escape(ent)}${who} <span class="dash-timeline-caret">▾</span></span>
+        <div class="dash-timeline-detail" hidden>${escape(a.detail)}${drill ? `<div class="audit-drill-row">${drill}</div>` : ""}</div>
+      </div>
+    </div>`;
+  }
   return `<div class="dash-timeline-item">
     <span class="dash-timeline-when">${escape(when)}</span>
-    <span class="dash-timeline-text">${escape(verb)} ${escape(ent)}${a.detail ? ` — ${escape(a.detail)}` : ""}${who}</span>
+    <span class="dash-timeline-text">${escape(verb)} ${escape(ent)}${who}</span>
   </div>`;
+}
+
+/* Wire each detail-bearing timeline entry so pressing it toggles its data. */
+function _wireTimelineToggles(tl){
+  tl.querySelectorAll(".dash-timeline-item.has-detail").forEach(ti => {
+    const toggle = () => {
+      const d = ti.querySelector(".dash-timeline-detail");
+      if (!d) return;
+      const wasHidden = d.hidden;
+      d.hidden = !wasHidden;
+      ti.classList.toggle("expanded", wasHidden);
+    };
+    ti.addEventListener("click", toggle);
+    ti.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " "){ e.preventDefault(); toggle(); }
+    });
+  });
+  // Drill buttons inside the expanded details (stopPropagation keeps a click
+  // from also collapsing the row).
+  wireRefDrills(tl);
 }
 
 function _activityItemHtml(c){
@@ -4277,7 +5434,7 @@ function renderDashActivity(){
       const item = rowEl.closest(".dash-activity-item");
       const tl   = item?.querySelector(".dash-activity-timeline");
       if (!tl) return;
-      if (!tl.hidden){ tl.hidden = true; return; }
+      if (!tl.hidden){ tl.hidden = true; item.classList.remove("expanded"); return; }
       if (!tl.dataset.loaded){
         tl.innerHTML = `<p class="dash-empty">${escape(t("dash.loading"))}</p>`;
         try {
@@ -4287,12 +5444,14 @@ function renderDashActivity(){
           tl.innerHTML = data.length
             ? data.map(_timelineItemHtml).join("")
             : `<p class="dash-empty">${escape(t("dash.timeline.empty"))}</p>`;
+          _wireTimelineToggles(tl);
         } catch (e){
           tl.innerHTML = `<p class="dash-empty">${escape(t("dash.timeline.empty"))}</p>`;
         }
         tl.dataset.loaded = "1";
       }
       tl.hidden = false;
+      item.classList.add("expanded");
     });
   });
 }
@@ -4416,6 +5575,8 @@ const DashboardLive = (() => {
         case "dashboard":
           await loadDashboardActivity(true);
           await loadInactiveAlerts(true);
+          await AuditLog.load(true);
+          await AuditLog.loadStats(true);
           // Keep the stat cards (companies / cars / clients / rentals) moving
           // too — refresh the underlying datasets, then recompute the totals.
           await Promise.all([
@@ -4442,6 +5603,210 @@ const DashboardLive = (() => {
   function stop(){ if (timer){ clearInterval(timer); timer = null; } }
 
   return { ensure, stop };
+})();
+
+/* ---- Dashboard: enterprise audit log ----
+   A single live stream of every action every company performs — logins,
+   logouts, and create/update/delete of any entity — newest first, with
+   company / action / type / free-text filters and keyset "load more".
+   Server-side filtered + paginated so it stays fast at millions of rows. */
+const AuditLog = (() => {
+  const PAGE = 40;
+  let items = [];
+  let nextCursor = null;
+  let loading = false;
+  let wired = false;
+  let lastRaw = "";
+  let searchTimer = null;
+  const filters = { company_id: "", action: "", entity: "", q: "" };
+
+  function readFilters(){
+    filters.company_id = ($("#audit-filter-company")?.value || "").trim();
+    filters.action     = ($("#audit-filter-action")?.value  || "").trim();
+    filters.entity     = ($("#audit-filter-entity")?.value  || "").trim();
+    filters.q          = ($("#audit-filter-search")?.value  || "").trim();
+  }
+
+  function queryString(cursor){
+    const p = new URLSearchParams();
+    if (filters.company_id) p.set("company_id", filters.company_id);
+    if (filters.action)     p.set("action", filters.action);
+    if (filters.entity)     p.set("entity", filters.entity);
+    if (filters.q)          p.set("q", filters.q);
+    if (cursor)             p.set("before_id", cursor);
+    p.set("limit", PAGE);
+    return p.toString();
+  }
+
+  function rowHtml(a){
+    const verb = t(`activity.${a.action}`) || a.action;
+    const ent  = t(`activity.entity.${a.entity}`) || a.entity;
+    const when = a.created_at ? _timeAgo(a.created_at) : "";
+    const abs  = a.created_at ? new Date(a.created_at).toLocaleString() : "";
+    const detail = a.detail
+      ? `<span class="audit-detail">${escape(a.detail)}</span>`
+      : `<span class="audit-detail audit-detail-muted">${escape(ent)}</span>`;
+    return `<div class="audit-row" data-audit-id="${a.id}" role="button" tabindex="0" title="${escape(t("audit.detail.open"))}">
+      <span class="audit-time" title="${escape(abs)}">${escape(when)}</span>
+      <span class="audit-badge audit-badge-${escape(a.action)}">${escape(verb)}</span>
+      <span class="audit-ent">${escape(ent)}</span>
+      <div class="audit-main">
+        <span class="audit-company">${escape(a.companyname || t("audit.unknownCompany"))}</span>
+        ${detail}
+      </div>
+      <span class="audit-user">${a.username ? "👤 " + escape(a.username) : "—"}</span>
+    </div>`;
+  }
+
+  /* Full detail of a single event, shown when the admin clicks a row. */
+  function openDetail(a){
+    const body = $("#audit-detail-body");
+    if (!body) return;
+    const verb = t(`activity.${a.action}`) || a.action;
+    const ent  = t(`activity.entity.${a.entity}`) || a.entity;
+    const abs  = a.created_at ? new Date(a.created_at).toLocaleString() : "—";
+    const rel  = a.created_at ? _timeAgo(a.created_at) : "";
+    const rows = [
+      [t("audit.detail.action"),  `<span class="audit-badge audit-badge-${escape(a.action)}">${escape(verb)}</span>`],
+      [t("audit.detail.entity"),  escape(ent)],
+      [t("audit.detail.company"), escape(a.companyname || t("audit.unknownCompany"))],
+      [t("audit.detail.user"),    a.username ? "👤 " + escape(a.username) : "—"],
+      [t("audit.detail.time"),    `${escape(abs)} <span class="audit-dl-rel">(${escape(rel)})</span>`],
+    ];
+    let html = `<dl class="audit-dl">` + rows.map(([k, v]) =>
+      `<div class="audit-dl-row"><dt>${escape(k)}</dt><dd>${v}</dd></div>`).join("") + `</dl>`;
+    html += `<h4 class="audit-dl-h">${escape(t("audit.detail.changes"))}</h4>`;
+    html += a.detail
+      ? `<pre class="audit-detail-full">${escape(a.detail)}</pre>`
+      : `<p class="audit-detail-muted" style="padding:.4rem .1rem;margin:0;">${escape(t("audit.detail.none"))}</p>`;
+    // When the event points at a record (car / client / branch), offer a
+    // one-click drill into that record's full detail.
+    const drill = refDrillButton(a.ref);
+    if (drill) html += `<div class="audit-drill-row">${drill}</div>`;
+    body.innerHTML = html;
+    wireRefDrills(body);
+    showModal("#audit-detail-modal");
+  }
+
+  function wireRows(box){
+    box.querySelectorAll(".audit-row").forEach(row => {
+      const open = () => {
+        const id = Number(row.dataset.auditId);
+        const a = items.find(x => Number(x.id) === id);
+        if (a) openDetail(a);
+      };
+      row.addEventListener("click", open);
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " "){ e.preventDefault(); open(); }
+      });
+    });
+  }
+
+  function render(){
+    const box = $("#audit-stream");
+    if (!box) return;
+    if (!items.length){
+      const anyFilter = filters.company_id || filters.action || filters.entity || filters.q;
+      box.innerHTML = `<p class="dash-empty">${escape(anyFilter ? t("audit.noMatch") : t("audit.empty"))}</p>`;
+      return;
+    }
+    box.innerHTML = items.map(rowHtml).join("")
+      + (nextCursor
+          ? `<div class="dash-load-more"><button type="button" class="dash-load-more-btn audit-more-btn">${escape(t("dash.loadMore"))}</button></div>`
+          : "");
+    const moreBtn = box.querySelector(".audit-more-btn");
+    if (moreBtn) moreBtn.addEventListener("click", loadMore);
+    wireRows(box);
+  }
+
+  async function load(silent = false){
+    const u = AUTH.user();
+    if (!u || u.role !== "admin") return;
+    if (loading) return;
+    loading = true;
+    try {
+      readFilters();
+      const r = await fetch(API.url("/api/admin/audit-log?" + queryString()), { headers: authHeaders() });
+      if (!r.ok) return;
+      const raw = await r.text();
+      // On a silent auto-refresh, skip the re-render when nothing changed so
+      // any "load more" position the admin scrolled to stays put.
+      if (silent && raw === lastRaw) return;
+      lastRaw = raw;
+      const data = JSON.parse(raw) || {};
+      items = data.items || [];
+      nextCursor = data.next_cursor || null;
+      render();
+    } catch (e){
+      if (!silent){ const box = $("#audit-stream"); if (box) box.innerHTML = `<p class="dash-empty">${escape(t("audit.empty"))}</p>`; }
+    } finally { loading = false; }
+  }
+
+  async function loadMore(){
+    if (!nextCursor || loading) return;
+    loading = true;
+    try {
+      const r = await fetch(API.url("/api/admin/audit-log?" + queryString(nextCursor)), { headers: authHeaders() });
+      if (!r.ok) return;
+      const data = await r.json();
+      items = items.concat(data.items || []);
+      nextCursor = data.next_cursor || null;
+      lastRaw = "";               // list grew — invalidate the silent-refresh cache
+      render();
+    } catch (e){ /* keep current view */ }
+    finally { loading = false; }
+  }
+
+  async function loadStats(silent = false){
+    const u = AUTH.user();
+    if (!u || u.role !== "admin") return;
+    try {
+      const r = await fetch(API.url("/api/admin/audit-stats"), { headers: authHeaders() });
+      if (!r.ok) return;
+      const s = await r.json();
+      const set = (id, v) => { const el = $(`#${id}`); if (el) animateCount(el, v || 0); };
+      set("audit-kpi-events",    s.events);
+      set("audit-kpi-logins",    s.logins);
+      set("audit-kpi-created",   s.created);
+      set("audit-kpi-edits",     s.edits);
+      set("audit-kpi-deletes",   s.deletes);
+      set("audit-kpi-companies", s.companies);
+    } catch (e){ /* transient */ }
+  }
+
+  /* Populate the company filter with value = company id (server filters by id). */
+  function populateCompanies(){
+    const sel = $("#audit-filter-company");
+    if (!sel) return;
+    const cur = sel.value;
+    const list = (state.companies || [])
+      .filter(c => c && c.id && c.companyname)
+      .slice()
+      .sort((a, b) => String(a.companyname).localeCompare(String(b.companyname), undefined, { sensitivity: "base" }));
+    sel.innerHTML = `<option value="">${escape(t("audit.filter.allCompanies"))}</option>`
+      + list.map(c => `<option value="${c.id}">${escape(c.companyname)}</option>`).join("");
+    if (cur && list.some(c => String(c.id) === cur)) sel.value = cur;
+    if (sel._ss) sel._ss.sync();
+  }
+
+  function setup(){
+    if (wired) return;
+    wired = true;
+    const reload = () => { lastRaw = ""; load(); };
+    ["audit-filter-company", "audit-filter-action", "audit-filter-entity"].forEach(id => {
+      const el = $(`#${id}`);
+      if (el) el.addEventListener("change", reload);
+    });
+    const search = $("#audit-filter-search");
+    if (search) search.addEventListener("input", () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(reload, 300);
+    });
+    $("#audit-detail-close")?.addEventListener("click", () => hideModal("#audit-detail-modal"));
+    $("#audit-detail-cancel")?.addEventListener("click", () => hideModal("#audit-detail-modal"));
+  }
+
+  return { load, loadMore, loadStats, populateCompanies, setup };
 })();
 
 function showApp(){
@@ -4542,6 +5907,8 @@ async function enterApp(){
   } finally {
     hideAppLoader();
   }
+  // Data + splash done: surface today's returns / reservations once.
+  if (typeof Notifications !== "undefined") Notifications.maybeAutoShow();
 }
 
 /* Branded header at the top of the Report tab — only shown when a
@@ -4583,7 +5950,7 @@ const AdminSidebar = (() => {
   // "admin-home" is the card-based landing; the rest are the panels a card (or
   // the — now hidden — sidebar) opens. Dashboard is special-cased below because
   // it's shown via style.display, not the .admin-panel-active class.
-  const PANELS = ["admin-home", "dashboard", "companies", "cars", "car-gps", "clients", "admin-reservations", "report", "admin-special", "support"];
+  const PANELS = ["admin-home", "dashboard", "companies", "cars", "car-gps", "clients", "admin-reservations", "report", "admin-special", "admin-individual", "support"];
   let _current = "admin-home";
 
   function show(panel){
@@ -4620,6 +5987,7 @@ const AdminSidebar = (() => {
       case "report":             refreshReport();    break;
       case "admin-reservations": Reservations.refresh(); break;
       case "admin-special":      AdminSpecial.refresh(); break;
+      case "admin-individual":   AdminIndividual.refresh(); break;
     }
     // The GPS/map tab needs a nudge once it's visible: Leaflet can only size
     // itself against a laid-out container.
@@ -4691,6 +6059,9 @@ function applyRoleUI(){
   if (user.role === "admin"){
     AdminSidebar.setup();
     AdminSpecial.setup();
+    AdminIndividual.setup();
+    AuditLog.setup();
+    EntityDetail.setup();
     const collapseBtn = $("#sidebar-collapse-btn");
     if (collapseBtn){
       collapseBtn.addEventListener("click", () => {
@@ -4731,14 +6102,22 @@ function applyRoleUI(){
       // Opening the Returns tab: pull fresh rentals so due/overdue dates are
       // current without a page refresh.
       if (panel === "company-returns") Returns.refresh();
+      // Returning to the home dashboard: refresh the "Return Due" widget so it
+      // reflects any rentals created / returned on other tabs.
+      if (panel === "company-home" && typeof ReturnDue !== "undefined") ReturnDue.refresh();
+      // Opening the branch section: sync the "this is my head office" checkbox on
+      // the company form with whether a branch currently holds the head office.
+      if (panel === "company-info" && window.refreshCompanyHeadOffice) window.refreshCompanyHeadOffice();
       // Opening the special-companies tab: refresh the car checklist + the
       // recorded-companies list.
       if (panel === "company-special") SpecialRentals.refresh();
       // Opening the Add-Client tab: refresh the "clients you added" table so
       // freshly-added / edited clients (and remaining edit counts) show.
       if (panel === "company-clients" && window.refreshMyClientsTable) window.refreshMyClientsTable();
-      // Opening the Add-Car tab: refresh the "cars you added" table.
+      // Opening the Add-Car tab: refresh the "cars you added" table and the
+      // branch dropdown (branches may have been added since page load / login).
       if (panel === "company-cars" && window.refreshMyCarsTable) window.refreshMyCarsTable();
+      if (panel === "company-cars" && window.refreshAddCarBranches) window.refreshAddCarBranches();
       // Opening the Report card: pull fresh rentals so the client-rental
       // list reflects any rentals just created on another panel.
       if (panel === "report") refreshReport();
@@ -4849,6 +6228,7 @@ function setupAuth(){
 
   $("#btn-logout").addEventListener("click", () => {
     AUTH.signOut();
+    if (typeof Notifications !== "undefined") Notifications.reset();
     showLogin();
   });
 }
@@ -5145,6 +6525,10 @@ const ENTITY = {
       { name: "company_id",  labelKey: "cars.f.company", required: true,
         type: "select", optionsFrom: () => state.companies, valueKey: "id",
         labelFn: (c) => `${c.companyname} — ${c.location}` },
+      { name: "branch_id",   labelKey: "cars.f.branch", type: "select",
+        allowEmpty: true, emptyLabelKey: "cars.branch.main",
+        optionsFrom: (rec) => (state.branches || []).filter(b => b.company_id === rec?.company_id),
+        valueKey: "id", labelFn: (b) => b.branchname },
       { name: "vin",         labelKey: "cars.f.vin",   required: true, readOnly: true,
         help: "VIN cannot be changed (rentals reference it)" },
       { name: "type",        labelKey: "cars.f.type",  required: true },
@@ -5194,7 +6578,16 @@ const Editor = (() => {
     // populate selects with live options
     cfg.fields.filter(f => f.type === "select").forEach(f => {
       const sel = wrap.querySelector(`[name="${f.name}"]`);
-      f.optionsFrom().forEach(opt => {
+      // allowEmpty → a leading option whose value is "" (e.g. a car's branch
+      // may be "Main" = no branch). Selected when the record has no value.
+      if (f.allowEmpty){
+        const o = document.createElement("option");
+        o.value = "";
+        o.textContent = t(f.emptyLabelKey || "filter.all");
+        if (rec[f.name] == null || rec[f.name] === "") o.selected = true;
+        sel.appendChild(o);
+      }
+      (f.optionsFrom(rec) || []).forEach(opt => {
         const o = document.createElement("option");
         o.value = opt[f.valueKey];
         o.textContent = f.labelFn(opt);
@@ -5313,6 +6706,10 @@ const Editor = (() => {
         body[f.name] = body[f.name] === "" || body[f.name] == null ? null : body[f.name];
       }
       if (f.name === "company_id") body[f.name] = Number(body[f.name]);
+      // allowEmpty select ("Main" branch) → "" becomes null, otherwise numeric id.
+      if (f.type === "select" && f.allowEmpty){
+        body[f.name] = body[f.name] === "" || body[f.name] == null ? null : Number(body[f.name]);
+      }
     });
     try{
       const r = await fetch(API.url(`${cfg.endpoint}/${record.id}`), {
@@ -5363,6 +6760,28 @@ async function softDelete(entityKey, id){
 const Detail = (() => {
   let currentRow = null;
 
+  // Company coordinate is (x = lng, y = lat). The pin next to the location
+  // opens the in-app map at those coords (or geocodes the place name).
+  const _hasXY = (x, y) => x != null && y != null && x !== "" && y !== "";
+  const locPin = (name, x, y) => {
+    if (!name && !_hasXY(x, y)) return "";
+    const coordAttrs = _hasXY(x, y) ? ` data-x="${x}" data-y="${y}"` : "";
+    return ` <button type="button" class="rd-loc-pin" data-name="${escape(name || "")}"${coordAttrs} title="${escape(t("companies.viewOnMap"))}" aria-label="${escape(t("companies.viewOnMap"))}">`
+      + `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s7-6.5 7-11.5A7 7 0 0 0 5 9.5C5 14.5 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>`
+      + `</button>`;
+  };
+  function bindLocPins(root){
+    $$(".rd-loc-pin", root).forEach(btn => {
+      btn.addEventListener("click", () => {
+        MapPicker.openLocation({
+          x: btn.dataset.x != null ? Number(btn.dataset.x) : null,
+          y: btn.dataset.y != null ? Number(btn.dataset.y) : null,
+          label: btn.dataset.name,
+        });
+      });
+    });
+  }
+
   function rowDl(r){
     const k = (key) => escape(t(key));
     const v = (x)   => x == null || x === "" ? "—" : escape(String(x));
@@ -5389,12 +6808,7 @@ const Detail = (() => {
         <div class="full"></div>
         <dt>${k("report.company")}</dt>     <dd>${v(r.company_name)} <code>(${v(r.company_code)})</code></dd>
         <dt>${k("report.cphone")}</dt>      <dd>${v(r.company_phone)}</dd>
-        <dt>${k("report.location")}</dt>    <dd>${v(r.company_location)}</dd>
-        <dt>${k("companies.f.coords")}</dt> <dd>${
-          r.company_x != null && r.company_y != null
-            ? `<code>${Number(r.company_y).toFixed(5)}, ${Number(r.company_x).toFixed(5)}</code>`
-            : "—"
-        }</dd>
+        <dt>${k("report.location")}</dt>    <dd>${v(r.company_location)}${locPin(r.company_location, r.company_x, r.company_y)}</dd>
         <div class="full"></div>
         <dt>${k("report.car")}</dt>         <dd>${v(r.car_model)} (${v(r.car_type)})</dd>
         <dt>${k("cars.f.vin")}</dt>         <dd><code>${v(r.car_vin)}</code></dd>
@@ -5507,6 +6921,7 @@ const Detail = (() => {
     const head = $("#detail-company");
     if (head) head.innerHTML = companyHeadHtml();
     $("#detail-body").innerHTML = rowDl(row);
+    bindLocPins($("#detail-body"));
     loadMedia(row.rental_id);
     loadCoRenters(row.rental_id);
     showModal("#detail-modal");
@@ -5852,6 +7267,43 @@ const MapPicker = (() => {
     setTimeout(() => map.invalidateSize(true), 200);
   }
 
+  // Geocode a place name → {lat, lng} via OpenStreetMap Nominatim. Results are
+  // cached per name so repeated clicks don't re-hit the network. Biased to
+  // Lebanon (the app's region) so bare city names resolve to the right country.
+  const geoCache = new Map();
+  async function geocode(name){
+    if (!name) return null;
+    const key = name.trim().toLowerCase();
+    if (geoCache.has(key)) return geoCache.get(key);
+    let result = null;
+    try {
+      const q = encodeURIComponent(`${name}, Lebanon`);
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${q}`, {
+        headers: { "Accept": "application/json" },
+      });
+      const arr = await res.json();
+      if (Array.isArray(arr) && arr.length){
+        result = { lat: parseFloat(arr[0].lat), lng: parseFloat(arr[0].lon) };
+      }
+    } catch (e){
+      console.error("geocode failed", e);
+    }
+    geoCache.set(key, result);
+    return result;
+  }
+
+  // Open the map for a location that may or may not have stored coordinates.
+  // With coordinates → show them directly. Without → geocode the name first.
+  async function openLocation({ x, y, label }){
+    const hasCoords = x != null && y != null && !Number.isNaN(Number(x)) && !Number.isNaN(Number(y));
+    if (hasCoords) return openView({ x: Number(x), y: Number(y), label });
+    if (!label) { toast(t("companies.locNotFound"), "error"); return; }
+    toast(t("companies.locating"), "info");
+    const c = await geocode(label);
+    if (!c) { toast(t("companies.locNotFound"), "error"); return; }
+    return openView({ x: c.lng, y: c.lat, label });
+  }
+
   function setup(){
     $("#btn-pick-map").addEventListener("click", openPick);
     $("#map-close" ).addEventListener("click", hide);
@@ -5870,7 +7322,7 @@ const MapPicker = (() => {
     });
   }
 
-  return { setup, openPick, openView };
+  return { setup, openPick, openView, openLocation };
 })();
 
 /* ============== CAR GPS / MAP (admin) ==============
@@ -6202,11 +7654,11 @@ const Reservations = (() => {
         ? `<a href="tel:${escape(rv.client_phone)}" class="ltr">${escape(rv.client_phone)}</a>` : dash;
       return `<tr${isToday ? ' class="rv-row-today"' : ""}>
         <td>${idx + 1}</td>
-        <td data-col="company"><strong>${cell(rv.companyname)}</strong></td>
+        <td data-col="company">${drillCell("company", rv.company_id, rv.companyname, true)}</td>
         <td data-col="cphone">${cPhone}</td>
-        <td data-col="client"><strong>${cell(rv.client_name)}</strong></td>
+        <td data-col="client">${drillCell("client", rv.client_id, rv.client_name, true)}</td>
         <td data-col="clphone">${clPhone}</td>
-        <td data-col="model">${cell(rv.car_model)}</td>
+        <td data-col="model">${drillCell("car", rv.car_vin, rv.car_model, false)}</td>
         <td data-col="color">${cell(rv.car_color)}</td>
         <td data-col="plate"><span class="ltr">${cell(rv.car_plate)}</span></td>
         <td data-col="gps">${_gpsDot(rv.car_has_gps)}</td>
@@ -6215,7 +7667,7 @@ const Reservations = (() => {
         <td data-col="status"><span class="reservation-status-badge ${statusCls}">${escape(statusLabel)}</span></td>
         <td data-col="view">
           <button type="button" class="row-btn rv-detail-btn" data-rv-detail="${rv.id}"
-                  title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">👁</button>
+                  title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">${ROW_MORE_ICO}</button>
         </td>
       </tr>`;
     }).join("");
@@ -6223,6 +7675,13 @@ const Reservations = (() => {
       btn.addEventListener("click", () => {
         const rec = _data.find(x => x.id === Number(btn.dataset.rvDetail));
         if (rec) _openReservationDetail(rec);
+      });
+    });
+    // Company / car / client values open that entity's detail modal.
+    tbl.querySelectorAll(".cell-drill").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        EntityDetail.open(btn.dataset.drill, btn.dataset.drillkey);
       });
     });
     Pager.render("admin-reservations", "#pager-top-admin-reservations",
@@ -6372,12 +7831,19 @@ const Reservations = (() => {
               toast(data.error || t("toast.error"), "error");
               return;
             }
-            toast(action === "active" ? t("reservations.activated") : t("reservations.cancelled"), "success");
+            if (action === "active" && data.converted){
+              toast(t("reservations.converted"), "success");
+            } else {
+              toast(action === "active" ? t("reservations.activated") : t("reservations.cancelled"), "success");
+            }
             await refresh();
             await refreshReport();
-            // Activating ties the car to a rental; cancelling frees it. Either
-            // way the available-car dropdown may have changed.
+            // Activating converts the reservation into a live rental (it drops
+            // off this list and shows up under Returns as rented by client);
+            // cancelling frees the car. Either way the pickers may have changed.
             await refreshPickers();
+            if (typeof Returns !== "undefined") await Returns.refresh();
+            if (typeof Notifications !== "undefined") Notifications.refresh();
           } catch (e){ toast(e.message || t("toast.error"), "error"); }
         }
       });
@@ -6901,6 +8367,188 @@ function setupSupportForm(){
 }
 
 /* ============== INIT ============== */
+/* ============== NOTIFICATIONS (company login alerts) ==============
+   A single bell in the header. On login it pulls /api/company/alerts — cars
+   due back today or overdue (both individual + B2B rentals) and reservations
+   starting today — badges the count, and pops a summary panel so the owner
+   sees what needs attention the moment they sign in. The bell reopens it. */
+const Notifications = (() => {
+  let _data = null;         // last fetched alerts payload
+  let _autoShown = false;   // guard so login only auto-opens the panel once
+
+  function _count(){
+    if (!_data) return 0;
+    const rd = _data.returns_due || {}, rt = _data.reservations_today || {};
+    return (rd.total || 0) + (rt.count || 0);
+  }
+
+  function _renderBadge(){
+    const bell = $("#btn-notifications"), badge = $("#notif-badge");
+    if (!bell || !badge) return;
+    const u = AUTH.user();
+    const isCompany = !!(u && u.role === "company");
+    bell.hidden = !isCompany;
+    if (!isCompany){ badge.hidden = true; return; }
+    const n = _count();
+    if (n > 0){
+      badge.hidden = false;
+      badge.textContent = n > 99 ? "99+" : String(n);
+      bell.classList.add("has-alerts");
+    } else {
+      badge.hidden = true;
+      bell.classList.remove("has-alerts");
+    }
+  }
+
+  function _carLabel(it){
+    const m = it.car_model || "", p = it.car_plate || "";
+    return p ? `${m} — ${p}` : (m || it.car_vin || "");
+  }
+
+  function _returnItemHtml(it){
+    const end = it.end_date ? String(it.end_date).slice(0, 10) : "";
+    // Trust the server's overdue flag (its clock decided "today"), so the
+    // badge can't disagree with the counts just because the browser's date
+    // or timezone differs.
+    const overdue = !!it.overdue;
+    const badge = overdue
+      ? `<span class="return-badge overdue">${escape(t("returns.overdue"))}</span>`
+      : `<span class="return-badge today">${escape(t("returns.dueToday"))}</span>`;
+    const ico = it.kind === "company" ? "🏢" : "👤";
+    const who = it.who || "";
+    // The car can be sent back to the office right from the alert: this opens
+    // the branch picker, then POSTs the return (individual vs B2B endpoint).
+    return `<li class="alert-item">
+      <span class="alert-item-ico">${ico}</span>
+      <span class="alert-item-main">
+        <span class="alert-item-title">${escape(who)}</span>
+        <span class="alert-item-sub">${escape(_carLabel(it))}${end ? " · " + escape(end) : ""}</span>
+      </span>
+      ${badge}
+      <button type="button" class="alert-return-btn"
+              data-ret-kind="${escape(it.kind || "individual")}"
+              data-ret-id="${escape(String(it.id))}"
+              data-ret-label="${escape(_carLabel(it))}">${escape(t("returns.backToOffice"))}</button>
+    </li>`;
+  }
+
+  // Send a car back to the office from the alert list: pick the branch, POST
+  // the return to the right endpoint, then refresh everything that shows it.
+  async function _returnFromAlert(kind, id, label){
+    const pick = await pickReturnBranch(label || "");
+    if (pick === null) return;   // cancelled
+    const path = kind === "company"
+      ? `/api/special-rentals/${id}/return`
+      : `/api/rentals/${id}/return`;
+    try {
+      const r = await fetch(API.url(path), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ return_branch_id: pick.branchId }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok){ toast(data.error || t("toast.error"), "error"); return; }
+      toast(t("returns.returned"), "success");
+      await refresh();                                   // this module (bell + modal)
+      if (typeof Returns !== "undefined") Returns.refresh();
+      if (typeof ReturnDue !== "undefined") ReturnDue.refresh();
+      if (typeof SpecialRentals !== "undefined" && SpecialRentals.refresh) SpecialRentals.refresh();
+    } catch (err){ toast(err.message || t("toast.error"), "error"); }
+  }
+
+  function _resItemHtml(it){
+    const phone = it.client_phone
+      ? `<a href="tel:${escape(it.client_phone)}" class="ltr">${escape(it.client_phone)}</a>` : "";
+    const span = [it.start_date, it.end_date].filter(Boolean).map(d => String(d).slice(0,10)).join(" → ");
+    const badge = it.late
+      ? `<span class="return-badge overdue">${escape(t("alerts.res.late"))}</span>`
+      : `<span class="return-badge today">${escape(t("alerts.res.badge"))}</span>`;
+    return `<li class="alert-item">
+      <span class="alert-item-ico">📅</span>
+      <span class="alert-item-main">
+        <span class="alert-item-title">${escape(it.client_name || "")}</span>
+        <span class="alert-item-sub">${escape(_carLabel(it))}${span ? " · " + escape(span) : ""}${phone ? " · " + phone : ""}</span>
+      </span>
+      ${badge}
+    </li>`;
+  }
+
+  function _renderModal(){
+    const rd = (_data && _data.returns_due) || { items: [], overdue: 0, today: 0, total: 0 };
+    const rt = (_data && _data.reservations_today) || { items: [], count: 0 };
+    const retBlock = $("#alert-block-returns"), resBlock = $("#alert-block-reservations");
+    const retList = $("#alerts-returns-list"), resList = $("#alerts-res-list");
+    const retSub = $("#alerts-returns-sub"), resSub = $("#alerts-res-sub");
+    const emptyEl = $("#alerts-empty");
+
+    if (retList){
+      retList.innerHTML = (rd.items || []).map(_returnItemHtml).join("");
+      retList.querySelectorAll(".alert-return-btn").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          _returnFromAlert(btn.dataset.retKind, btn.dataset.retId, btn.dataset.retLabel);
+        });
+      });
+    }
+    if (retSub){
+      const parts = [];
+      if (rd.overdue) parts.push(t("alerts.returns.overdue").replace("{n}", rd.overdue));
+      if (rd.today)   parts.push(t("alerts.returns.today").replace("{n}", rd.today));
+      retSub.textContent = parts.join(" · ") || t("alerts.returns.none");
+    }
+    if (retBlock) retBlock.hidden = !(rd.total > 0);
+
+    if (resList) resList.innerHTML = (rt.items || []).map(_resItemHtml).join("");
+    if (resSub)  resSub.textContent = rt.count
+      ? t("alerts.res.count").replace("{n}", rt.count) : t("alerts.res.none");
+    if (resBlock) resBlock.hidden = !(rt.count > 0);
+
+    if (emptyEl) emptyEl.hidden = _count() > 0;
+    if (typeof applyTranslations === "function") applyTranslations();
+  }
+
+  async function refresh(){
+    const u = AUTH.user();
+    if (!u || u.role !== "company"){ _data = null; _renderBadge(); return; }
+    try {
+      const r = await fetch(API.url("/api/company/alerts"), { headers: authHeaders() });
+      _data = r.ok ? await r.json() : null;
+    } catch (e){ _data = null; }
+    _renderBadge();
+    _renderModal();
+  }
+
+  function open(){
+    if (!_data) return;
+    _renderModal();
+    showModal("#company-alerts-modal");
+  }
+
+  // Called right after login: open the panel once if anything needs attention.
+  function maybeAutoShow(){
+    if (_autoShown) return;
+    _autoShown = true;
+    if (_count() > 0) open();
+  }
+
+  function reset(){ _data = null; _autoShown = false; _renderBadge(); }
+
+  function setup(){
+    $("#btn-notifications")?.addEventListener("click", open);
+    $("#alerts-close")?.addEventListener("click", () => hideModal("#company-alerts-modal"));
+    $("#alerts-dismiss")?.addEventListener("click", () => hideModal("#company-alerts-modal"));
+    // Jump buttons close the panel and navigate to the relevant tab.
+    $$("#company-alerts-modal .alert-jump").forEach(btn => {
+      btn.addEventListener("click", () => {
+        hideModal("#company-alerts-modal");
+        if (typeof showCompanyPanel === "function") showCompanyPanel(btn.dataset.alertGo);
+      });
+    });
+  }
+
+  return { refresh, open, maybeAutoShow, reset, setup };
+})();
+
 async function loadAllData(){
   try{
     const u = AUTH.user();
@@ -6911,7 +8559,10 @@ async function loadAllData(){
         refreshRentalPickers(),
         Reservations.refresh(),
         Reservations.refreshPickers(),
+        Notifications.refresh(),
       ]);
+      // Report is now loaded — paint the home "Return Due" widget.
+      if (typeof ReturnDue !== "undefined") ReturnDue.render();
     } else {
       await Promise.all([
         refreshCompanies(), refreshCars(), refreshClients(),
@@ -6920,6 +8571,9 @@ async function loadAllData(){
       updateStatsDashboard();
       loadInactiveAlerts();
       loadDashboardActivity();
+      AuditLog.populateCompanies();
+      AuditLog.load();
+      AuditLog.loadStats();
       updateUploadHint();
     }
   } catch (err){
@@ -7114,16 +8768,34 @@ const SpecialRentals = (() => {
     return rows;
   }
 
+  const _z2 = n => String(n).padStart(2, "0");
+  function _todayStr(){ const d = new Date(); return `${d.getFullYear()}-${_z2(d.getMonth()+1)}-${_z2(d.getDate())}`; }
+
+  // Status badge for a B2B record: Returned (handed back), or — while still
+  // out — Overdue / Due today / Out based on end_date vs today.
+  function _statusCell(r){
+    if (r.returned_at){
+      const at = String(r.returned_at).slice(0, 10);
+      return `<span class="return-badge returned" title="${escape(at)}">${escape(t("special.status.returned"))}</span>`;
+    }
+    const end = r.end_date ? String(r.end_date).slice(0, 10) : "";
+    if (!end) return `<span class="return-badge upcoming">${escape(t("special.status.out"))}</span>`;
+    const today = _todayStr();
+    if (end < today) return `<span class="return-badge overdue">${escape(t("returns.overdue"))}</span>`;
+    if (end === today) return `<span class="return-badge today">${escape(t("returns.dueToday"))}</span>`;
+    return `<span class="return-badge upcoming">${escape(t("special.status.out"))}</span>`;
+  }
+
   function renderRecords(){
     const tb = $("#special-rows");
     if (!tb) return;
     if (!_records.length){
-      tb.innerHTML = `<tr class="empty-row"><td colspan="11">${escape(t("special.empty"))}</td></tr>`;
+      tb.innerHTML = `<tr class="empty-row"><td colspan="12">${escape(t("special.empty"))}</td></tr>`;
       return;
     }
     const rows = getFiltered();
     if (!rows.length){
-      tb.innerHTML = `<tr class="empty-row"><td colspan="11">${escape(t("special.noMatch"))}</td></tr>`;
+      tb.innerHTML = `<tr class="empty-row"><td colspan="12">${escape(t("special.noMatch"))}</td></tr>`;
       return;
     }
     const carByVin = {};
@@ -7142,13 +8814,19 @@ const SpecialRentals = (() => {
       const gps = c.has_gps
         ? `<span class="badge yes">${escape(t("yes"))}</span>`
         : `<span class="badge no">${escape(t("no"))}</span>`;
-      // Company users may correct a record at most twice; then it's locked.
-      const left = Math.max(0, 2 - Number(r.edit_count || 0));
-      const action = left > 0
-        ? `<button type="button" class="row-btn special-edit" data-id="${r.id}">✎ ${escape(t("action.edit"))}</button>`
-        : `<span class="badge no">${escape(t("addClient.noEditsLeft"))}</span>`;
+      // Edits are unlimited now; show how many times the record was edited.
+      const edits = Number(r.edit_count || 0);
+      // A car still out can be extended or handed back to a branch; once
+      // returned those actions disappear and only Edit remains.
+      const returned = !!r.returned_at;
+      const editBtn = `<button type="button" class="row-btn special-edit" data-id="${r.id}">✎ ${escape(t("action.edit"))}</button>`;
+      const extendBtn = returned ? "" :
+        `<button type="button" class="row-btn special-extend" data-id="${r.id}">${escape(t("extend.action"))}</button>`;
+      const returnBtn = returned ? "" :
+        `<button type="button" class="row-btn special-return" data-id="${r.id}">${escape(t("returns.backToOffice"))}</button>`;
+      const action = `<div class="row-actions">${editBtn}${extendBtn}${returnBtn}</div>`;
 
-      return `<tr>
+      return `<tr${returned ? ' class="special-returned-row"' : ""}>
         <td data-col="company"><strong>${escape(r.company_name)}</strong></td>
         <td data-col="owner">${r.owner_name ? escape(r.owner_name) : dash}</td>
         <td data-col="phone">${phoneHtml}</td>
@@ -7158,11 +8836,56 @@ const SpecialRentals = (() => {
         <td data-col="gps">${gps}</td>
         <td data-col="from">${day(r.start_date)}</td>
         <td data-col="to">${day(r.end_date)}</td>
-        <td data-col="edits"><span class="badge ${left > 0 ? "yes" : "no"}">${left}</span></td>
+        <td data-col="status">${_statusCell(r)}</td>
+        <td data-col="edits">${edits}</td>
         <td data-col="action" class="my-car-action">${action}</td>
       </tr>`;
     }).join("");
     if (typeof applyTranslations === "function") applyTranslations();
+  }
+
+  // The other company hands one of our cars back: pick which branch it came
+  // back to, stamp the record returned, and drop it off the active list.
+  async function _returnRecord(rec){
+    if (!rec) return;
+    const c = _cars.find(x => x.vin === recordVin(rec)) || {};
+    const label = carLabel(c) || rec.company_name || "";
+    const pick = await pickReturnBranch(label);
+    if (pick === null) return;
+    try {
+      const r = await fetch(API.url(`/api/special-rentals/${rec.id}/return`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ return_branch_id: pick.branchId }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok){ toast(data.error || t("toast.error"), "error"); return; }
+      toast(t("returns.returned"), "success");
+      await refresh();
+      if (typeof Notifications !== "undefined") Notifications.refresh();
+    } catch (err){ toast(err.message || t("toast.error"), "error"); }
+  }
+
+  // Extend a B2B record's rental period.
+  async function _extendRecord(rec){
+    if (!rec) return;
+    const c = _cars.find(x => x.vin === recordVin(rec)) || {};
+    const label = carLabel(c) || rec.company_name || "";
+    const curEnd = rec.end_date ? String(rec.end_date).slice(0, 10) : "";
+    const newEnd = await pickExtendDate(label, curEnd);
+    if (newEnd === null) return;
+    try {
+      const r = await fetch(API.url(`/api/special-rentals/${rec.id}/extend`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ end_date: newEnd }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok){ toast(data.error || t("toast.error"), "error"); return; }
+      toast(t("extend.done"), "success");
+      await refresh();
+      if (typeof Notifications !== "undefined") Notifications.refresh();
+    } catch (err){ toast(err.message || t("toast.error"), "error"); }
   }
 
   function resetForm(){
@@ -7305,10 +9028,23 @@ const SpecialRentals = (() => {
     // Edit a recorded rental (✎) → repopulate the form in edit mode. Company
     // users may correct a record at most twice; the backend enforces the limit.
     $("#special-rows")?.addEventListener("click", (e) => {
-      const btn = e.target.closest(".special-edit");
-      if (!btn) return;
-      const rec = _records.find(x => String(x.id) === btn.dataset.id);
-      if (rec) enterEditMode(rec);
+      const editBtn = e.target.closest(".special-edit");
+      if (editBtn){
+        const rec = _records.find(x => String(x.id) === editBtn.dataset.id);
+        if (rec) enterEditMode(rec);
+        return;
+      }
+      const returnBtn = e.target.closest(".special-return");
+      if (returnBtn){
+        const rec = _records.find(x => String(x.id) === returnBtn.dataset.id);
+        if (rec) _returnRecord(rec);
+        return;
+      }
+      const extendBtn = e.target.closest(".special-extend");
+      if (extendBtn){
+        const rec = _records.find(x => String(x.id) === extendBtn.dataset.id);
+        if (rec) _extendRecord(rec);
+      }
     });
 
     // Cancel an in-progress edit → back to a blank "add" form.
@@ -7384,7 +9120,7 @@ const AdminSpecial = (() => {
     if (!tb) return;
     _view = filtered();
     if (!_view.length){
-      tb.innerHTML = `<tr class="empty-row"><td colspan="10">${escape(t("adminSpecial.empty"))}</td></tr>`;
+      tb.innerHTML = `<tr class="empty-row"><td colspan="11">${escape(t("adminSpecial.empty"))}</td></tr>`;
       const pt = $("#pager-top-admin-special"); if (pt) pt.hidden = true;
       const pb = $("#pager-admin-special");     if (pb) pb.hidden = true;
       return;
@@ -7404,7 +9140,15 @@ const AdminSpecial = (() => {
       const gps = r.has_gps
         ? `<span class="badge yes">${escape(t("yes"))}</span>`
         : `<span class="badge no">${escape(t("no"))}</span>`;
-      return `<tr>
+      // "Rented from" = the registered company that owns the car and rented it
+      // out (the record's company_id). Clicking it opens that company's detail
+      // modal (info + location + branches). Look it up from already-loaded state.
+      const ownerCo = (state.companies || []).find(c => c.id === Number(r.company_id));
+      const fromCell = ownerCo
+        ? drillCell("company", ownerCo.id, ownerCo.companyname, true)
+        : dash;
+      return `<tr class="al-click-row" data-idx="${idx}" title="${escape(t("action.view"))}">
+        <td data-col="from-company">${fromCell}</td>
         <td data-col="company"><strong>${escape(r.company_name)}</strong></td>
         <td data-col="owner">${r.owner_name ? escape(r.owner_name) : dash}</td>
         <td data-col="phone">${phoneHtml}</td>
@@ -7416,7 +9160,7 @@ const AdminSpecial = (() => {
         <td data-col="gps">${gps}</td>
         <td data-col="view">
           <button type="button" class="row-btn admin-special-view" data-idx="${idx}"
-                  title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">👁</button>
+                  title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">${ROW_MORE_ICO}</button>
         </td>
       </tr>`;
     }).join("");
@@ -7437,10 +9181,20 @@ const AdminSpecial = (() => {
   function setup(){
     if (_wired) return;
     _wired = true;
+    // Click anywhere on a row (company / owner / car) to open the detail modal.
+    // The "Rented from" company link still opens that company's info modal, and
+    // phone links still dial — those are handled/ignored first.
     $("#admin-special-rows")?.addEventListener("click", (e) => {
-      const btn = e.target.closest(".admin-special-view");
-      if (!btn) return;
-      const rec = _view[Number(btn.dataset.idx)];
+      const drill = e.target.closest(".cell-drill");
+      if (drill){
+        e.stopPropagation();
+        EntityDetail.open(drill.dataset.drill, drill.dataset.drillkey);
+        return;
+      }
+      if (e.target.closest("a")) return;
+      const tr = e.target.closest(".al-click-row");
+      if (!tr) return;
+      const rec = _view[Number(tr.dataset.idx)];
       if (rec) SpecialDetail.open(rec, carsFor(rec));
     });
     // Filters: any change resets to page 1 and re-renders.
@@ -7462,16 +9216,134 @@ const AdminSpecial = (() => {
   return { setup, refresh };
 })();
 
+/* ============== ADMIN: CARS RENTED BY INDIVIDUALS ==============
+   Currently-out individual-client rentals (returned_at IS NULL). Deliberately
+   mirrors AdminSpecial so the two admin cards render as matching tables. */
+const AdminIndividual = (() => {
+  let _all = [];
+  let _view = [];
+  let _wired = false;
+
+  function filtered(){
+    let rows = _all.slice();
+    const q = ($("#filter-individual-search")?.value || "").trim().toLowerCase();
+    if (q){
+      rows = rows.filter(r =>
+        [r.client_name, r.client_phone, r.company_name, r.car_model, r.car_plate, r.car_color]
+          .some(v => String(v || "").toLowerCase().includes(q)));
+    }
+    return rows;
+  }
+
+  function render(){
+    const tb = $("#admin-individual-rows");
+    if (!tb) return;
+    _view = filtered();
+    if (!_view.length){
+      tb.innerHTML = `<tr class="empty-row"><td colspan="9">${escape(t("adminIndividual.empty"))}</td></tr>`;
+      const pt = $("#pager-top-admin-individual"); if (pt) pt.hidden = true;
+      const pb = $("#pager-admin-individual");     if (pb) pb.hidden = true;
+      return;
+    }
+    const info = Pager.slice("admin-individual", _view);
+    const dash = '<span class="muted-cell">—</span>';
+    const ltr = (v) => `<span class="ltr">${escape(v)}</span>`;
+    const day = (d) => d ? ltr(String(d).slice(0, 10)) : dash;
+    tb.innerHTML = info.rows.map((r, i) => {
+      const idx = (info.page - 1) * info.size + i;   // absolute index into _view
+      const gps = r.car_has_gps
+        ? `<span class="badge yes">${escape(t("yes"))}</span>`
+        : `<span class="badge no">${escape(t("no"))}</span>`;
+      const phone = r.client_phone
+        ? `<a href="tel:${escape(r.client_phone)}" class="ltr">${escape(r.client_phone)}</a>` : dash;
+      return `<tr class="al-click-row" data-idx="${idx}" title="${escape(t("action.view"))}">
+        <td data-col="client"><strong>${r.client_name ? escape(r.client_name) : dash}</strong></td>
+        <td data-col="company">${r.company_name ? escape(r.company_name) : dash}</td>
+        <td data-col="phone">${phone}</td>
+        <td data-col="model">${r.car_model ? escape(r.car_model) : dash}</td>
+        <td data-col="color">${r.car_color ? escape(r.car_color) : dash}</td>
+        <td data-col="plate">${r.car_plate ? ltr(r.car_plate) : dash}</td>
+        <td data-col="from">${day(r.start_date)}</td>
+        <td data-col="to">${day(r.end_date)}</td>
+        <td data-col="gps">${gps}</td>
+      </tr>`;
+    }).join("");
+    Pager.render("admin-individual", "#pager-top-admin-individual", "#pager-admin-individual", info, render);
+    if (typeof applyTranslations === "function") applyTranslations();
+  }
+
+  async function refresh(){
+    const u = (typeof AUTH !== "undefined") ? AUTH.user() : null;
+    if (!u || u.role !== "admin") return;
+    try { _all = await API.listAdminActiveRentals(); }
+    catch (e){ _all = []; }
+    Pager.reset("admin-individual");
+    render();
+  }
+
+  function setup(){
+    if (_wired) return;
+    _wired = true;
+    $("#filter-individual-search")?.addEventListener("input", () => { Pager.reset("admin-individual"); render(); });
+    $("#individual-reset")?.addEventListener("click", () => {
+      const el = $("#filter-individual-search"); if (el) el.value = "";
+      Pager.reset("admin-individual"); render();
+    });
+    // Click a row (client / company / car) to open the full rental detail
+    // modal (info + media + PDF download). Ignore clicks on the phone link.
+    $("#admin-individual-rows")?.addEventListener("click", (e) => {
+      if (e.target.closest("a, button")) return;
+      const tr = e.target.closest(".al-click-row");
+      if (!tr) return;
+      const rec = _view[Number(tr.dataset.idx)];
+      if (rec) Detail.open(rec);
+    });
+  }
+
+  return { setup, refresh };
+})();
+
 /* ============== B2B RENTAL DETAIL (view + car media) ==============
    Read-only view of one "cars rented to companies" record, plus photo /
    video upload for the car — mirrors the regular rental Detail modal but
    hits the /api/special-rentals/<id>/media endpoints. */
 const SpecialDetail = (() => {
-  let currentId = null;
+  let currentId = null, currentRec = null, currentCar = null;
 
   function carOf(rec, cars){
     const vin = rec.car_vin || String(rec.car_vins || "").split(",")[0]?.trim();
     return (cars || []).find(c => c.vin === vin) || {};
+  }
+
+  // Saved B2B coordinate is (x = lng, y = lat) — same convention as companies.
+  // A pin opens the in-app map at those coords; the "View on map" link opens
+  // Google Maps ("lat,lng" → q=y,x). Only shown when x/y were actually picked.
+  const _hasXY = (x, y) => x != null && y != null && x !== "" && y !== "";
+  const mapsUrl = (x, y) => _hasXY(x, y)
+    ? `https://www.google.com/maps?q=${encodeURIComponent(y)},${encodeURIComponent(x)}` : "";
+  const locPin = (name, x, y) => {
+    if (!name && !_hasXY(x, y)) return "";
+    const coordAttrs = _hasXY(x, y) ? ` data-x="${x}" data-y="${y}"` : "";
+    return ` <button type="button" class="rd-loc-pin" data-name="${escape(name || "")}"${coordAttrs} title="${escape(t("companies.viewOnMap"))}" aria-label="${escape(t("companies.viewOnMap"))}">`
+      + `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s7-6.5 7-11.5A7 7 0 0 0 5 9.5C5 14.5 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>`
+      + `</button>`;
+  };
+  const mapsLink = (x, y) => {
+    const u = mapsUrl(x, y);
+    return u ? `<a href="${escape(u)}" target="_blank" rel="noopener" class="rd-maplink">${escape(t("special.mapLink"))}</a>` : "—";
+  };
+  // Wire each pin to open the in-app Leaflet viewer at its coords (or geocode
+  // the bare place name), mirroring the company detail modal.
+  function bindLocPins(root){
+    $$(".rd-loc-pin", root).forEach(btn => {
+      btn.addEventListener("click", () => {
+        MapPicker.openLocation({
+          x: btn.dataset.x != null ? Number(btn.dataset.x) : null,
+          y: btn.dataset.y != null ? Number(btn.dataset.y) : null,
+          label: btn.dataset.name,
+        });
+      });
+    });
   }
 
   function bodyHtml(rec, cars){
@@ -7491,7 +9363,8 @@ const SpecialDetail = (() => {
         <dt>${k("special.th.owner")}</dt>   <dd>${v(rec.owner_name)}</dd>
         <dt>${k("special.th.phone")}</dt>   <dd class="ltr">${phones.length ? phones.map(escape).join(" · ") : "—"}</dd>
         <dt>${k("special.f.branches")}</dt> <dd>${branches.length ? branches.map(escape).join(" · ") : "—"}</dd>
-        <dt>${k("special.f.address")}</dt>  <dd>${v(rec.location)}</dd>
+        <dt>${k("special.f.address")}</dt>  <dd>${v(rec.location)}${locPin(rec.location, rec.x, rec.y)}</dd>
+        <dt>${k("special.f.location")}</dt> <dd>${mapsLink(rec.x, rec.y)}</dd>
         <div class="full"></div>
         <dt>${k("special.th.model")}</dt>   <dd>${v(c.model)}</dd>
         <dt>${k("special.th.color")}</dt>   <dd>${v(c.color)}</dd>
@@ -7565,14 +9438,43 @@ const SpecialDetail = (() => {
 
   function open(rec, cars){
     currentId = rec.id;
+    currentRec = rec;
+    currentCar = carOf(rec, cars);
     $("#special-detail-body").innerHTML = bodyHtml(rec, cars);
+    bindLocPins($("#special-detail-body"));
     loadMedia(rec.id);
     showModal("#special-detail-modal");
+  }
+
+  // Clean one-page PDF of the record: the company it's rented to + the car.
+  function pdf(){
+    if (!currentRec) return;
+    const rec = currentRec, c = currentCar || {};
+    const splitCsv = (s) => String(s || "").split(",").map(x => x.trim()).filter(Boolean);
+    const phones = rec.phones ? splitCsv(rec.phones) : [rec.phone, rec.extra_phone].filter(Boolean);
+    const branches = rec.branches ? splitCsv(rec.branches) : [rec.branch, rec.extra_branch].filter(Boolean);
+    const day = (d) => d ? String(d).slice(0, 10) : "";
+    printDoc(t("special.detail.title"), rec.company_name, pdfRows([
+      [t("special.th.company"),  rec.company_name],
+      [t("special.th.owner"),    rec.owner_name],
+      [t("special.th.phone"),    phones.join(" · ")],
+      [t("special.f.branches"),  branches.join(" · ")],
+      [t("special.f.address"),   rec.location],
+      [t("special.th.model"),    c.model],
+      [t("special.th.color"),    c.color],
+      [t("special.th.plate"),    c.platenumber],
+      [t("cars.f.vin"),          c.vin || rec.car_vin],
+      [t("special.th.gps"),      c.has_gps ? t("yes") : t("no")],
+      [t("special.th.from"),     day(rec.start_date)],
+      [t("special.th.to"),       day(rec.end_date)],
+      [t("special.f.notes"),     rec.notes],
+    ]));
   }
 
   function setup(){
     $("#special-detail-close")?.addEventListener("click", () => hideModal("#special-detail-modal"));
     $("#special-detail-cancel")?.addEventListener("click", () => hideModal("#special-detail-modal"));
+    $("#special-detail-pdf")?.addEventListener("click", pdf);
     $("#special-upload-photo")?.addEventListener("change", async (e) => {
       const files = Array.from(e.target.files || []);
       for (const f of files) await uploadMedia(f, "photo");
@@ -7616,6 +9518,7 @@ async function init(){
   Returns.setup();
   SpecialRentals.setup();
   SpecialDetail.setup();
+  Notifications.setup();
   setupSupportForm();
   setupReportSearch();
   MapPicker.setup();

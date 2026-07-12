@@ -26,7 +26,35 @@ services:
     # Raise max_connections so many gunicorn workers (each with its own pool)
     # have headroom. The app auto-sizes its per-worker pool from
     # PG_MAX_CONNECTIONS below, so keep these two numbers in sync.
-    command: ["postgres", "-c", "max_connections=200"]
+    #
+    # The -c memory/planner flags lift Postgres off its tiny defaults
+    # (shared_buffers ~128MB, work_mem 4MB) so it can actually use RAM at
+    # "millions of rows" scale. These are MODERATE defaults safe on a ~2-4GB
+    # box (Docker Desktop) — raise them on a bigger production host. Rule of
+    # thumb: shared_buffers ≈ 25% RAM, effective_cache_size ≈ 50-75% RAM.
+    # work_mem is PER sort/hash node PER connection, so keep it modest given
+    # max_connections=200.
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "effective_cache_size=768MB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=128MB"
+    # Resource caps keep Postgres from starving the app (or vice versa) on a
+    # shared host. Left commented because a cap set BELOW real usage OOM-kills
+    # the container — size these to your actual host, then uncomment. A cap must
+    # exceed shared_buffers (256MB above) + work_mem × concurrent sorts + OS cache.
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 2g
+    #       cpus: "2.0"
     environment:
       # Defaults match backend/.env so a fresh `docker compose up` works
       # against the same credentials the local Flask dev server already
@@ -60,6 +88,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # See the postgres note above — size to the host, then uncomment. The app's
+    # footprint scales with GUNICORN_WORKERS (each a separate process).
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 1g
+    #       cpus: "2.0"
     ports:
       - "5000:5000"
     env_file:
@@ -76,6 +111,12 @@ services:
       DB_PASSWORD: admin
       FLASK_PORT:  "5000"
       TZ:          Asia/Beirut
+
+      # Demo seeding on startup. entrypoint.sh runs seed.py (idempotent — only
+      # refreshes prefixed demo rows) after migrations when this is "1". OFF by
+      # default so production/CI never gets fake companies; the local dev stack
+      # turns it ON in docker-compose.override.yml.
+      RUN_SEED: "${RUN_SEED:-0}"
 
       # --- Scaling for many concurrent companies (see backend/gunicorn.conf.py).
       # Tune to the host. Each value is overridable from a compose-root .env.

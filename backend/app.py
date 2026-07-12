@@ -10,7 +10,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from decimal import Decimal
-from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask import Flask, jsonify, request, send_file, send_from_directory, g
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -52,6 +52,31 @@ app = Flask(__name__, static_folder=None)
 app.json.ensure_ascii = False
 app.json.mimetype = "application/json; charset=utf-8"
 CORS(app)
+
+# Cap the request body so hundreds of concurrent uploads can't OOM a worker with
+# one oversized payload. `request.get_json` / file reads pull the whole body into
+# memory, so an unbounded upload is a denial-of-service and a stability risk at
+# scale. A MAX_BATCH-row JSON file is well under this; raise MAX_UPLOAD_MB only if
+# a legitimate import needs more. Flask enforces the limit before the body is
+# read, returning 413 (handled below as JSON).
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "32"))
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+
+
+@app.errorhandler(413)
+def _payload_too_large(_e):
+    return jsonify({
+        "error": f"Payload too large — max {MAX_UPLOAD_MB} MB per request. "
+                 f"Split the import into smaller files (≤{MAX_BATCH} rows each)."
+    }), 413
+
+
+@app.errorhandler(500)
+def _internal_error(_e):
+    """Never leak a stack trace / HTML error page to an API client. A worker that
+    momentarily can't reach the DB (pool saturated past the queue window, network
+    blip) returns clean JSON so the caller can back off and retry."""
+    return jsonify({"error": "Internal server error — please retry shortly."}), 500
 
 
 # ----------------------- helpers --------------------------------------
@@ -148,9 +173,34 @@ def _batch_rows_from_request(key):
 
 
 # ----------------------- static frontend ------------------------------
+def _no_cache(resp):
+    """Force browsers to revalidate the app shell (HTML/JS/CSS) on every load.
+    The ?v= query on assets is ignored by the static server, so without this a
+    browser that cached index.html keeps pulling the matching stale app.js from
+    its own cache — making a rebuilt frontend appear "not to update". `no-cache`
+    still allows caching but requires a revalidation (fast 304 when unchanged)."""
+    resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return resp
+
+
 @app.route("/")
 def index():
-    return send_from_directory(FRONTEND_DIR, "index.html")
+    return _no_cache(send_from_directory(FRONTEND_DIR, "index.html"))
+
+
+@app.get("/api/health")
+@app.get("/healthz")
+def health():
+    """Liveness + readiness probe for a load balancer / orchestrator. Round-trips
+    a trivial query so an instance whose DB is unreachable (or whose pool is
+    wedged) reports unhealthy and gets pulled from rotation instead of black-
+    holing traffic. Returns 200 {"status":"ok"} when the DB answers, else 503."""
+    from db import ping
+    try:
+        ping()
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        return jsonify({"status": "unavailable", "error": str(e)}), 503
 
 
 @app.get("/api/openapi.json")
@@ -188,7 +238,10 @@ def api_docs():
 
 @app.route("/<path:path>")
 def static_proxy(path):
-    return send_from_directory(FRONTEND_DIR, path)
+    resp = send_from_directory(FRONTEND_DIR, path)
+    if path.endswith((".html", ".js", ".css")):
+        _no_cache(resp)
+    return resp
 
 
 # ----------------------- AUTH -----------------------------------------
@@ -202,12 +255,10 @@ def _username_for_company(name: str) -> str:
 
 
 def _is_admin_request() -> bool:
-    """Lightweight admin check via X-Auth-User header (set by the frontend)."""
-    user = (request.headers.get("X-Auth-User") or "").strip().lower()
-    if not user:
-        return False
-    row = query("SELECT role FROM users WHERE LOWER(username) = %s", (user,), one=True)
-    return bool(row and row.get("role") == "admin")
+    """Lightweight admin check. Routes through _current_user() so it reuses the
+    per-request cache instead of issuing its own users lookup."""
+    u = _current_user()
+    return bool(u and u.get("role") == "admin")
 
 
 API_KEY_PREFIX = "crk_"   # "car-rental key" — lets a glance tell it's one of ours
@@ -238,18 +289,32 @@ def _api_key_user():
     )
 
 
+_USER_UNSET = object()   # sentinel: distinguishes "not resolved yet" from "resolved to None"
+
+
 def _current_user():
     """Resolve the calling user. The in-browser app sends an X-Auth-User header
     (no secret — trusted only because it's same-origin after a password login);
     external integrations send a secret API key. Header wins when present so the
-    dashboard behaves exactly as before; otherwise we fall back to the key."""
+    dashboard behaves exactly as before; otherwise we fall back to the key.
+
+    The result is cached on flask.g for the life of the request: a single request
+    resolves the user 2–3× (here, _can_edit_company, _is_admin_request), and this
+    collapses those to one DB lookup — important now that the users table can hold
+    ~100k rows."""
+    cached = getattr(g, "_current_user_cache", _USER_UNSET)
+    if cached is not _USER_UNSET:
+        return cached
     name = (request.headers.get("X-Auth-User") or "").strip().lower()
     if name:
-        return query(
+        user = query(
             "SELECT id, username, role, company_id FROM users WHERE LOWER(username) = %s",
             (name,), one=True,
         )
-    return _api_key_user()
+    else:
+        user = _api_key_user()
+    g._current_user_cache = user
+    return user
 
 
 def _can_edit_company(company_id: int) -> bool:
@@ -262,20 +327,77 @@ def _can_edit_company(company_id: int) -> bool:
     return u.get("role") == "company" and u.get("company_id") == int(company_id)
 
 
-def _log_activity(company_id, action, entity, detail=None):
+def _resolve_branch_id(branch_id, company_id):
+    """Return a branch_id (int) that genuinely belongs to `company_id` and is
+    active, or None. Empty / absent / mismatched values all resolve to None so a
+    car simply sits at the company's "Main" office rather than being wrongly
+    linked to another company's branch."""
+    if branch_id in (None, "", "null", "0", 0):
+        return None
+    try:
+        bid = int(branch_id)
+    except (TypeError, ValueError):
+        return None
+    row = query(
+        "SELECT id FROM branches WHERE id = %s AND company_id = %s AND is_active = TRUE",
+        (bid, int(company_id)), one=True,
+    )
+    return bid if row else None
+
+
+def _branch_label(branch_id):
+    """Human name for a branch id, for audit detail. NULL/None → 'Main'."""
+    if branch_id in (None, "", "null", "0", 0):
+        return "Main"
+    row = query("SELECT branchname FROM branches WHERE id = %s", (int(branch_id),), one=True)
+    return (row and row.get("branchname")) or f"#{branch_id}"
+
+
+def _car_label(vin):
+    """'Model · Plate' for a VIN — used in audit detail so an admin recognises
+    the car at a glance instead of a bare VIN. Falls back to the raw VIN."""
+    if not vin:
+        return ""
+    row = query("SELECT model, platenumber FROM cars WHERE vin = %s", (vin,), one=True)
+    if not row:
+        return vin
+    return " · ".join(x for x in (row.get("model"), row.get("platenumber")) if x) or vin
+
+
+def _diff_fields(old, new, fields):
+    """Build a compact audit string of what actually changed, e.g.
+    "plate: ABC123→XYZ789, color: red→blue". `fields` is a list of
+    (label, key) pairs (or bare keys). Only changed values appear; returns
+    '' when nothing in `fields` changed."""
+    parts = []
+    for f in fields:
+        label, key = (f, f) if isinstance(f, str) else f
+        ov = old.get(key)
+        nv = new.get(key)
+        # Normalise so 5 vs "5" and None vs "" don't read as spurious changes.
+        if str(ov if ov is not None else "") != str(nv if nv is not None else ""):
+            parts.append(f'{label}: {ov if ov not in (None, "") else "—"}→'
+                         f'{nv if nv not in (None, "") else "—"}')
+    return ", ".join(parts)
+
+
+def _log_activity(company_id, action, entity, detail=None, ref=None):
     """Record one company action for the admin dashboard's "what are they
     doing" view. Best-effort: a logging failure must never break the
-    user's actual create/update/delete."""
+    user's actual create/update/delete.
+
+    ``ref`` is an optional "kind:key" pointer (e.g. "car:<vin>", "client:<id>",
+    "branch:<id>") so the admin feed can open that record's detail on click."""
     if not company_id:
         return
     try:
         u = _current_user() or {}
         execute(
             """INSERT INTO activity_log
-                 (company_id, user_id, username, action, entity, detail)
-               VALUES (%s,%s,%s,%s,%s,%s)""",
+                 (company_id, user_id, username, action, entity, detail, entity_ref)
+               VALUES (%s,%s,%s,%s,%s,%s,%s)""",
             (int(company_id), u.get("id"), u.get("username"),
-             action, entity, detail),
+             action, entity, detail, ref),
         )
     except Exception:
         pass
@@ -311,6 +433,21 @@ def login():
     except Exception:
         pass
 
+    # Record the login in the audit trail so the admin dashboard's activity
+    # stream shows sign-ins alongside every other action. We insert directly
+    # (rather than via _log_activity) because the login request carries no
+    # X-Auth-User header yet, so _current_user() can't resolve the actor here.
+    try:
+        if row.get("company_id"):
+            execute(
+                """INSERT INTO activity_log
+                     (company_id, user_id, username, action, entity, detail)
+                   VALUES (%s,%s,%s,'login','auth',NULL)""",
+                (int(row["company_id"]), row["id"], row["username"]),
+            )
+    except Exception:
+        pass
+
     company = None
     if row.get("company_id") and row.get("companyname"):
         company = {
@@ -332,6 +469,20 @@ def login():
         "must_reset_password": bool(row.get("must_reset_password")),
         "company":    company,
     }))
+
+
+@app.post("/api/logout")
+def logout():
+    """Record a sign-out in the audit trail. The app is stateless (no server
+    session to destroy), so this endpoint exists purely so the admin dashboard
+    can show logouts next to logins. Best-effort and always returns ok."""
+    try:
+        u = _current_user()
+        if u and u.get("company_id"):
+            _log_activity(u["company_id"], "logout", "auth", None)
+    except Exception:
+        pass
+    return jsonify({"ok": True})
 
 
 # ----------------------- API KEYS (external integrations) --------------
@@ -531,6 +682,9 @@ def update_company(company_id):
     miss = _required(data, "companyname")
     if miss:
         return jsonify({"error": f"Missing: {miss}"}), 400
+    old = query(
+        "SELECT companyname, location, phonenumber, owner_name FROM companies "
+        "WHERE id = %s AND is_active = TRUE", (company_id,), one=True) or {}
     row = execute(
         """UPDATE companies
               SET companyname = %s,
@@ -556,6 +710,21 @@ def update_company(company_id):
     )
     if not row:
         return jsonify({"error": "Not found"}), 404
+    # Head office: ticking "this is my head office" makes the company's MAIN
+    # office (its earliest branch) the head office. If the company has no branch
+    # yet, this first info is created as its head-office branch — so the very
+    # first entry the company makes also becomes a branch.
+    if data.get("is_head_office"):
+        _sync_main_head_office(
+            company_id, row.get("location"), row.get("phonenumber"),
+            row.get("x"), row.get("y"))
+    # Audit: which company-info fields changed (name, location, phone, owner).
+    diff = _diff_fields(old, row, [
+        ("name", "companyname"), ("location", "location"),
+        ("phone", "phonenumber"), ("owner", "owner_name"),
+    ])
+    _log_activity(company_id, "update", "company",
+                  f'{row.get("companyname") or ""}' + (f' — {diff}' if diff else ''))
     return jsonify(_clean(row))
 
 
@@ -631,8 +800,9 @@ def list_cars():
               AND NOT EXISTS (SELECT 1 FROM rentals r
                                WHERE r.car_vin = c.vin AND r.returned_at IS NULL)"""
         rows = query(
-            """SELECT c.*, co.companyname
+            """SELECT c.*, co.companyname, br.branchname
                  FROM cars c JOIN companies co ON co.id = c.company_id
+                 LEFT JOIN branches br ON br.id = c.branch_id
                 WHERE c.company_id = %s AND c.is_active = TRUE AND co.is_active = TRUE"""
             + avail_sql +
             "\n                ORDER BY c.model",
@@ -672,10 +842,11 @@ def list_cars():
         if search:
             where.append(
                 "(c.vin ILIKE %s OR c.model ILIKE %s OR c.type ILIKE %s "
-                "OR c.platenumber ILIKE %s OR co.companyname ILIKE %s)"
+                "OR c.platenumber ILIKE %s OR co.companyname ILIKE %s "
+                "OR br.branchname ILIKE %s)"
             )
             like = f"%{search}%"
-            params += [like, like, like, like, like]
+            params += [like, like, like, like, like, like]
         gps = request.args.get("gps")
         if gps in ("1", "true", "yes"):
             where.append("c.has_gps = TRUE")
@@ -686,16 +857,18 @@ def list_cars():
         total = query(
             "SELECT COUNT(*) AS n FROM cars c "
             "JOIN companies co ON co.id = c.company_id "
+            "LEFT JOIN branches br ON br.id = c.branch_id "
             f"WHERE {where_sql}",
             tuple(params),
             one=True,
         )["n"]
         offset = (page - 1) * page_size
         rows = query(
-            f"""SELECT c.*, co.companyname
+            f"""SELECT c.*, co.companyname, br.branchname
                   FROM cars c JOIN companies co ON co.id = c.company_id
+                  LEFT JOIN branches br ON br.id = c.branch_id
                  WHERE {where_sql}
-                 ORDER BY co.companyname, c.model, c.id
+                 ORDER BY co.companyname, br.branchname NULLS FIRST, c.model, c.id
                  LIMIT %s OFFSET %s""",
             tuple(params + [page_size, offset]),
         )
@@ -717,12 +890,47 @@ def list_cars():
         gps_sql = " AND c.has_gps = FALSE"
 
     if company_id:
+        # branch_id lets the grouped fleet tree drill into ONE branch at a time
+        # (never downloading a whole 100+ car company at once). "" / none / 0
+        # means the "Head office" bucket — cars with no branch assigned.
+        branch_id = request.args.get("branch_id")
+        branch_sql = ""
+        bparams = [company_id]
+        if branch_id is not None:
+            if branch_id in ("", "none", "null", "0"):
+                branch_sql = " AND c.branch_id IS NULL"
+            else:
+                branch_sql = " AND c.branch_id = %s"
+                bparams.append(branch_id)
+        # Same search predicate as the paged list + summary, so a drill-down's
+        # rows always match the counts shown on the collapsed tree.
+        search = (request.args.get("search") or "").strip()
+        search_sql = ""
+        if search:
+            search_sql = (
+                " AND (c.vin ILIKE %s OR c.model ILIKE %s OR c.type ILIKE %s "
+                "OR c.platenumber ILIKE %s OR co.companyname ILIKE %s "
+                "OR br.branchname ILIKE %s)"
+            )
+            like = f"%{search}%"
+            bparams += [like, like, like, like, like, like]
+        # Same exact-match dropdown filters as the summary, so a drilled-in
+        # branch's rows always match the counts on the collapsed tree.
+        ctype = (request.args.get("type") or "").strip()
+        if ctype:
+            search_sql += " AND c.type = %s"
+            bparams.append(ctype)
+        cmodel = (request.args.get("model") or "").strip()
+        if cmodel:
+            search_sql += " AND c.model = %s"
+            bparams.append(cmodel)
         rows = query(
-            f"""SELECT c.*, co.companyname
+            f"""SELECT c.*, co.companyname, br.branchname
                  FROM cars c JOIN companies co ON co.id = c.company_id
-                WHERE c.company_id = %s AND c.is_active = TRUE AND co.is_active = TRUE{gps_sql}
+                 LEFT JOIN branches br ON br.id = c.branch_id
+                WHERE c.company_id = %s AND c.is_active = TRUE AND co.is_active = TRUE{gps_sql}{branch_sql}{search_sql}
                 ORDER BY c.model""",
-            (company_id,),
+            tuple(bparams),
         )
     else:
         rows = query(
@@ -732,6 +940,74 @@ def list_cars():
                 ORDER BY co.companyname, c.model"""
         )
     return jsonify(_clean(rows))
+
+
+@app.get("/api/cars/summary")
+def cars_summary():
+    """Admin-only aggregate powering the grouped fleet tree.
+
+    Returns, per company, the total car count plus a per-branch breakdown (and
+    an "unassigned"/Head-office bucket) — WITHOUT shipping a single car row. The
+    tree renders every company/branch count from this, then lazily fetches the
+    actual cars of just ONE branch when it's expanded. Honors the same search +
+    gps filters as the paged fleet list so the counts always match a drill-down.
+    """
+    u = _current_user()
+    if not u or u.get("role") != "admin":
+        return jsonify({"error": "Not authorized"}), 403
+
+    where = ["c.is_active = TRUE", "co.is_active = TRUE"]
+    params = []
+    search = (request.args.get("search") or "").strip()
+    if search:
+        where.append(
+            "(c.vin ILIKE %s OR c.model ILIKE %s OR c.type ILIKE %s "
+            "OR c.platenumber ILIKE %s OR co.companyname ILIKE %s "
+            "OR br.branchname ILIKE %s)"
+        )
+        like = f"%{search}%"
+        params += [like, like, like, like, like, like]
+    # Exact-match dropdown filters (admin fleet toolbar). Applied to both the
+    # summary counts here AND each branch drill-down (see list_cars) so the two
+    # never disagree.
+    ctype = (request.args.get("type") or "").strip()
+    if ctype:
+        where.append("c.type = %s")
+        params.append(ctype)
+    cmodel = (request.args.get("model") or "").strip()
+    if cmodel:
+        where.append("c.model = %s")
+        params.append(cmodel)
+    ccompany = (request.args.get("company_id") or "").strip()
+    if ccompany.isdigit():
+        where.append("c.company_id = %s")
+        params.append(int(ccompany))
+    gps = request.args.get("gps")
+    if gps in ("1", "true", "yes"):
+        where.append("c.has_gps = TRUE")
+    elif gps in ("0", "false", "no"):
+        where.append("c.has_gps = FALSE")
+    where_sql = " AND ".join(where)
+
+    rows = query(
+        f"""SELECT c.company_id, c.branch_id, COUNT(*) AS n
+              FROM cars c JOIN companies co ON co.id = c.company_id
+              LEFT JOIN branches br ON br.id = c.branch_id
+             WHERE {where_sql}
+             GROUP BY c.company_id, c.branch_id""",
+        tuple(params),
+    )
+    companies = {}
+    for r in rows:
+        cid = str(int(r["company_id"]))
+        entry = companies.setdefault(cid, {"total": 0, "unassigned": 0, "branches": {}})
+        n = int(r["n"])
+        entry["total"] += n
+        if r["branch_id"] is None:
+            entry["unassigned"] += n
+        else:
+            entry["branches"][str(int(r["branch_id"]))] = n
+    return jsonify({"companies": companies})
 
 
 @app.put("/api/cars/<int:car_id>")
@@ -744,31 +1020,37 @@ def update_car(car_id):
     # Only the car's owning company (or admin) may edit it. The VIN is never
     # touched here — it's the car's identity; edits are limited to the plate
     # number and the descriptive fields.
-    car = query("SELECT company_id, edit_count FROM cars WHERE id = %s AND is_active = TRUE",
-                (car_id,), one=True)
+    car = query(
+        """SELECT company_id, edit_count, type, model, color, platenumber,
+                  has_gps, branch_id
+             FROM cars WHERE id = %s AND is_active = TRUE""",
+        (car_id,), one=True)
     if not car:
         return jsonify({"error": "Not found"}), 404
     if not _can_edit_company(int(car["company_id"])):
         return jsonify({"error": "Not authorized"}), 403
 
-    # Company users may only correct a car twice (typo fixes); after that the
-    # record is locked. Admin edits are unlimited.
+    # Company car edits are unlimited — accountability comes from the audit log
+    # (every change is recorded below and visible to the admin), not a hard cap.
+    # edit_count is still bumped so the admin can see how often a car is touched.
     u = _current_user()
     is_company = bool(u and u.get("role") == "company")
-    if is_company and int(car.get("edit_count") or 0) >= 2:
-        return jsonify({"error": "This car has reached its edit limit (2)."}), 403
 
+    # Branch is validated against the (possibly changed) company_id, so moving a
+    # car to a company it doesn't belong to can't smuggle in a foreign branch —
+    # a mismatch just resolves to NULL (Main).
+    branch_id = _resolve_branch_id(data.get("branch_id"), int(data["company_id"]))
     try:
         row = execute(
             """UPDATE cars
                   SET type = %s, model = %s, color = %s, platenumber = %s,
-                      has_gps = %s, company_id = %s,
+                      has_gps = %s, company_id = %s, branch_id = %s,
                       edit_count = edit_count + %s
                 WHERE id = %s AND is_active = TRUE
             RETURNING *""",
             (
                 data["type"], data["model"], data["color"], data["platenumber"],
-                bool(data.get("has_gps", False)), data["company_id"],
+                bool(data.get("has_gps", False)), data["company_id"], branch_id,
                 1 if is_company else 0, car_id,
             ),
             returning=True,
@@ -783,6 +1065,18 @@ def update_car(car_id):
         return jsonify({"error": "Could not update car"}), 409
     if not row:
         return jsonify({"error": "Not found"}), 404
+    # Audit: record exactly which fields changed (plate, branch, colour, …).
+    diff = _diff_fields(
+        {**car, "branch_id": _branch_label(car.get("branch_id"))},
+        {**row, "branch_id": _branch_label(row.get("branch_id"))},
+        [("type", "type"), ("model", "model"), ("color", "color"),
+         ("plate", "platenumber"), ("gps", "has_gps"), ("branch", "branch_id")],
+    )
+    _log_activity(int(row["company_id"]), "update", "car",
+                  " · ".join(x for x in (row.get("model"), row.get("platenumber"),
+                                         row.get("color")) if x)
+                  + (f' — {diff}' if diff else ''),
+                  ref=(f'car:{row.get("vin")}' if row.get("vin") else None))
     return jsonify(_clean(row))
 
 
@@ -829,12 +1123,15 @@ def ingest_car_gps(vin):
 @app.delete("/api/cars/<int:car_id>")
 def soft_delete_car(car_id):
     row = execute(
-        "UPDATE cars SET is_active = FALSE WHERE id = %s AND is_active = TRUE RETURNING id",
+        "UPDATE cars SET is_active = FALSE WHERE id = %s AND is_active = TRUE "
+        "RETURNING company_id, model, platenumber",
         (car_id,),
         returning=True,
     )
     if not row:
         return jsonify({"error": "Not found"}), 404
+    _log_activity(int(row["company_id"]), "delete", "car",
+                  f'{row["model"]} · {row["platenumber"]}')
     return ("", 204)
 
 
@@ -973,17 +1270,19 @@ def create_car():
     if not result["ok"]:
         return jsonify({"error": "Validation failed", "errors": result["errors"]}), 400
 
+    branch_id = _resolve_branch_id(data.get("branch_id"), int(data["company_id"]))
     try:
         row = execute(
             """INSERT INTO cars
-                 (vin, type, model, color, platenumber, has_gps, company_id)
-               VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+                 (vin, type, model, color, platenumber, has_gps, company_id, branch_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
             (
                 vin, data["type"].strip(), data["model"].strip(),
                 result["color"],
                 result["platenumber"],
                 bool(data.get("has_gps", False)),
                 int(data["company_id"]),
+                branch_id,
             ),
             returning=True,
         )
@@ -1001,7 +1300,9 @@ def create_car():
         return jsonify({"error": "Could not save car"}), 409
 
     _log_activity(int(data["company_id"]), "create", "car",
-                  f'{row.get("model") or ""} · {row.get("platenumber") or ""}'.strip(" ·"))
+                  " · ".join(x for x in (row.get("model"), row.get("platenumber"),
+                                         row.get("color")) if x),
+                  ref=(f'car:{row.get("vin")}' if row.get("vin") else None))
     return jsonify(_clean(row)), 201
 
 
@@ -1816,11 +2117,82 @@ def create_cars_batch():
 
     for row in inserted:
         _log_activity(row.get("company_id"), "create", "car",
-                      f'{row.get("model") or ""} · {row.get("platenumber") or ""}'.strip(" ·"))
+                      " · ".join(x for x in (row.get("model"), row.get("platenumber"),
+                                             row.get("color")) if x),
+                      ref=(f'car:{row.get("vin")}' if row.get("vin") else None))
     return jsonify({"inserted": len(inserted), "cars": _clean(inserted), "failed": []}), 201
 
 
 # ----------------------- BRANCHES -------------------------------------
+def _company_has_branches(company_id):
+    """True if the company already has at least one active branch."""
+    row = query(
+        "SELECT 1 FROM branches WHERE company_id = %s AND is_active = TRUE LIMIT 1",
+        (company_id,), one=True,
+    )
+    return bool(row)
+
+
+def _set_head_office(company_id, branch_id):
+    """Make `branch_id` the sole head office of `company_id`, atomically.
+
+    Clears any existing head-office flag first (the partial unique index
+    allows only one per company), then sets the target — both in one
+    transaction so the swap never leaves the company with two head offices
+    or trips the unique index. The target must be an active branch of the
+    company; returns True if it was set."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE branches SET is_head_office = FALSE "
+                "WHERE company_id = %s AND is_head_office = TRUE",
+                (company_id,),
+            )
+            cur.execute(
+                "UPDATE branches SET is_head_office = TRUE "
+                "WHERE id = %s AND company_id = %s AND is_active = TRUE",
+                (branch_id, company_id),
+            )
+            return cur.rowcount > 0
+
+
+def _ensure_head_office(company_id):
+    """Guarantee the company has a head office if it has any active branch —
+    promote the earliest branch when none is flagged (e.g. after the current
+    head office was deleted)."""
+    execute(
+        """UPDATE branches SET is_head_office = TRUE
+            WHERE id = (SELECT MIN(id) FROM branches
+                         WHERE company_id = %s AND is_active = TRUE)
+              AND NOT EXISTS (SELECT 1 FROM branches
+                               WHERE company_id = %s AND is_active = TRUE
+                                 AND is_head_office = TRUE)""",
+        (company_id, company_id),
+    )
+
+
+def _sync_main_head_office(company_id, location, phone, x, y):
+    """Make the company's MAIN office its head office. The main office is the
+    earliest branch; ticking "this is my head office" on the company form makes
+    that branch the head office. If the company has NO branch yet, the first info
+    the company entered is created here as its head-office branch — so the very
+    first entry also becomes a branch. Returns the head-office branch id."""
+    earliest = query(
+        "SELECT id FROM branches WHERE company_id = %s AND is_active = TRUE "
+        "ORDER BY id LIMIT 1", (company_id,), one=True)
+    if earliest:
+        _set_head_office(company_id, earliest["id"])
+        return earliest["id"]
+    row = execute(
+        """INSERT INTO branches
+             (company_id, branchname, location, phonenumber, x, y, is_head_office)
+           VALUES (%s,%s,%s,%s,%s,%s, TRUE) RETURNING id""",
+        (company_id, location or "", location or "", phone, x, y),
+        returning=True,
+    )
+    return row["id"] if row else None
+
+
 @app.get("/api/branches")
 def list_branches():
     company_id = request.args.get("company_id")
@@ -1829,12 +2201,14 @@ def list_branches():
     u = _current_user()
     if u and u.get("role") == "company":
         company_id = u.get("company_id")
+    # Head office first, then alphabetical — so the designated head office is
+    # always the leading row wherever branches are listed.
     if company_id:
         rows = query(
             """SELECT b.*, co.companyname
                  FROM branches b JOIN companies co ON co.id = b.company_id
                 WHERE b.company_id = %s AND b.is_active = TRUE AND co.is_active = TRUE
-                ORDER BY b.branchname""",
+                ORDER BY b.is_head_office DESC, b.branchname""",
             (company_id,),
         )
     else:
@@ -1842,7 +2216,7 @@ def list_branches():
             """SELECT b.*, co.companyname
                  FROM branches b JOIN companies co ON co.id = b.company_id
                 WHERE b.is_active = TRUE AND co.is_active = TRUE
-                ORDER BY co.companyname, b.branchname"""
+                ORDER BY co.companyname, b.is_head_office DESC, b.branchname"""
         )
     return jsonify(_clean(rows))
 
@@ -1853,19 +2227,30 @@ def create_branch():
     miss = _required(data, "company_id", "branchname", "location")
     if miss:
         return jsonify({"error": f"Missing: {miss}"}), 400
-    if not _can_edit_company(int(data["company_id"])):
+    company_id = int(data["company_id"])
+    if not _can_edit_company(company_id):
         return jsonify({"error": "Not authorized"}), 403
+    # The company's MAIN location is the default head office. A branch becomes
+    # head office ONLY when the caller explicitly ticks it (which then demotes the
+    # main office / any other branch, enforced by _set_head_office).
+    make_head = bool(data.get("is_head_office"))
     row = execute(
         """INSERT INTO branches
              (company_id, branchname, location, phonenumber, x, y)
            VALUES (%s,%s,%s,%s,%s,%s) RETURNING *""",
         (
-            int(data["company_id"]), data["branchname"], data["location"],
+            company_id, data["branchname"], data["location"],
             _none_if_blank(data.get("phonenumber")),
             _none_if_blank(data.get("x")), _none_if_blank(data.get("y")),
         ),
         returning=True,
     )
+    if make_head and row:
+        _set_head_office(company_id, row["id"])
+        row["is_head_office"] = True
+    _log_activity(company_id, "create", "branch",
+                  f'{row["branchname"]} — {row["location"]}',
+                  ref=(f'branch:{row.get("id")}' if row.get("id") else None))
     return jsonify(_clean(row)), 201
 
 
@@ -1922,8 +2307,9 @@ def update_branch(branch_id):
     miss = _required(data, "company_id", "branchname", "location")
     if miss:
         return jsonify({"error": f"Missing: {miss}"}), 400
-    existing = query("SELECT company_id FROM branches WHERE id = %s",
-                     (branch_id,), one=True)
+    existing = query(
+        "SELECT company_id, branchname, location, phonenumber FROM branches WHERE id = %s",
+        (branch_id,), one=True)
     if not existing:
         return jsonify({"error": "Not found"}), 404
     if not (_can_edit_company(existing["company_id"]) and
@@ -1945,19 +2331,52 @@ def update_branch(branch_id):
     )
     if not row:
         return jsonify({"error": "Not found"}), 404
+    if data.get("is_head_office"):
+        _set_head_office(int(data["company_id"]), branch_id)
+        row["is_head_office"] = True
+    # Audit: which branch fields changed (name, location, phone).
+    diff = _diff_fields(existing, row, [
+        ("name", "branchname"), ("location", "location"), ("phone", "phonenumber"),
+    ])
+    _log_activity(int(data["company_id"]), "update", "branch",
+                  f'{row["branchname"]}' + (f' — {diff}' if diff else ''),
+                  ref=(f'branch:{row.get("id")}' if row.get("id") else None))
     return jsonify(_clean(row))
+
+
+@app.put("/api/branches/<int:branch_id>/head-office")
+def set_branch_head_office(branch_id):
+    """Designate an existing branch as its company's head office. Company users
+    (own company) and admins only. Clears the previous head office in the same
+    transaction, so a company always has exactly one."""
+    existing = query("SELECT company_id, is_active, branchname FROM branches WHERE id = %s",
+                     (branch_id,), one=True)
+    if not existing or not existing.get("is_active"):
+        return jsonify({"error": "Not found"}), 404
+    if not _can_edit_company(existing["company_id"]):
+        return jsonify({"error": "Not authorized"}), 403
+    _set_head_office(existing["company_id"], branch_id)
+    _log_activity(existing["company_id"], "update", "branch",
+                  f'{existing.get("branchname") or ("#" + str(branch_id))} set as head office',
+                  ref=f'branch:{branch_id}')
+    return jsonify({"id": branch_id, "is_head_office": True})
 
 
 @app.delete("/api/branches/<int:branch_id>")
 def delete_branch(branch_id):
-    """Hard delete — the row is removed from the branches table."""
-    existing = query("SELECT company_id FROM branches WHERE id = %s",
-                     (branch_id,), one=True)
+    """Hard delete — the row is removed from the branches table. If the deleted
+    branch was the head office, the company's MAIN location automatically becomes
+    the head office again (no branch is flagged), matching the default model."""
+    existing = query(
+        "SELECT company_id, is_head_office, branchname FROM branches WHERE id = %s",
+        (branch_id,), one=True)
     if not existing:
         return jsonify({"error": "Not found"}), 404
     if not _can_edit_company(existing["company_id"]):
         return jsonify({"error": "Not authorized"}), 403
     execute("DELETE FROM branches WHERE id = %s", (branch_id,))
+    _log_activity(existing["company_id"], "delete", "branch",
+                  existing.get("branchname") or f'#{branch_id}')
     return ("", 204)
 
 
@@ -2051,6 +2470,116 @@ def create_special_rental():
     return jsonify(_clean(row)), 201
 
 
+def _prepare_company_rentals_batch(rows, company_id):
+    """Validate B2B 'cars rented to companies' rows (all-or-nothing). Each row
+    records another company that is holding one of YOUR cars. ``company_name``
+    is required; a supplied ``car_vin`` must be one of your active cars.
+    ``phones`` / ``branches`` accept a list or a comma-joined string. Returns
+    ``(to_insert, errors)`` where each to_insert is the INSERT param tuple."""
+    def _csv(value):
+        if isinstance(value, list):
+            return ",".join(str(v).strip() for v in value if str(v).strip())
+        return value
+
+    parsed, errors = [], []
+    for i, raw in enumerate(rows):
+        if not isinstance(raw, dict):
+            errors.append({"index": i, "errors": {"_": "Row must be a JSON object"}}); continue
+        row_errs = {}
+        company_name = _none_if_blank(raw.get("company_name"))
+        if not company_name:
+            row_errs["company_name"] = "company_name is required"
+        car_vin = ((raw.get("car_vin") or "").strip().upper()) or None
+        start = _none_if_blank(raw.get("start_date"))
+        end   = _none_if_blank(raw.get("end_date"))
+        if start and end and str(end) < str(start):
+            row_errs["end_date"] = "end_date must be on or after start_date"
+        if row_errs:
+            errors.append({"index": i, "errors": row_errs}); continue
+        parsed.append({"i": i, "raw": raw, "company_name": company_name,
+                       "car_vin": car_vin, "start": start, "end": end})
+
+    # One query resolves ownership of every VIN referenced in the batch.
+    vins = list({p["car_vin"] for p in parsed if p["car_vin"]})
+    owned = set()
+    if vins:
+        for r in (query("SELECT vin FROM cars "
+                        "WHERE vin = ANY(%s) AND company_id = %s AND is_active = TRUE",
+                        (vins, company_id)) or []):
+            owned.add(r["vin"])
+
+    to_insert = []
+    for p in parsed:
+        if p["car_vin"] and p["car_vin"] not in owned:
+            errors.append({"index": p["i"], "errors": {
+                "car_vin": f"No active car with VIN '{p['car_vin']}' in your fleet"}}); continue
+        raw = p["raw"]
+        to_insert.append((
+            company_id, p["company_name"],
+            _none_if_blank(raw.get("owner_name")),
+            _none_if_blank(raw.get("location")),
+            _none_if_blank(raw.get("x")), _none_if_blank(raw.get("y")),
+            _none_if_blank(_csv(raw.get("phones"))),
+            _none_if_blank(_csv(raw.get("branches"))),
+            p["car_vin"], p["car_vin"],
+            p["start"], p["end"],
+            _none_if_blank(raw.get("notes")),
+        ))
+    errors.sort(key=lambda e: e["index"])
+    return to_insert, errors
+
+
+@app.post("/api/company-rentals/batch")
+def create_company_rentals_batch():
+    """Bulk-record cars rented OUT to other companies (B2B, all-or-nothing).
+    Payload is a JSON body OR an uploaded .json file, as a bare array or
+    ``{"company_rentals": [...]}``. Everything is filed under the caller's
+    company; ``company_id`` is never accepted. If ANY row is invalid nothing is
+    saved. COMPANY users only (header login or API key)."""
+    u = _current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    if u.get("role") != "company" or not u.get("company_id"):
+        return jsonify({"error": "Only company users can batch-add B2B rentals"}), 403
+    company_id = int(u["company_id"])
+
+    rows, err = _batch_rows_from_request("company_rentals")
+    if err:
+        return jsonify({"error": err}), 400
+    if not rows:
+        return jsonify({"error": "No company rentals provided"}), 400
+    if len(rows) > MAX_BATCH:
+        return jsonify({"error": f"Too many rows ({len(rows)}); max {MAX_BATCH} per batch"}), 400
+
+    to_insert, errors = _prepare_company_rentals_batch(rows, company_id)
+    if errors:
+        return jsonify({"error": "Batch rejected — fix the listed rows and resubmit.",
+                        "inserted": 0, "failed": errors}), 400
+
+    inserted = []
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                inserted = execute_values(
+                    cur,
+                    """INSERT INTO special_company_rentals
+                         (company_id, company_name, owner_name, location, x, y,
+                          phones, branches, car_vin, car_vins,
+                          start_date, end_date, notes)
+                       VALUES %s RETURNING *""",
+                    to_insert, page_size=len(to_insert), fetch=True,
+                )
+    except Exception as e:
+        return jsonify({"error": "Insert failed mid-batch — nothing was saved.",
+                        "inserted": 0,
+                        "failed": [{"index": "?", "errors": {"_": str(e)}}]}), 409
+
+    for row in inserted:
+        _log_activity(company_id, "create", "special_rental", row.get("company_name"))
+    return jsonify({"inserted": len(inserted),
+                    "company_rentals": _clean(inserted), "failed": []}), 201
+
+
 @app.put("/api/special-rentals/<int:rental_id>")
 def update_special_rental(rental_id):
     u, err = _require_company_user()
@@ -2061,8 +2590,8 @@ def update_special_rental(rental_id):
     if miss:
         return jsonify({"error": f"Missing: {miss}"}), 400
 
-    # Only the company that recorded it may edit it, and only twice (typo
-    # fixes); after that the record is locked.
+    # Only the company that recorded it may edit it. Edits are unlimited now —
+    # the audit log records each change instead of a hard cap.
     rec = query(
         "SELECT company_id, edit_count FROM special_company_rentals WHERE id = %s",
         (rental_id,), one=True,
@@ -2071,8 +2600,6 @@ def update_special_rental(rental_id):
         return jsonify({"error": "Not found"}), 404
     if int(rec["company_id"]) != int(u["company_id"]):
         return jsonify({"error": "Not authorized"}), 403
-    if int(rec.get("edit_count") or 0) >= 2:
-        return jsonify({"error": "This record has reached its edit limit (2)."}), 403
 
     def _csv(value):
         if isinstance(value, list):
@@ -2113,7 +2640,7 @@ def update_special_rental(rental_id):
 @app.delete("/api/special-rentals/<int:rental_id>")
 def delete_special_rental(rental_id):
     existing = query(
-        "SELECT company_id FROM special_company_rentals WHERE id = %s",
+        "SELECT company_id, company_name FROM special_company_rentals WHERE id = %s",
         (rental_id,), one=True,
     )
     if not existing:
@@ -2121,7 +2648,163 @@ def delete_special_rental(rental_id):
     if not _can_edit_company(existing["company_id"]):
         return jsonify({"error": "Not authorized"}), 403
     execute("DELETE FROM special_company_rentals WHERE id = %s", (rental_id,))
+    _log_activity(existing["company_id"], "delete", "special_rental",
+                  existing.get("company_name"))
     return ("", 204)
+
+
+@app.post("/api/special-rentals/<int:rental_id>/extend")
+def extend_special_rental(rental_id):
+    """The other company keeps one of our cars longer: push this B2B record's
+    end_date out. Company-owner only; the record must still be out (not yet
+    returned); the new date can't move before the start."""
+    u, err = _require_company_user()
+    if err:
+        return err
+    data = request.get_json(force=True) or {}
+    new_end = _none_if_blank(data.get("end_date"))
+    if not new_end:
+        return jsonify({"error": "Missing: end_date"}), 400
+    rec = query(
+        """SELECT company_id, company_name, car_vin, start_date, end_date, returned_at
+             FROM special_company_rentals WHERE id = %s""",
+        (rental_id,), one=True,
+    )
+    if not rec:
+        return jsonify({"error": "Not found"}), 404
+    if int(rec["company_id"]) != int(u["company_id"]):
+        return jsonify({"error": "Not authorized"}), 403
+    if rec["returned_at"] is not None:
+        return jsonify({"error": "This car has already been returned"}), 409
+    if rec["start_date"] and str(new_end) < str(rec["start_date"]):
+        return jsonify({"error": "New return date must be on or after the start date"}), 400
+    row = execute(
+        """UPDATE special_company_rentals SET end_date = %s
+            WHERE id = %s AND company_id = %s RETURNING *""",
+        (new_end, rental_id, u["company_id"]), returning=True,
+    )
+    _log_activity(u["company_id"], "update", "special_rental",
+                  f'{rec["company_name"]} — extended {rec["end_date"]}→{new_end}')
+    return jsonify(_clean(row))
+
+
+@app.post("/api/special-rentals/<int:rental_id>/return")
+def return_special_rental(rental_id):
+    """The other company hands one of our cars back. Stamps returned_at so the
+    record drops off the active "Cars Rented by Companies" list (kept as
+    history), records WHICH branch it came back to, and moves the car to that
+    branch so it's available there again. Company-owner only."""
+    u, err = _require_company_user()
+    if err:
+        return err
+    rec = query(
+        "SELECT company_id, company_name, car_vin, returned_at FROM special_company_rentals WHERE id = %s",
+        (rental_id,), one=True,
+    )
+    if not rec:
+        return jsonify({"error": "Not found"}), 404
+    if int(rec["company_id"]) != int(u["company_id"]):
+        return jsonify({"error": "Not authorized"}), 403
+    if rec["returned_at"] is not None:
+        return jsonify({"error": "This car has already been returned"}), 409
+    data = request.get_json(silent=True) or {}
+    branch_id = _resolve_branch_id(data.get("return_branch_id"), rec["company_id"])
+    row = execute(
+        """UPDATE special_company_rentals
+              SET returned_at = NOW(), return_branch_id = %s
+            WHERE id = %s AND company_id = %s AND returned_at IS NULL
+        RETURNING *""",
+        (branch_id, rental_id, u["company_id"]), returning=True,
+    )
+    if not row:
+        return jsonify({"error": "Not found or already returned"}), 404
+    # Move the car back to the branch it was returned to (NULL = Main).
+    if rec.get("car_vin"):
+        execute("UPDATE cars SET branch_id = %s WHERE vin = %s AND company_id = %s",
+                (branch_id, rec["car_vin"], rec["company_id"]))
+    _log_activity(u["company_id"], "update", "special_rental",
+                  f'{rec["company_name"]} — car returned to {_branch_label(branch_id)}')
+    return jsonify(_clean(row))
+
+
+@app.get("/api/company/alerts")
+def company_alerts():
+    """Login dashboard for a company user: what needs attention today.
+      * returns_due     — cars still out (individual rentals + B2B records) whose
+                          return date is today or already past (overdue).
+      * reservations_today — pending reservations that START today.
+    Small, bounded lists so the client can render a notification panel without
+    pulling every rental/reservation."""
+    u, err = _require_company_user()
+    if err:
+        return err
+    cid = u["company_id"]
+    # "Today" is the business's local calendar day. The app process runs in the
+    # deployment's timezone (e.g. Asia/Beirut), which matches the user's browser
+    # — whereas the database may store/serve in UTC, so CURRENT_DATE could be a
+    # day off near midnight. Anchoring on date.today() and passing it in keeps
+    # the alert, its overdue flags, and the browser's calendar all in agreement.
+    today = date.today()
+
+    # Individual rentals still out, due today or overdue. v_client_rentals is
+    # already company-scoped and excludes returned rentals via returned_at.
+    ind = query(
+        """SELECT rental_id AS id, 'individual' AS kind,
+                  client_name AS who, car_model, car_plate, car_vin, end_date,
+                  (end_date < %s) AS overdue
+             FROM v_client_rentals
+            WHERE company_id = %s AND returned_at IS NULL
+              AND end_date IS NOT NULL AND end_date <= %s
+            ORDER BY end_date ASC""",
+        (today, cid, today),
+    )
+    # B2B records still out (returned_at NULL), due today or overdue. Join the
+    # owning company's car so model/plate travel with the row.
+    b2b = query(
+        """SELECT s.id, 'company' AS kind, s.company_name AS who,
+                  c.model AS car_model, c.platenumber AS car_plate,
+                  s.car_vin, s.end_date,
+                  (s.end_date < %s) AS overdue
+             FROM special_company_rentals s
+             LEFT JOIN cars c ON c.vin = s.car_vin AND c.company_id = s.company_id
+            WHERE s.company_id = %s AND s.returned_at IS NULL
+              AND s.end_date IS NOT NULL AND s.end_date <= %s
+            ORDER BY s.end_date ASC""",
+        (today, cid, today),
+    )
+    returns = _clean(list(ind) + list(b2b))
+    overdue = sum(1 for r in returns if r.get("overdue"))
+    due_today = len(returns) - overdue
+
+    # Pending reservations that should be in the report by today: their rental
+    # period has begun (start_date on or before today) but they've not yet been
+    # activated. `late` marks any whose start day has already passed.
+    res_today = query(
+        """SELECT rv.id, c.name AS client_name, c.phonenumber AS client_phone,
+                  ca.model AS car_model, ca.platenumber AS car_plate,
+                  rv.start_date, rv.end_date,
+                  (rv.start_date < %s) AS late
+             FROM reservations rv
+             JOIN clients c ON c.id = rv.client_id
+             JOIN cars ca ON ca.vin = rv.car_vin
+            WHERE rv.company_id = %s AND rv.status = 'pending'
+              AND rv.start_date <= %s
+            ORDER BY rv.start_date ASC, rv.created_at DESC""",
+        (today, cid, today),
+    )
+    res_today = _clean(res_today)
+    return jsonify({
+        "returns_due": {
+            "overdue": overdue,
+            "today": due_today,
+            "total": len(returns),
+            "items": returns,
+        },
+        "reservations_today": {
+            "count": len(res_today),
+            "items": res_today,
+        },
+    })
 
 
 # ----------------------- CLIENTS --------------------------------------
@@ -2240,16 +2923,18 @@ def update_client(client_id):
     if id_type in ("passport", "national_id") and not personid:
         return jsonify({"error": "personid required for passport / national ID"}), 400
 
-    # Company users may only correct a client twice (in case of a typo);
-    # after that the record is locked. Admin edits are unlimited.
+    # Company client edits are unlimited — the audit log below records every
+    # change for the admin. Fetch the old row first so we can diff it.
     u = _current_user()
     is_company = bool(u and u.get("role") == "company")
-    if is_company:
-        cur = query("SELECT edit_count FROM clients WHERE id = %s", (client_id,), one=True)
-        if not cur:
-            return jsonify({"error": "Not found"}), 404
-        if int(cur.get("edit_count") or 0) >= 2:
-            return jsonify({"error": "This client has reached its edit limit (2)."}), 403
+    old = query(
+        """SELECT company_id, name, fathername, mothername, nationality,
+                  phonenumber, dateofbirth, licenseid, personid, id_type,
+                  startdatelicense, enddatelicense
+             FROM clients WHERE id = %s AND is_active = TRUE""",
+        (client_id,), one=True)
+    if not old:
+        return jsonify({"error": "Not found"}), 404
 
     row = execute(
         """UPDATE clients
@@ -2282,6 +2967,19 @@ def update_client(client_id):
     )
     if not row:
         return jsonify({"error": "Not found"}), 404
+    # Audit: which client fields changed (name, phone, licence, id, …).
+    diff = _diff_fields(old, row, [
+        ("name", "name"), ("father", "fathername"), ("mother", "mothername"),
+        ("nationality", "nationality"), ("phone", "phonenumber"),
+        ("dob", "dateofbirth"), ("license", "licenseid"), ("personid", "personid"),
+        ("id_type", "id_type"), ("lic_start", "startdatelicense"),
+        ("lic_end", "enddatelicense"),
+    ])
+    log_company = (u.get("company_id") if is_company else old.get("company_id"))
+    _log_activity(log_company, "update", "client",
+                  f'{row.get("name") or row.get("licenseid")}'
+                  + (f' — {diff}' if diff else ''),
+                  ref=(f'client:{row.get("id")}' if row.get("id") else None))
     return jsonify(_attach_linked_companies(_clean(row)))
 
 
@@ -2297,6 +2995,8 @@ def soft_delete_client(client_id):
         # Confirm the client actually exists + is reachable for this user.
         if not _user_can_touch_client(client_id):
             return jsonify({"error": "Not found"}), 404
+        cli = query("SELECT name, licenseid FROM clients WHERE id = %s",
+                    (client_id,), one=True) or {}
         execute(
             "DELETE FROM client_companies WHERE client_id = %s AND company_id = %s",
             (client_id, company_id),
@@ -2310,15 +3010,20 @@ def soft_delete_client(client_id):
                 "UPDATE clients SET is_active = FALSE WHERE id = %s",
                 (client_id,),
             )
+        _log_activity(company_id, "delete", "client",
+                      f'{cli.get("name") or cli.get("licenseid") or client_id} (unlinked)')
         return ("", 204)
 
     row = execute(
-        "UPDATE clients SET is_active = FALSE WHERE id = %s AND is_active = TRUE RETURNING id",
+        "UPDATE clients SET is_active = FALSE WHERE id = %s AND is_active = TRUE "
+        "RETURNING id, company_id, name, licenseid",
         (client_id,),
         returning=True,
     )
     if not row:
         return jsonify({"error": "Not found"}), 404
+    _log_activity(row.get("company_id"), "delete", "client",
+                  f'{row.get("name") or row.get("licenseid")}')
     return ("", 204)
 
 
@@ -2432,7 +3137,8 @@ def create_client():
         )
     if row:
         _log_activity(int(company_id) if company_id else None, "create", "client",
-                      row.get("name") or row.get("licenseid"))
+                      row.get("name") or row.get("licenseid"),
+                      ref=(f'client:{row.get("id")}' if row.get("id") else None))
     return jsonify(_attach_linked_companies(_clean(row))), 201
 
 
@@ -2586,7 +3292,9 @@ def create_batch_all():
 
     for row in inserted_cars:
         _log_activity(row.get("company_id"), "create", "car",
-                      f'{row.get("model") or ""} · {row.get("platenumber") or ""}'.strip(" ·"))
+                      " · ".join(x for x in (row.get("model"), row.get("platenumber"),
+                                             row.get("color")) if x),
+                      ref=(f'car:{row.get("vin")}' if row.get("vin") else None))
     for cid, label in client_logs:
         _log_activity(cid, "create", "client", label)
 
@@ -2627,6 +3335,20 @@ def change_password():
 
 
 # ----------------------- RENTALS --------------------------------------
+def _lock_cars_for_booking(cur, vins):
+    """Serialize concurrent booking writes that touch the SAME car. Two requests
+    inserting a new rental/reservation for one car in overlapping date ranges
+    can't see each other's uncommitted rows (READ COMMITTED) and there's no
+    existing row for `_check_car_date_overlap`'s FOR UPDATE to grab — so a plain
+    overlap check races and both can win. A transaction-scoped advisory lock per
+    VIN forces requests touching the same car to run one-at-a-time (different
+    cars stay fully parallel). Locks are taken in sorted order so two batches
+    sharing several cars can't deadlock. The lock is released automatically when
+    the transaction commits or rolls back."""
+    for vin in sorted({v for v in vins if v}):
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (vin,))
+
+
 def _check_car_date_overlap(cur, car_vin, start_date, end_date,
                             exclude_rental_id=None,
                             exclude_reservation_id=None):
@@ -2695,6 +3417,7 @@ def create_rental():
     from psycopg2.extras import RealDictCursor
     with get_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            _lock_cars_for_booking(cur, [data["car_vin"]])
             overlap = _check_car_date_overlap(
                 cur, data["car_vin"], data["start_date"], data["end_date"])
             if overlap:
@@ -2708,28 +3431,243 @@ def create_rental():
             )
             row = cur.fetchone()
     _log_activity(int(car["company_id"]), "create", "rental",
-                  f'{data["car_vin"]} · {data["start_date"]}→{data["end_date"]}')
+                  f'{_car_label(data["car_vin"])} · {data["start_date"]}→{data["end_date"]}',
+                  ref=f'car:{data["car_vin"]}')
     return jsonify(_clean(row)), 201
+
+
+def _prepare_booking_rows(rows, company_id, with_notes=False):
+    """Shared validation for the rental & reservation batch imports — both book
+    one of the company's cars for one of its clients over a date range. Returns
+    ``(ok, errors)``: ``ok`` is a list of validated dicts
+    (index, client_id, car_vin, start, end [, notes]); ``errors`` is the usual
+    ``[{index, errors}]`` list. Runs entirely READ-ONLY — field checks, car
+    ownership, client-link, date order, and WITHIN-BATCH per-car date overlap.
+    The overlap against ALREADY-COMMITTED bookings is enforced at insert time
+    under `_lock_cars_for_booking`, so two concurrent imports of the same car
+    can't both slip a clashing row past this check."""
+    parsed, errors = [], []
+    for i, raw in enumerate(rows):
+        if not isinstance(raw, dict):
+            errors.append({"index": i, "errors": {"_": "Row must be a JSON object"}}); continue
+        row_errs = {}
+        try:
+            client_id = int(raw.get("client_id"))
+        except (TypeError, ValueError):
+            client_id = None
+            row_errs["client_id"] = "client_id is required (integer)"
+        car_vin = (raw.get("car_vin") or "").strip().upper()
+        if not car_vin:
+            row_errs["car_vin"] = "car_vin is required"
+        start = _none_if_blank(raw.get("start_date"))
+        end   = _none_if_blank(raw.get("end_date"))
+        if not start:
+            row_errs["start_date"] = "start_date is required"
+        if not end:
+            row_errs["end_date"] = "end_date is required"
+        if start and end and str(end) < str(start):
+            row_errs["end_date"] = "end_date must be on or after start_date"
+        if row_errs:
+            errors.append({"index": i, "errors": row_errs}); continue
+        item = {"index": i, "client_id": client_id, "car_vin": car_vin,
+                "start": str(start), "end": str(end)}
+        if with_notes:
+            item["notes"] = _none_if_blank(raw.get("notes"))
+        parsed.append(item)
+
+    # Bulk ownership / link checks — two queries for the whole batch, not 2×N.
+    vins = list({p["car_vin"] for p in parsed})
+    cids = list({p["client_id"] for p in parsed})
+    car_company = {}
+    if vins:
+        for r in (query("SELECT vin, company_id FROM cars "
+                        "WHERE vin = ANY(%s) AND is_active = TRUE", (vins,)) or []):
+            car_company[r["vin"]] = r["company_id"]
+    linked = set()
+    if cids:
+        for r in (query("SELECT client_id FROM client_companies "
+                        "WHERE company_id = %s AND client_id = ANY(%s)",
+                        (company_id, cids)) or []):
+            linked.add(r["client_id"])
+
+    # Resolve each row, catching within-batch overlaps on the same car so the
+    # DB-level check (which can't see siblings we haven't inserted yet) doesn't
+    # have to. `groups[vin]` holds (index, start, end) of accepted rows.
+    ok, groups = [], {}
+    for p in parsed:
+        i, vin = p["index"], p["car_vin"]
+        if vin not in car_company:
+            errors.append({"index": i, "errors": {
+                "car_vin": f"No active car with VIN '{vin}' in your fleet"}}); continue
+        if int(car_company[vin]) != int(company_id):
+            errors.append({"index": i, "errors": {
+                "car_vin": "This car belongs to another company"}}); continue
+        if p["client_id"] not in linked:
+            errors.append({"index": i, "errors": {
+                "client_id": f"Client {p['client_id']} is not one of your clients"}}); continue
+        clash = next((j for (j, s, e) in groups.get(vin, [])
+                      if s < p["end"] and e > p["start"]), None)
+        if clash is not None:
+            errors.append({"index": i, "errors": {
+                "car_vin": f"Dates overlap another row (index {clash}) for the same car in this batch"}}); continue
+        groups.setdefault(vin, []).append((i, p["start"], p["end"]))
+        ok.append(p)
+    errors.sort(key=lambda e: e["index"])
+    return ok, errors
+
+
+def _booking_overlap_errors(cur, items, **exclude):
+    """Under an already-held per-car lock, check each prepared booking against
+    committed rentals/reservations. Returns a list of {index, errors} for the
+    rows that clash (empty = all clear)."""
+    out = []
+    for it in items:
+        clash = _check_car_date_overlap(cur, it["car_vin"], it["start"], it["end"], **exclude)
+        if clash:
+            out.append({"index": it["index"], "errors": {"car_vin": clash}})
+    return out
+
+
+@app.post("/api/rentals/batch")
+def create_rentals_batch():
+    """Bulk-record cars rented to individuals (all-or-nothing). Payload is a
+    JSON body OR an uploaded .json file, as a bare array or ``{"rentals": [...]}``.
+    Each row books one of YOUR cars for one of YOUR clients over a date range;
+    ``company_id`` is never accepted — everything is filed under the caller.
+
+    Every row is validated (car in your fleet, client linked to you, valid
+    dates, no within-batch clash) before anything is written. The final
+    availability check runs under a per-car lock so simultaneous imports of the
+    same car can't double-book it. If ANY row fails, nothing is saved and the
+    per-row reasons come back. COMPANY users only (header login or API key)."""
+    u = _current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    if u.get("role") != "company" or not u.get("company_id"):
+        return jsonify({"error": "Only company users can batch-add rentals"}), 403
+    company_id = int(u["company_id"])
+
+    rows, err = _batch_rows_from_request("rentals")
+    if err:
+        return jsonify({"error": err}), 400
+    if not rows:
+        return jsonify({"error": "No rentals provided"}), 400
+    if len(rows) > MAX_BATCH:
+        return jsonify({"error": f"Too many rows ({len(rows)}); max {MAX_BATCH} per batch"}), 400
+
+    ok, errors = _prepare_booking_rows(rows, company_id)
+    if errors:
+        return jsonify({"error": "Batch rejected — fix the listed rows and resubmit.",
+                        "inserted": 0, "failed": errors}), 400
+
+    inserted = []
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                _lock_cars_for_booking(cur, [r["car_vin"] for r in ok])
+                clashes = _booking_overlap_errors(cur, ok)
+                if clashes:
+                    return jsonify({
+                        "error": "Batch rejected — some cars are already booked for "
+                                 "those dates. Nothing was saved.",
+                        "inserted": 0, "failed": clashes,
+                    }), 409
+                inserted = execute_values(
+                    cur,
+                    """INSERT INTO rentals (client_id, car_vin, start_date, end_date)
+                       VALUES %s RETURNING *""",
+                    [(r["client_id"], r["car_vin"], r["start"], r["end"]) for r in ok],
+                    page_size=len(ok), fetch=True,
+                )
+    except Exception as e:
+        return jsonify({"error": "Insert failed mid-batch — nothing was saved.",
+                        "inserted": 0,
+                        "failed": [{"index": "?", "errors": {"_": str(e)}}]}), 409
+
+    for row in inserted:
+        _log_activity(company_id, "create", "rental",
+                      f'{_car_label(row.get("car_vin"))} · {row.get("start_date")}→{row.get("end_date")}',
+                      ref=(f'car:{row.get("car_vin")}' if row.get("car_vin") else None))
+    return jsonify({"inserted": len(inserted), "rentals": _clean(inserted), "failed": []}), 201
 
 
 @app.post("/api/rentals/<int:rental_id>/return")
 def mark_rental_returned(rental_id):
-    """Company received the car back ("back to office"). Stamps returned_at
-    so the car becomes available to rent again (the overlap check skips
-    returned rentals) and the row drops off the Returns Due tab. Only the
-    owning company (or an admin) may do this."""
+    """Company received the car back. Stamps returned_at so the car becomes
+    available to rent again (the overlap check skips returned rentals) and the
+    row drops off the Returns Due tab. The company also picks WHICH branch the
+    car came back to (optional ``return_branch_id`` in the body; NULL = the
+    head office / Main) — the car is moved to that branch so it's available
+    there for the next rental. Only the owning company (or an admin) may do
+    this."""
     if not _can_attach_to_rental(rental_id):
         return jsonify({"error": "Not authorized"}), 403
+    company_id = _rental_company_id(rental_id)
+    # Body is optional (older callers send none); validate the branch belongs
+    # to this rental's company, else it resolves to NULL (Main).
+    data = request.get_json(silent=True) or {}
+    branch_id = _resolve_branch_id(data.get("return_branch_id"), company_id) if company_id else None
     row = execute(
-        """UPDATE rentals SET returned_at = NOW()
+        """UPDATE rentals SET returned_at = NOW(), return_branch_id = %s
             WHERE id = %s AND returned_at IS NULL
         RETURNING *""",
-        (rental_id,), returning=True,
+        (branch_id, rental_id), returning=True,
     )
     if not row:
         return jsonify({"error": "Rental not found or already returned"}), 404
-    _log_activity(_rental_company_id(rental_id), "update", "rental",
-                  f'{row["car_vin"]} returned (back to office)')
+    # Move the car to the branch it was returned to (NULL = Main / head office).
+    execute("UPDATE cars SET branch_id = %s WHERE vin = %s",
+            (branch_id, row["car_vin"]))
+    _log_activity(company_id, "update", "rental",
+                  f'{_car_label(row["car_vin"])} returned to {_branch_label(branch_id)}',
+                  ref=(f'branch:{branch_id}' if branch_id else f'car:{row["car_vin"]}'))
+    return jsonify(_clean(row))
+
+
+@app.post("/api/rentals/<int:rental_id>/extend")
+def extend_rental(rental_id):
+    """Client keeps the car longer: push the rental's end_date out. Only the
+    owning company (or an admin) may do this, the car must still be out
+    (returned_at IS NULL), the new date can't move before the start, and it
+    must not collide with another booking of the same car (overlap check
+    excludes this rental)."""
+    if not _can_attach_to_rental(rental_id):
+        return jsonify({"error": "Not authorized"}), 403
+    data = request.get_json(force=True) or {}
+    new_end = _none_if_blank(data.get("end_date"))
+    if not new_end:
+        return jsonify({"error": "Missing: end_date"}), 400
+
+    existing = query(
+        "SELECT car_vin, start_date, end_date, returned_at FROM rentals WHERE id = %s",
+        (rental_id,), one=True,
+    )
+    if not existing:
+        return jsonify({"error": "Rental not found"}), 404
+    if existing["returned_at"] is not None:
+        return jsonify({"error": "This car has already been returned"}), 409
+    if str(new_end) < str(existing["start_date"]):
+        return jsonify({"error": "New return date must be on or after the start date"}), 400
+
+    company_id = _rental_company_id(rental_id)
+    from db import get_conn
+    from psycopg2.extras import RealDictCursor
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            _lock_cars_for_booking(cur, [existing["car_vin"]])
+            overlap = _check_car_date_overlap(
+                cur, existing["car_vin"], str(existing["start_date"]), str(new_end),
+                exclude_rental_id=rental_id)
+            if overlap:
+                return jsonify({"error": overlap}), 409
+            cur.execute(
+                "UPDATE rentals SET end_date = %s WHERE id = %s RETURNING *",
+                (new_end, rental_id),
+            )
+            row = cur.fetchone()
+    _log_activity(company_id, "update", "rental",
+                  f'{_car_label(existing["car_vin"])} rental extended {existing["end_date"]}→{new_end}',
+                  ref=f'car:{existing["car_vin"]}')
     return jsonify(_clean(row))
 
 
@@ -2795,6 +3733,7 @@ def create_reservation():
     from psycopg2.extras import RealDictCursor
     with get_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            _lock_cars_for_booking(cur, [data["car_vin"]])
             overlap = _check_car_date_overlap(
                 cur, data["car_vin"], data["start_date"], data["end_date"])
             if overlap:
@@ -2810,8 +3749,73 @@ def create_reservation():
             )
             row = cur.fetchone()
     _log_activity(int(car["company_id"]), "create", "reservation",
-                  f'{data["car_vin"]} · {data["start_date"]}→{data["end_date"]}')
+                  f'{_car_label(data["car_vin"])} · {data["start_date"]}→{data["end_date"]}',
+                  ref=f'car:{data["car_vin"]}')
     return jsonify(_clean(row)), 201
+
+
+@app.post("/api/reservations/batch")
+def create_reservations_batch():
+    """Bulk-record reservations — future bookings for your cars (all-or-nothing).
+    Payload is a JSON body OR an uploaded .json file, as a bare array or
+    ``{"reservations": [...]}``. Each row reserves one of YOUR cars for one of
+    YOUR clients over a date range (optional ``notes``); ``company_id`` is never
+    accepted.
+
+    Same guarantees as the rentals batch: full validation up front, a per-car
+    lock so concurrent imports can't double-book, and nothing saved if any row
+    clashes with an existing rental or pending reservation. COMPANY users only."""
+    u = _current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    if u.get("role") != "company" or not u.get("company_id"):
+        return jsonify({"error": "Only company users can batch-add reservations"}), 403
+    company_id = int(u["company_id"])
+
+    rows, err = _batch_rows_from_request("reservations")
+    if err:
+        return jsonify({"error": err}), 400
+    if not rows:
+        return jsonify({"error": "No reservations provided"}), 400
+    if len(rows) > MAX_BATCH:
+        return jsonify({"error": f"Too many rows ({len(rows)}); max {MAX_BATCH} per batch"}), 400
+
+    ok, errors = _prepare_booking_rows(rows, company_id, with_notes=True)
+    if errors:
+        return jsonify({"error": "Batch rejected — fix the listed rows and resubmit.",
+                        "inserted": 0, "failed": errors}), 400
+
+    inserted = []
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                _lock_cars_for_booking(cur, [r["car_vin"] for r in ok])
+                clashes = _booking_overlap_errors(cur, ok)
+                if clashes:
+                    return jsonify({
+                        "error": "Batch rejected — some cars already have a rental or "
+                                 "reservation for those dates. Nothing was saved.",
+                        "inserted": 0, "failed": clashes,
+                    }), 409
+                inserted = execute_values(
+                    cur,
+                    """INSERT INTO reservations
+                         (car_vin, client_id, company_id, start_date, end_date, notes)
+                       VALUES %s RETURNING *""",
+                    [(r["car_vin"], r["client_id"], company_id,
+                      r["start"], r["end"], r.get("notes")) for r in ok],
+                    page_size=len(ok), fetch=True,
+                )
+    except Exception as e:
+        return jsonify({"error": "Insert failed mid-batch — nothing was saved.",
+                        "inserted": 0,
+                        "failed": [{"index": "?", "errors": {"_": str(e)}}]}), 409
+
+    for row in inserted:
+        _log_activity(company_id, "create", "reservation",
+                      f'{_car_label(row.get("car_vin"))} · {row.get("start_date")}→{row.get("end_date")}',
+                      ref=(f'car:{row.get("car_vin")}' if row.get("car_vin") else None))
+    return jsonify({"inserted": len(inserted), "reservations": _clean(inserted), "failed": []}), 201
 
 
 @app.put("/api/reservations/<int:res_id>")
@@ -2827,12 +3831,16 @@ def update_reservation_status(res_id):
     if not _can_edit_company(int(existing["company_id"])):
         return jsonify({"error": "Not authorized"}), 403
 
-    # When activating, create the actual rental and mark reservation active
+    # Activating a pending reservation converts it into a live rental and drops
+    # it from the reservations list — the car is now "rented by client". The
+    # rental INSERT and the reservation DELETE run in one transaction so the
+    # booking can never end up as both a pending reservation and a live rental.
     if new_status == "active" and existing["status"] == "pending":
         from db import get_conn
         from psycopg2.extras import RealDictCursor
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                _lock_cars_for_booking(cur, [existing["car_vin"]])
                 overlap = _check_car_date_overlap(
                     cur, existing["car_vin"],
                     str(existing["start_date"]), str(existing["end_date"]),
@@ -2846,24 +3854,34 @@ def update_reservation_status(res_id):
                     (existing["client_id"], existing["car_vin"],
                      existing["start_date"], existing["end_date"]),
                 )
+                cur.execute("DELETE FROM reservations WHERE id = %s", (res_id,))
+        _log_activity(int(existing["company_id"]), "update", "reservation",
+                      f'{_car_label(existing["car_vin"])} — reservation activated → rented by client',
+                      ref=f'car:{existing["car_vin"]}')
+        return jsonify({"ok": True, "converted": True})
 
     row = execute(
         "UPDATE reservations SET status = %s WHERE id = %s RETURNING *",
         (new_status, res_id),
         returning=True,
     )
+    _log_activity(int(existing["company_id"]), "update", "reservation",
+                  f'{_car_label(existing["car_vin"])} — status: {existing.get("status")}→{new_status}',
+                  ref=f'car:{existing["car_vin"]}')
     return jsonify(_clean(row))
 
 
 @app.delete("/api/reservations/<int:res_id>")
 def delete_reservation(res_id):
-    existing = query("SELECT company_id FROM reservations WHERE id = %s",
+    existing = query("SELECT company_id, car_vin FROM reservations WHERE id = %s",
                      (res_id,), one=True)
     if not existing:
         return jsonify({"error": "Not found"}), 404
     if not _can_edit_company(int(existing["company_id"])):
         return jsonify({"error": "Not authorized"}), 403
     execute("DELETE FROM reservations WHERE id = %s", (res_id,))
+    _log_activity(int(existing["company_id"]), "delete", "reservation",
+                  existing.get("car_vin"))
     return ("", 204)
 
 
@@ -2981,20 +3999,144 @@ def company_activity(company_id):
     if not _is_admin_request():
         return jsonify({"error": "Not authorized"}), 403
     rows = query(
-        """SELECT action, entity, detail, username, created_at
+        """SELECT action, entity, detail, entity_ref, username, created_at
              FROM activity_log
             WHERE company_id = %s
             ORDER BY created_at DESC
-            LIMIT 50""",
+            LIMIT 200""",
         (company_id,),
     ) or []
     return jsonify([{
         "action": r["action"],
         "entity": r["entity"],
         "detail": r["detail"],
+        "ref": r.get("entity_ref"),
         "username": r["username"],
         "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
     } for r in rows])
+
+
+def _int_or_none(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+@app.get("/api/admin/audit-log")
+def admin_audit_log():
+    """The enterprise audit stream — every action every company performs
+    (login, logout, create, update, delete of any entity) across the whole
+    platform, newest first. Filterable by company / action / entity / free
+    text, and keyset-paginated on id so it stays fast at millions of rows.
+    Admin-only."""
+    if not _is_admin_request():
+        return jsonify({"error": "Not authorized"}), 403
+
+    a = request.args
+    limit = _int_or_none(a.get("limit")) or 40
+    limit = max(1, min(limit, 200))
+
+    where = ["TRUE"]
+    params = []
+    before_id = _int_or_none(a.get("before_id"))
+    if before_id is not None:
+        where.append("al.id < %s"); params.append(before_id)
+    company_id = _int_or_none(a.get("company_id"))
+    if company_id is not None:
+        where.append("al.company_id = %s"); params.append(company_id)
+    action = (a.get("action") or "").strip()
+    if action:
+        where.append("al.action = %s"); params.append(action)
+    entity = (a.get("entity") or "").strip()
+    if entity:
+        where.append("al.entity = %s"); params.append(entity)
+    q = (a.get("q") or "").strip()
+    if q:
+        like = f"%{q}%"
+        where.append("(al.detail ILIKE %s OR al.username ILIKE %s OR co.companyname ILIKE %s)")
+        params += [like, like, like]
+    params.append(limit)
+
+    rows = query(
+        f"""SELECT al.id, al.company_id, co.companyname, al.username,
+                   al.action, al.entity, al.detail, al.entity_ref, al.created_at
+              FROM activity_log al
+         LEFT JOIN companies co ON co.id = al.company_id
+             WHERE {' AND '.join(where)}
+          ORDER BY al.id DESC
+             LIMIT %s""",
+        tuple(params),
+    ) or []
+
+    items = [{
+        "id": r["id"],
+        "company_id": r["company_id"],
+        "companyname": r["companyname"],
+        "username": r["username"],
+        "action": r["action"],
+        "entity": r["entity"],
+        "detail": r["detail"],
+        "ref": r.get("entity_ref"),
+        "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+    } for r in rows]
+    next_cursor = items[-1]["id"] if len(items) == limit else None
+    return jsonify({"items": items, "next_cursor": next_cursor})
+
+
+@app.get("/api/admin/audit-stats")
+def admin_audit_stats():
+    """Rolling 24-hour KPIs for the audit dashboard header: how many events,
+    logins, records created / edited / deleted, and how many distinct
+    companies were active. Admin-only."""
+    if not _is_admin_request():
+        return jsonify({"error": "Not authorized"}), 403
+    row = query(
+        """SELECT
+             COUNT(*)                                         AS events,
+             COUNT(*) FILTER (WHERE action = 'login')         AS logins,
+             COUNT(*) FILTER (WHERE action = 'logout')        AS logouts,
+             COUNT(*) FILTER (WHERE action = 'create')        AS created,
+             COUNT(*) FILTER (WHERE action = 'update')        AS edits,
+             COUNT(*) FILTER (WHERE action = 'delete')        AS deletes,
+             COUNT(DISTINCT company_id)                       AS companies
+           FROM activity_log
+          WHERE created_at > NOW() - INTERVAL '24 hours'""",
+        one=True,
+    ) or {}
+    return jsonify({
+        "events":    int(row.get("events") or 0),
+        "logins":    int(row.get("logins") or 0),
+        "logouts":   int(row.get("logouts") or 0),
+        "created":   int(row.get("created") or 0),
+        "edits":     int(row.get("edits") or 0),
+        "deletes":   int(row.get("deletes") or 0),
+        "companies": int(row.get("companies") or 0),
+    })
+
+
+@app.get("/api/admin/active-rentals")
+def admin_active_rentals():
+    """Cars currently rented out to individual clients (not yet returned) —
+    the admin's "Cars rented by individuals" view. Columns intentionally mirror
+    the B2B "rented by companies" table so the two render identically.
+    Admin-only. Bounded so it never loads the whole rentals history."""
+    if not _is_admin_request():
+        return jsonify({"error": "Not authorized"}), 403
+    rows = query(
+        """SELECT rental_id, client_name, client_father, client_mother,
+                  client_personid, client_nationality, client_dob, client_phone,
+                  client_licenseid, client_photo,
+                  company_name, company_code, company_phone, company_location,
+                  company_x, company_y,
+                  car_vin, car_model, car_type, car_color, car_plate, car_has_gps,
+                  start_date, end_date
+             FROM v_client_rentals
+            WHERE returned_at IS NULL
+            ORDER BY start_date DESC
+            LIMIT 1000""",
+    ) or []
+    return jsonify(_clean(rows))
 
 
 # ----------------------- CONTACT SUPPORT ---------------------------------
@@ -3080,20 +4222,87 @@ def _report_company(require_data=True):
 @app.get("/api/reports/reservations")
 def reservations_report():
     """Reservation report for the calling company — every reservation with its
-    client, car, dates and status. Read-only; usable with an API key."""
+    client, car, dates, status and the branch the car belongs to. Read-only;
+    usable with an API key."""
     company_id, err = _report_company()
     if err:
         return err
     rows = query(
         """SELECT rv.id, rv.car_vin, rv.client_id, rv.start_date, rv.end_date,
-                  rv.status, rv.created_at,
+                  rv.status, rv.notes, rv.created_at,
                   c.name  AS client_name, c.phonenumber AS client_phone,
-                  ca.model AS car_model, ca.platenumber AS car_plate
+                  ca.model AS car_model, ca.platenumber AS car_plate,
+                  ca.branch_id AS car_branch_id,
+                  COALESCE(b.branchname, 'Main') AS car_branch_name
              FROM reservations rv
              JOIN clients c  ON c.id = rv.client_id
              JOIN cars    ca ON ca.vin = rv.car_vin
+             LEFT JOIN branches b ON b.id = ca.branch_id
             WHERE rv.company_id = %s
             ORDER BY rv.created_at DESC""",
+        (company_id,),
+    )
+    return jsonify(_clean(rows))
+
+
+@app.get("/api/reports/cars")
+def cars_report():
+    """Fleet report for the calling company — every car with the branch it
+    currently belongs to (branch_id NULL = the head office, shown as "Main")
+    and its last known GPS point. Read-only; usable with an API key.
+    Optional ``branch_id`` filters to one branch (``main`` / ``0`` = cars at
+    the head office)."""
+    company_id, err = _report_company()
+    if err:
+        return err
+    branch_arg = request.args.get("branch_id")
+    where = "c.company_id = %s AND c.is_active = TRUE"
+    params = [company_id]
+    if branch_arg is not None:
+        if str(branch_arg).lower() in ("main", "0", ""):
+            where += " AND c.branch_id IS NULL"
+        else:
+            where += " AND c.branch_id = %s"
+            params.append(branch_arg)
+    rows = query(
+        f"""SELECT c.vin, c.type, c.model, c.color, c.platenumber, c.has_gps,
+                   c.gps_lat, c.gps_lng, c.gps_updated_at,
+                   c.branch_id,
+                   COALESCE(b.branchname, 'Main') AS branch_name,
+                   b.location AS branch_location
+              FROM cars c
+              LEFT JOIN branches b ON b.id = c.branch_id
+             WHERE {where}
+             ORDER BY branch_name, c.model""",
+        tuple(params),
+    )
+    return jsonify(_clean(rows))
+
+
+@app.get("/api/reports/company-rentals")
+def company_rentals_report():
+    """B2B report for the calling company — every car it has rented OUT to
+    another company ("Cars Rented by Companies"), with the car's detail, the
+    rental period, whether it's been returned and to which branch. Read-only;
+    usable with an API key."""
+    company_id, err = _report_company()
+    if err:
+        return err
+    rows = query(
+        """SELECT s.id, s.company_name, s.owner_name, s.location,
+                  s.phones, s.branches, s.start_date, s.end_date, s.notes,
+                  s.car_vin, s.returned_at, s.return_branch_id,
+                  rb.branchname AS return_branch_name,
+                  c.model AS car_model, c.type AS car_type, c.color AS car_color,
+                  c.platenumber AS car_plate, c.has_gps AS car_has_gps,
+                  c.branch_id AS car_branch_id,
+                  COALESCE(cb.branchname, 'Main') AS car_branch_name
+             FROM special_company_rentals s
+             LEFT JOIN cars c      ON c.vin = s.car_vin AND c.company_id = s.company_id
+             LEFT JOIN branches rb ON rb.id = s.return_branch_id
+             LEFT JOIN branches cb ON cb.id = c.branch_id
+            WHERE s.company_id = %s
+            ORDER BY s.created_at DESC""",
         (company_id,),
     )
     return jsonify(_clean(rows))

@@ -28,6 +28,12 @@ bind = os.getenv("GUNICORN_BIND", "0.0.0.0:5000")
 accesslog = "-"            # request log to stdout (docker compose logs)
 errorlog = "-"
 
+# Recycle each worker after this many requests (with jitter so they don't all
+# recycle at once). Guards a long-running process against slow memory growth
+# from per-worker caches (e.g. the NHTSA decode cache). 0 = never recycle.
+max_requests = int(os.getenv("GUNICORN_MAX_REQUESTS", "1000"))
+max_requests_jitter = int(os.getenv("GUNICORN_MAX_REQUESTS_JITTER", "100"))
+
 # --- Auto-size the DB pool so workers × DB_POOL_MAX stays under Postgres' cap.
 # Only kicks in when DB_POOL_MAX isn't already set, so an explicit value wins.
 if not os.getenv("DB_POOL_MAX"):

@@ -99,7 +99,7 @@
       const ph = opts.find(o => o.disabled && (o.value === "" || o.selected));
       if (ph && ph.textContent) this.placeholder = ph.textContent;
 
-      opts.forEach(o => {
+      const addOption = (o) => {
         if (o.disabled && o.value === "") return; // skip placeholder
         const item = document.createElement("div");
         item.className = "ss-item" + (o.value === this.select.value ? " active" : "");
@@ -109,6 +109,21 @@
         item.addEventListener("mousedown", (e) => e.preventDefault()); // keep focus
         item.addEventListener("click", () => this.choose(o.value));
         this.list.appendChild(item);
+      };
+
+      // Walk direct children so <optgroup> labels become styled section headers
+      // (e.g. the car-model picker grouped by manufacturer). Selects without
+      // optgroups render exactly as before.
+      Array.from(this.select.children).forEach(node => {
+        if (node.tagName === "OPTGROUP"){
+          const header = document.createElement("div");
+          header.className = "ss-group";
+          header.textContent = node.label || "";
+          this.list.appendChild(header);
+          Array.from(node.children).forEach(addOption);
+        } else if (node.tagName === "OPTION"){
+          addOption(node);
+        }
       });
 
       this.refreshLabels();
@@ -117,7 +132,12 @@
 
     refreshLabels(){
       const opt = this.select.options[this.select.selectedIndex];
-      const hasValue = this.select.value && opt && !opt.disabled;
+      // A real choice is any selected option that isn't the placeholder
+      // (placeholders are the disabled+hidden option). This lets a legitimate
+      // empty-value choice — e.g. the branch picker's "Main (head office)" —
+      // show its label in the normal ink colour instead of the muted
+      // "— Select —" placeholder.
+      const hasValue = !!opt && !opt.disabled && !opt.hidden;
       this.triggerLabel.textContent = hasValue ? opt.textContent : this.placeholder;
       this.trigger.classList.toggle("placeholder", !hasValue);
       // refresh search placeholder via global t() if available
@@ -170,8 +190,10 @@
       // the admin can still scroll-pick.
       const useFilter = q.length >= (prefMin || 1);
 
+      const children = Array.from(this.list.children);
       let visible = 0;
-      Array.from(this.list.children).forEach(item => {
+      children.forEach(item => {
+        if (item.classList.contains("ss-group")) return; // headers handled below
         const txt = item.textContent.toLocaleLowerCase();
         let show;
         if (!q) show = true;
@@ -181,6 +203,21 @@
         item.style.display = show ? "" : "none";
         if (show) visible++;
       });
+
+      // A group header is shown only when at least one of its options survived
+      // the filter, so searching never leaves dangling manufacturer labels.
+      let header = null, headerHasVisible = false;
+      const flush = () => { if (header) header.style.display = headerHasVisible ? "" : "none"; };
+      children.forEach(item => {
+        if (item.classList.contains("ss-group")){
+          flush();
+          header = item;
+          headerHasVisible = false;
+        } else if (item.style.display !== "none"){
+          headerHasVisible = true;
+        }
+      });
+      flush();
 
       // Helpful empty state: if the user has typed something but is below
       // the prefix threshold, hint at it instead of saying "no matches".
@@ -195,7 +232,8 @@
     }
 
     onKey(e){
-      const items = Array.from(this.list.children).filter(i => i.style.display !== "none");
+      const items = Array.from(this.list.children)
+        .filter(i => i.style.display !== "none" && !i.classList.contains("ss-group"));
       if (!items.length) return;
       const cur = items.findIndex(i => i.classList.contains("hover"));
       const setHover = (idx) => {
