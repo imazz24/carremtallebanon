@@ -1380,19 +1380,51 @@
       <button type="button" data-demo-reset title="Delete every change and restore the sample data">Reset data</button>`;
     const css = document.createElement("style");
     css.textContent = `
-      #demo-switcher{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);
-        z-index:99999;display:flex;align-items:center;gap:4px;padding:6px 8px;
-        background:rgba(17,24,39,.92);color:#fff;border-radius:999px;
+      /* Reserve a strip under the page so a fixed bar never covers the footer,
+         a pager, or the last card of a stacked-card table. Phones stack every
+         table into full-width cards, so the bottom of the page is content. */
+      body{padding-bottom:calc(70px + env(safe-area-inset-bottom, 0px));}
+
+      #demo-switcher{position:fixed;left:50%;
+        bottom:calc(12px + env(safe-area-inset-bottom, 0px));
+        transform:translateX(-50%);
+        /* Under the login overlay (200) and every modal (300), so it can never
+           cover a dialog's action buttons — it did at 99999, and that bites
+           hardest on a phone, where the modal fills the screen and .modal-foot
+           puts Save/Cancel full-width at the bottom. Still above the sticky
+           header (50) and the nav drawer (60). */
+        z-index:90;
+        display:flex;align-items:center;gap:4px;
+        box-sizing:border-box;max-width:calc(100vw - 16px);
+        padding:6px 8px;
+        background:rgba(17,24,39,.92);color:#fff;
+        border:1px solid rgba(255,255,255,.10);border-radius:999px;
         box-shadow:0 8px 30px rgba(0,0,0,.35);font:600 13px/1 system-ui,sans-serif;
-        backdrop-filter:blur(6px);}
+        -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);}
+      /* The drawer owns the screen while it's open; a pill floating over its
+         backdrop reads as a stray control. */
+      body.nav-open #demo-switcher{opacity:0;pointer-events:none;}
       #demo-switcher .demo-switcher-label{padding:0 6px;opacity:.7;font-weight:600;
-        letter-spacing:.02em;text-transform:uppercase;font-size:11px;}
-      #demo-switcher .demo-sep{width:1px;height:18px;background:rgba(255,255,255,.18);margin:0 4px;}
+        letter-spacing:.02em;text-transform:uppercase;font-size:11px;flex:0 0 auto;}
+      #demo-switcher .demo-sep{width:1px;height:18px;flex:0 0 auto;
+        background:rgba(255,255,255,.18);margin:0 4px;}
       #demo-switcher button{border:0;cursor:pointer;padding:7px 14px;border-radius:999px;
-        background:transparent;color:#cbd5e1;font:inherit;transition:.15s;}
+        background:transparent;color:#cbd5e1;font:inherit;transition:.15s;
+        white-space:nowrap;flex:0 1 auto;}
       #demo-switcher button:hover{color:#fff;background:rgba(255,255,255,.08);}
       #demo-switcher button.active{background:#2563eb;color:#fff;}
       #demo-switcher button[data-demo-reset]:hover{background:#b91c1c;color:#fff;}
+
+      /* Phones: the pill was ~350px of content on a 320-360px screen, so it
+         overflowed and scrolled the page sideways; its buttons were also 27px
+         tall against the app's own 42px touch-target rule. Drop the decorative
+         label, tighten the gaps, grow the targets. */
+      @media (max-width: 560px){
+        #demo-switcher{gap:2px;padding:5px 6px;font-size:12px;}
+        #demo-switcher .demo-switcher-label{display:none;}
+        #demo-switcher .demo-sep{margin:0 2px;}
+        #demo-switcher button{padding:0 12px;min-height:40px;}
+      }
       @media print{#demo-switcher{display:none;}}`;
     document.head.appendChild(css);
     bar.addEventListener("click", (e) => {

@@ -2707,7 +2707,14 @@ html[dir="rtl"] .dash-panel.collapsed .dash-toggle-icon{
 
 /* KPI strip */
 .audit-kpis{
-  display: grid; grid-template-columns: repeat(6, 1fr);
+  display: grid;
+  /* minmax(0,1fr), not 1fr — the same reason .stats-grid spells out above. A
+     plain 1fr track is minmax(auto,1fr) and refuses to shrink below its
+     content's min-content width, so a caption like "Active companies" pins each
+     column near ~90px. Six of those overflow .dash-panel-body, which is
+     `overflow:hidden` — the strip would be CLIPPED, not scrollable, so the last
+     KPI would simply be missing with nothing to reveal it. */
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: .6rem; padding: .9rem 1rem;
   border-bottom: 1px solid var(--line);
 }
@@ -2716,9 +2723,19 @@ html[dir="rtl"] .dash-panel.collapsed .dash-toggle-icon{
   padding: .6rem .7rem; border-radius: 10px;
   background: var(--surface-2); border: 1px solid var(--line);
   border-left: 3px solid var(--muted);
+  min-width: 0;                  /* let the tile shrink with its track */
 }
 .audit-kpi-value{ font-size: 1.35rem; font-weight: 800; color: var(--ink); line-height: 1; }
-.audit-kpi-label{ font-size: .68rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+/* Left to wrap on purpose — NOT nowrap+ellipsis. Wrapping is what makes
+   minmax(0,1fr) sufficient: a phrase that can wrap has a min-content width of
+   its longest WORD ("companies", ~65px), not the whole caption, so three tiles
+   fit a 320px screen and "Active companies" stays readable across two lines.
+   Truncating it to "Active com…" would trade a fixed layout for a lost word. */
+.audit-kpi-label{
+  font-size: .68rem; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .03em;
+  overflow-wrap: break-word;     /* last resort if a track gets narrower still */
+}
 .audit-kpi-events{ border-left-color: var(--accent); }
 .audit-kpi-logins{ border-left-color: #10b981; }
 .audit-kpi-created{ border-left-color: #3b82f6; }
@@ -2789,7 +2806,7 @@ html[dir="rtl"] .dash-panel.collapsed .dash-toggle-icon{
 .audit-user{ color: var(--muted); font-size: .78rem; font-weight: 600; white-space: nowrap; justify-self: end; }
 
 @media (max-width: 720px){
-  .audit-kpis{ grid-template-columns: repeat(3, 1fr); }
+  .audit-kpis{ grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .audit-row{
     grid-template-columns: 46px 74px minmax(0,1fr);
     grid-template-areas:
@@ -4031,9 +4048,19 @@ body.role-company .company-panel-active{
   body.role-company #company-sidebar .sidebar-btn:hover{ transform: none; }
 }
 
-/* Tighten the dark header on very small screens */
+/* Tighten the signed-in header on very small screens.
+
+   NOT gated `:not(.theme-light)`, deliberately. The gate belongs on rules that
+   set a dark COLOUR; this one sets `display`, and how many controls fit across
+   560px has nothing to do with the theme. Gated, the wordmark dropped at ≤560
+   in dark but survived to 380 in light (where the ungated `.brand-text` rule
+   finally catches it) — so between 381 and 560 the light header carried brand +
+   profile + theme + language + logout where the dark one carried four of those,
+   for no reason anyone chose. Same bug class as an ungated dark rule, pointing
+   the other way: there a pale ink leaks onto white; here a layout fix silently
+   skips half the users. */
 @media (max-width: 560px){
-  body:is(.role-company, .role-admin):not(.theme-light) .site-header .brand-text{ display: none; }
+  body:is(.role-company, .role-admin) .site-header .brand-text{ display: none; }
 }
 
 /* =====================================================
@@ -5157,9 +5184,19 @@ body:is(.role-company, .role-admin):not(.theme-light) .mobile-nav-toggle .mnt-ba
 body.nav-open .mobile-nav-backdrop{ opacity: 1; pointer-events: auto; }
 
 @media (max-width: 720px){
-  /* Reveal the hamburger only for the two signed-in roles (the public
-     login page has no nav drawer). */
-  body:is(.role-company, .role-admin):not(.theme-light) .mobile-nav-toggle{ display: inline-flex; }
+  /* The hamburger used to be revealed here for the two signed-in roles. That
+     rule is GONE because it never did anything: both roles are card-driven now,
+     and `body.role-admin .mobile-nav-toggle` / `body.role-company
+     .mobile-nav-toggle` are `display:none !important` (lines ~1148 / ~1258),
+     which no non-!important declaration can outrank at any width or theme.
+     Navigation on a phone is the card home + each panel's "Back to home",
+     exactly as it is on desktop.
+
+     Don't re-add it without first deleting those two !important rules — a
+     reveal here reads like it works, and silently doesn't. The off-canvas
+     drawer block above (~1189) and .mobile-nav-backdrop are dead for the same
+     reason; they're left in place because restoring the drawer would need them,
+     not because anything renders them today. */
 
   /* Backdrop sits above the sticky header so the whole page dims behind the
      drawer; the drawer (z 60) still paints on top of it. */
@@ -5288,6 +5325,18 @@ body.nav-open .mobile-nav-backdrop{ opacity: 1; pointer-events: auto; }
     border-radius: 14px;
   }
   .detail-body{ max-height: none; }
+
+  /* The detail modal's label column is `max-content`, which by definition never
+     wraps and always takes the longest label's full width ("License start date",
+     "Date of birth"). On a ~360px phone that leaves the VALUE — the VIN, the
+     phone, the plate — a sliver of what's left, and Arabic labels are longer
+     still. Stack label over value: one column, dt above dd. `.full` spacers use
+     `grid-column: 1/-1`, which still resolves in a single-column grid. */
+  .detail-grid{ grid-template-columns: 1fr; gap: .15rem; }
+  .detail-grid dt{ margin-top: .55rem; }
+  .detail-grid dd{ padding-bottom: .4rem; border-bottom: 1px solid var(--line-soft); }
+  .detail-grid dd:last-child{ border-bottom: 0; }
+
   .map-host-wrap, .leaflet-host, .leaflet-host .leaflet-container{ min-height: 260px; }
   .modal-foot{ flex-direction: column; align-items: stretch; gap: .6rem; }
   .modal-foot .btn,
