@@ -784,21 +784,21 @@ def list_cars():
         if request.args.get("available"):
             frm = request.args.get("from")
             to = request.args.get("to")
+            # A car is taken while a booking is live — active or pending, not
+            # yet returned. Cancelled bookings release it. (Pre-040 this also
+            # probed `reservations`; those are pending rentals now.)
             if frm and to:
                 avail_sql = """
-              AND NOT EXISTS (SELECT 1 FROM reservations rv
-                               WHERE rv.car_vin = c.vin AND rv.status = 'pending'
-                                 AND rv.start_date < %s AND rv.end_date > %s)
               AND NOT EXISTS (SELECT 1 FROM rentals r
                                WHERE r.car_vin = c.vin AND r.returned_at IS NULL
+                                 AND r.status IN ('active', 'pending')
                                  AND r.start_date < %s AND r.end_date > %s)"""
-                params += [to, frm, to, frm]
+                params += [to, frm]
             else:
                 avail_sql = """
-              AND NOT EXISTS (SELECT 1 FROM reservations rv
-                               WHERE rv.car_vin = c.vin AND rv.status = 'pending')
               AND NOT EXISTS (SELECT 1 FROM rentals r
-                               WHERE r.car_vin = c.vin AND r.returned_at IS NULL)"""
+                               WHERE r.car_vin = c.vin AND r.returned_at IS NULL
+                                 AND r.status IN ('active', 'pending'))"""
         rows = query(
             """SELECT c.*, co.companyname, br.branchname
                  FROM cars c JOIN companies co ON co.id = c.company_id
@@ -2444,14 +2444,19 @@ def create_special_rental():
             return ",".join(str(v).strip() for v in value if str(v).strip())
         return value
 
+    status, status_err = _validate_status(data.get("status"))
+    if status_err:
+        return jsonify({"error": status_err, "errors": {"status": status_err}}), 400
+
     # One record now holds a single car (car_vin) plus its rental period.
     # car_vins is still written (= car_vin) so legacy readers keep working.
     car_vin = _none_if_blank(data.get("car_vin"))
     row = execute(
         """INSERT INTO special_company_rentals
              (company_id, company_name, owner_name, location, x, y,
-              phones, branches, car_vin, car_vins, start_date, end_date, notes)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+              phones, branches, car_vin, car_vins, start_date, end_date, notes,
+              status)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
         (
             u["company_id"], data["company_name"],
             _none_if_blank(data.get("owner_name")),
@@ -2463,10 +2468,12 @@ def create_special_rental():
             _none_if_blank(data.get("start_date")),
             _none_if_blank(data.get("end_date")),
             _none_if_blank(data.get("notes")),
+            status,
         ),
         returning=True,
     )
-    _log_activity(u["company_id"], "create", "special_rental", data["company_name"])
+    _log_activity(u["company_id"], "create", "special_rental",
+                  f'{data["company_name"]} · {status}')
     return jsonify(_clean(row)), 201
 
 
@@ -2606,6 +2613,11 @@ def update_special_rental(rental_id):
             return ",".join(str(v).strip() for v in value if str(v).strip())
         return value
 
+    # An edit that omits `status` must not silently reset it — keep what's there.
+    status, status_err = _validate_status(data.get("status"), default=None)
+    if status_err:
+        return jsonify({"error": status_err, "errors": {"status": status_err}}), 400
+
     car_vin = _none_if_blank(data.get("car_vin"))
     row = execute(
         """UPDATE special_company_rentals
@@ -2613,6 +2625,7 @@ def update_special_rental(rental_id):
                   x = %s, y = %s, phones = %s, branches = %s,
                   car_vin = %s, car_vins = %s,
                   start_date = %s, end_date = %s, notes = %s,
+                  status = COALESCE(%s, status),
                   edit_count = edit_count + 1
             WHERE id = %s AND company_id = %s
         RETURNING *""",
@@ -2627,6 +2640,7 @@ def update_special_rental(rental_id):
             _none_if_blank(data.get("start_date")),
             _none_if_blank(data.get("end_date")),
             _none_if_blank(data.get("notes")),
+            status,
             rental_id, u["company_id"],
         ),
         returning=True,
@@ -2635,6 +2649,52 @@ def update_special_rental(rental_id):
         return jsonify({"error": "Not found"}), 404
     _log_activity(u["company_id"], "update", "special_rental", data["company_name"])
     return jsonify(_clean(row))
+
+
+@app.patch("/api/special-rentals/<int:rental_id>/status")
+def update_special_rental_status(rental_id):
+    """Move a B2B record between pending / active / cancelled, on its own.
+
+    The PUT above can also set status, but it rewrites every field and bumps
+    edit_count — flipping a dropdown in the table shouldn't read as an edit of
+    the record. Unlike a rental, a B2B record never enters the car-overlap probe
+    (`_check_car_date_overlap` reads `rentals` only), so reclaiming a car here
+    can't clash with anything and needs no lock.
+
+    COMPANY-ONLY, deliberately: `_require_company_user`, not
+    `_can_edit_company`. A booking belongs to the company that took it — that
+    company moves it, and the admin only reads the result (its Cars hub renders
+    these states as read-only tags). Widening this to admin would leave the API
+    honouring a move the UI deliberately doesn't offer, which is a permission
+    hole dressed as a convenience."""
+    u, err = _require_company_user()
+    if err:
+        return err
+    data = request.get_json(force=True) or {}
+    status, status_err = _validate_status(data.get("status"), default=None)
+    if status is None:
+        return jsonify({"error": status_err or "Status is required",
+                        "errors": {"status": status_err or "Status is required"}}), 400
+
+    rec = query(
+        """SELECT company_id, company_name, status, returned_at
+             FROM special_company_rentals WHERE id = %s""",
+        (rental_id,), one=True)
+    if not rec:
+        return jsonify({"error": "Not found"}), 404
+    if int(rec["company_id"]) != int(u["company_id"]):
+        return jsonify({"error": "Not authorized"}), 403
+    if rec["returned_at"] is not None:
+        return jsonify({"error": "This car has already been returned"}), 409
+    if rec["status"] == status:
+        return jsonify(_clean(rec)), 200
+
+    row = execute(
+        "UPDATE special_company_rentals SET status = %s WHERE id = %s RETURNING *",
+        (status, rental_id), returning=True)
+    _log_activity(u["company_id"], "update", "special_rental",
+                  f'{rec["company_name"]} · {rec["status"]}→{status}')
+    return jsonify(_clean(row)), 200
 
 
 @app.delete("/api/special-rentals/<int:rental_id>")
@@ -2776,20 +2836,23 @@ def company_alerts():
     overdue = sum(1 for r in returns if r.get("overdue"))
     due_today = len(returns) - overdue
 
-    # Pending reservations that should be in the report by today: their rental
-    # period has begun (start_date on or before today) but they've not yet been
-    # activated. `late` marks any whose start day has already passed.
+    # Pending bookings whose period has begun (start_date on or before today)
+    # but which nobody has marked active yet. `late` marks any whose start day
+    # has already passed. Pre-040 these were pending reservations; they're
+    # pending rentals now, and rentals carry no company_id — the owning company
+    # comes from the car.
     res_today = query(
-        """SELECT rv.id, c.name AS client_name, c.phonenumber AS client_phone,
+        """SELECT r.id, c.name AS client_name, c.phonenumber AS client_phone,
                   ca.model AS car_model, ca.platenumber AS car_plate,
-                  rv.start_date, rv.end_date,
-                  (rv.start_date < %s) AS late
-             FROM reservations rv
-             JOIN clients c ON c.id = rv.client_id
-             JOIN cars ca ON ca.vin = rv.car_vin
-            WHERE rv.company_id = %s AND rv.status = 'pending'
-              AND rv.start_date <= %s
-            ORDER BY rv.start_date ASC, rv.created_at DESC""",
+                  r.start_date, r.end_date,
+                  (r.start_date < %s) AS late
+             FROM rentals r
+             JOIN clients c ON c.id = r.client_id
+             JOIN cars ca ON ca.vin = r.car_vin
+            WHERE ca.company_id = %s AND r.status = 'pending'
+              AND r.returned_at IS NULL
+              AND r.start_date <= %s
+            ORDER BY r.start_date ASC, r.created_at DESC""",
         (today, cid, today),
     )
     res_today = _clean(res_today)
@@ -3352,48 +3415,66 @@ def _lock_cars_for_booking(cur, vins):
 def _check_car_date_overlap(cur, car_vin, start_date, end_date,
                             exclude_rental_id=None,
                             exclude_reservation_id=None):
-    """Check if a car has any overlapping rentals or reservations in the
-    given date range. Must be called inside a transaction with an open
-    cursor — uses FOR UPDATE to prevent two concurrent requests from
-    both passing the check on the same car.
+    """Check if a car has any overlapping booking in the given date range. Must
+    be called inside a transaction with an open cursor — uses FOR UPDATE to
+    prevent two concurrent requests from both passing the check on the same car.
 
     Overlap is strict (existing.start < new_end AND existing.end > new_start)
-    so a booking may start the exact day another ends — same-day handoff."""
+    so a booking may start the exact day another ends — same-day handoff.
+
+    Since migration 040 this reads `rentals` alone: a pending rental IS what a
+    reservation used to be, so one probe covers both. A booking only holds the
+    car while it's live — status 'active' or 'pending' AND not yet returned.
+    A CANCELLED booking blocks nothing, which is the point of cancelling.
+
+    `exclude_reservation_id` is accepted for call-site compatibility and treated
+    as a rental id, since reservations are now rentals."""
+    exclude_id = exclude_rental_id if exclude_rental_id is not None else exclude_reservation_id
     cur.execute(
-        """SELECT r.id, c.name AS client_name, r.start_date, r.end_date
+        """SELECT r.id, r.status, c.name AS client_name, r.start_date, r.end_date
              FROM rentals r
              JOIN clients c ON c.id = r.client_id
             WHERE r.car_vin = %s
               AND r.returned_at IS NULL
+              AND r.status IN ('active', 'pending')
               AND r.start_date < %s AND r.end_date > %s
               AND (%s IS NULL OR r.id != %s)
             FOR UPDATE OF r""",
-        (car_vin, end_date, start_date,
-         exclude_rental_id, exclude_rental_id),
+        (car_vin, end_date, start_date, exclude_id, exclude_id),
     )
-    rental_overlap = cur.fetchone()
-    if rental_overlap:
-        return (f"This car is already rented to {rental_overlap['client_name']} "
-                f"from {rental_overlap['start_date']} to {rental_overlap['end_date']}")
-
-    cur.execute(
-        """SELECT rv.id, c.name AS client_name, rv.start_date, rv.end_date
-             FROM reservations rv
-             JOIN clients c ON c.id = rv.client_id
-            WHERE rv.car_vin = %s
-              AND rv.status = 'pending'
-              AND rv.start_date < %s AND rv.end_date > %s
-              AND (%s IS NULL OR rv.id != %s)
-            FOR UPDATE OF rv""",
-        (car_vin, end_date, start_date,
-         exclude_reservation_id, exclude_reservation_id),
-    )
-    res_overlap = cur.fetchone()
-    if res_overlap:
-        return (f"This car has a pending reservation for {res_overlap['client_name']} "
-                f"from {res_overlap['start_date']} to {res_overlap['end_date']}")
+    overlap = cur.fetchone()
+    if overlap:
+        verb = ("has a pending booking for" if overlap["status"] == "pending"
+                else "is already rented to")
+        return (f"This car {verb} {overlap['client_name']} "
+                f"from {overlap['start_date']} to {overlap['end_date']}")
 
     return None
+
+
+# ---- Booking status (migration 040) ----------------------------------
+#
+# A booking's life is one column, on both rentals and special_company_rentals:
+#   pending    — booked, not started yet (what a reservation used to be)
+#   active     — out with the renter
+#   cancelled  — called off; the record stays, the car is freed
+#
+# Status is the BOOKING state and is orthogonal to returned_at: an active
+# booking still derives Out / Due today / Overdue / Returned from its dates.
+# Only 'active' and 'pending' hold a car — see `_check_car_date_overlap`.
+BOOKING_STATUSES = ("active", "pending", "cancelled")
+
+
+def _validate_status(value, default="active"):
+    """Normalise an incoming status. Returns ``(status, error)`` — exactly one
+    is None. Blank/absent falls back to `default` so older API clients that
+    never send a status keep working unchanged."""
+    if value is None or str(value).strip() == "":
+        return default, None
+    s = str(value).strip().lower()
+    if s not in BOOKING_STATUSES:
+        return None, (f"Status must be one of: {', '.join(BOOKING_STATUSES)}")
+    return s, None
 
 
 @app.post("/api/rentals")
@@ -3413,27 +3494,83 @@ def create_rental():
     if str(data["end_date"]) < str(data["start_date"]):
         return jsonify({"error": "End date must be on or after the start date"}), 400
 
+    status, status_err = _validate_status(data.get("status"))
+    if status_err:
+        return jsonify({"error": status_err, "errors": {"status": status_err}}), 400
+
     from db import get_conn
     from psycopg2.extras import RealDictCursor
     with get_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             _lock_cars_for_booking(cur, [data["car_vin"]])
-            overlap = _check_car_date_overlap(
-                cur, data["car_vin"], data["start_date"], data["end_date"])
-            if overlap:
-                return jsonify({"error": overlap}), 409
+            # A cancelled booking holds no car, so it can't clash with anything.
+            if status != "cancelled":
+                overlap = _check_car_date_overlap(
+                    cur, data["car_vin"], data["start_date"], data["end_date"])
+                if overlap:
+                    return jsonify({"error": overlap}), 409
             cur.execute(
                 """INSERT INTO rentals
-                     (client_id, car_vin, start_date, end_date)
-                   VALUES (%s,%s,%s,%s) RETURNING *""",
+                     (client_id, car_vin, start_date, end_date, status)
+                   VALUES (%s,%s,%s,%s,%s) RETURNING *""",
                 (data["client_id"], data["car_vin"],
-                 data["start_date"], data["end_date"]),
+                 data["start_date"], data["end_date"], status),
             )
             row = cur.fetchone()
     _log_activity(int(car["company_id"]), "create", "rental",
-                  f'{_car_label(data["car_vin"])} · {data["start_date"]}→{data["end_date"]}',
+                  f'{_car_label(data["car_vin"])} · {data["start_date"]}→{data["end_date"]} · {status}',
                   ref=f'car:{data["car_vin"]}')
     return jsonify(_clean(row)), 201
+
+
+@app.patch("/api/rentals/<int:rental_id>/status")
+def update_rental_status(rental_id):
+    """Move a booking between pending / active / cancelled. This replaces the
+    old reservation "Activate" action (which used to delete the reservation and
+    insert a rental); the row now just changes status in place.
+
+    Re-checks overlap when a booking (re)claims a car — going active/pending
+    from cancelled can clash with something booked in the meantime."""
+    data = request.get_json(force=True) or {}
+    status, status_err = _validate_status(data.get("status"), default=None)
+    if status is None:
+        return jsonify({"error": status_err or "Status is required",
+                        "errors": {"status": status_err or "Status is required"}}), 400
+
+    row = query(
+        """SELECT r.id, r.car_vin, r.status, r.start_date, r.end_date, r.returned_at,
+                  c.company_id
+             FROM rentals r JOIN cars c ON c.vin = r.car_vin
+            WHERE r.id = %s""",
+        (rental_id,), one=True)
+    if not row:
+        return jsonify({"error": "Rental not found"}), 404
+    if not _can_edit_company(int(row["company_id"])):
+        return jsonify({"error": "You can only change your own company's bookings"}), 403
+    if row["returned_at"] is not None:
+        return jsonify({"error": "This car has already been returned"}), 409
+    if row["status"] == status:
+        return jsonify(_clean(row)), 200
+
+    from db import get_conn
+    from psycopg2.extras import RealDictCursor
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            _lock_cars_for_booking(cur, [row["car_vin"]])
+            if status != "cancelled":
+                overlap = _check_car_date_overlap(
+                    cur, row["car_vin"], row["start_date"], row["end_date"],
+                    exclude_rental_id=rental_id)
+                if overlap:
+                    return jsonify({"error": overlap}), 409
+            cur.execute(
+                "UPDATE rentals SET status = %s WHERE id = %s RETURNING *",
+                (status, rental_id))
+            updated = cur.fetchone()
+    _log_activity(int(row["company_id"]), "update", "rental",
+                  f'{_car_label(row["car_vin"])} · {row["status"]}→{status}',
+                  ref=f'car:{row["car_vin"]}')
+    return jsonify(_clean(updated)), 200
 
 
 def _prepare_booking_rows(rows, company_id, with_notes=False):
@@ -3671,89 +3808,16 @@ def extend_rental(rental_id):
     return jsonify(_clean(row))
 
 
-# ----------------------- RESERVATIONS ------------------------------------
-@app.get("/api/reservations")
-def list_reservations():
-    u = _current_user()
-    if not u:
-        return jsonify({"error": "Not authenticated"}), 401
-    if u.get("role") == "company" and u.get("company_id"):
-        rows = query(
-            """SELECT rv.*, c.name AS client_name, c.phonenumber AS client_phone,
-                      ca.model AS car_model, ca.platenumber AS car_plate
-                 FROM reservations rv
-                 JOIN clients c ON c.id = rv.client_id
-                 JOIN cars ca ON ca.vin = rv.car_vin
-                WHERE rv.company_id = %s
-                ORDER BY rv.created_at DESC""",
-            (u["company_id"],),
-        )
-    else:
-        rows = query(
-            """SELECT rv.*,
-                      c.name AS client_name, c.phonenumber AS client_phone,
-                      c.personid AS client_personid, c.fathername AS client_father,
-                      c.mothername AS client_mother, c.nationality AS client_nationality,
-                      c.dateofbirth AS client_dob, c.licenseid AS client_license,
-                      c.startdatelicense AS client_license_start,
-                      c.enddatelicense AS client_license_end, c.id_type AS client_id_type,
-                      ca.model AS car_model, ca.platenumber AS car_plate,
-                      ca.color AS car_color, ca.type AS car_type,
-                      ca.has_gps AS car_has_gps,
-                      co.companyname, co.phonenumber AS company_phone,
-                      co.location AS company_location, co.owner_name AS company_owner,
-                      co.companyid AS company_regid
-                 FROM reservations rv
-                 JOIN clients c ON c.id = rv.client_id
-                 JOIN cars ca ON ca.vin = rv.car_vin
-                 JOIN companies co ON co.id = rv.company_id
-                ORDER BY rv.created_at DESC"""
-        )
-    return jsonify(_clean(rows))
-
-
-@app.post("/api/reservations")
-def create_reservation():
-    data = request.get_json(force=True) or {}
-    miss = _required(data, "car_vin", "client_id", "start_date", "end_date")
-    if miss:
-        return jsonify({"error": f"Missing: {miss}"}), 400
-
-    car = query("SELECT company_id FROM cars WHERE vin = %s",
-                (data["car_vin"],), one=True)
-    if not car:
-        return jsonify({"error": "Car not found"}), 404
-    if not _can_edit_company(int(car["company_id"])):
-        return jsonify({"error": "Not authorized"}), 403
-
-    if str(data["end_date"]) < str(data["start_date"]):
-        return jsonify({"error": "End date must be on or after the start date"}), 400
-
-    from db import get_conn
-    from psycopg2.extras import RealDictCursor
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            _lock_cars_for_booking(cur, [data["car_vin"]])
-            overlap = _check_car_date_overlap(
-                cur, data["car_vin"], data["start_date"], data["end_date"])
-            if overlap:
-                return jsonify({"error": overlap}), 409
-            cur.execute(
-                """INSERT INTO reservations
-                     (car_vin, client_id, company_id, start_date, end_date, notes)
-                   VALUES (%s,%s,%s,%s,%s,%s) RETURNING *""",
-                (data["car_vin"], int(data["client_id"]),
-                 int(car["company_id"]),
-                 data["start_date"], data["end_date"],
-                 _none_if_blank(data.get("notes"))),
-            )
-            row = cur.fetchone()
-    _log_activity(int(car["company_id"]), "create", "reservation",
-                  f'{_car_label(data["car_vin"])} · {data["start_date"]}→{data["end_date"]}',
-                  ref=f'car:{data["car_vin"]}')
-    return jsonify(_clean(row)), 201
-
-
+# ----------------------- RESERVATIONS (retired — see migration 040) --------
+# A reservation was only ever a rental that hadn't started yet, so it is now a
+# rental with status 'pending'. The internal list/create/update/delete
+# endpoints retired along with the Reservations panel: create a pending booking
+# with POST /api/rentals {"status": "pending"} and move it on with
+# PATCH /api/rentals/<id>/status.
+#
+# The two PUBLIC (API-key / Swagger) endpoints kept below stay on their original
+# paths and response shapes so existing integrations keep working — they read
+# and write pending rentals.
 @app.post("/api/reservations/batch")
 def create_reservations_batch():
     """Bulk-record reservations — future bookings for your cars (all-or-nothing).
@@ -3764,7 +3828,11 @@ def create_reservations_batch():
 
     Same guarantees as the rentals batch: full validation up front, a per-car
     lock so concurrent imports can't double-book, and nothing saved if any row
-    clashes with an existing rental or pending reservation. COMPANY users only."""
+    clashes with an existing booking. COMPANY users only.
+
+    Since migration 040 a "reservation" is simply a rental with status
+    'pending', so this writes to `rentals`. The endpoint, its payload and its
+    response shape are unchanged, so existing integrations keep working."""
     u = _current_user()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
@@ -3793,17 +3861,17 @@ def create_reservations_batch():
                 clashes = _booking_overlap_errors(cur, ok)
                 if clashes:
                     return jsonify({
-                        "error": "Batch rejected — some cars already have a rental or "
-                                 "reservation for those dates. Nothing was saved.",
+                        "error": "Batch rejected — some cars already have a booking "
+                                 "for those dates. Nothing was saved.",
                         "inserted": 0, "failed": clashes,
                     }), 409
                 inserted = execute_values(
                     cur,
-                    """INSERT INTO reservations
-                         (car_vin, client_id, company_id, start_date, end_date, notes)
+                    """INSERT INTO rentals
+                         (car_vin, client_id, start_date, end_date, status)
                        VALUES %s RETURNING *""",
-                    [(r["car_vin"], r["client_id"], company_id,
-                      r["start"], r["end"], r.get("notes")) for r in ok],
+                    [(r["car_vin"], r["client_id"], r["start"], r["end"], "pending")
+                     for r in ok],
                     page_size=len(ok), fetch=True,
                 )
     except Exception as e:
@@ -3816,73 +3884,6 @@ def create_reservations_batch():
                       f'{_car_label(row.get("car_vin"))} · {row.get("start_date")}→{row.get("end_date")}',
                       ref=(f'car:{row.get("car_vin")}' if row.get("car_vin") else None))
     return jsonify({"inserted": len(inserted), "reservations": _clean(inserted), "failed": []}), 201
-
-
-@app.put("/api/reservations/<int:res_id>")
-def update_reservation_status(res_id):
-    data = request.get_json(force=True) or {}
-    new_status = (data.get("status") or "").strip().lower()
-    if new_status not in ("active", "inactive", "pending"):
-        return jsonify({"error": "Status must be 'active', 'inactive', or 'pending'"}), 400
-
-    existing = query("SELECT * FROM reservations WHERE id = %s", (res_id,), one=True)
-    if not existing:
-        return jsonify({"error": "Not found"}), 404
-    if not _can_edit_company(int(existing["company_id"])):
-        return jsonify({"error": "Not authorized"}), 403
-
-    # Activating a pending reservation converts it into a live rental and drops
-    # it from the reservations list — the car is now "rented by client". The
-    # rental INSERT and the reservation DELETE run in one transaction so the
-    # booking can never end up as both a pending reservation and a live rental.
-    if new_status == "active" and existing["status"] == "pending":
-        from db import get_conn
-        from psycopg2.extras import RealDictCursor
-        with get_conn() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                _lock_cars_for_booking(cur, [existing["car_vin"]])
-                overlap = _check_car_date_overlap(
-                    cur, existing["car_vin"],
-                    str(existing["start_date"]), str(existing["end_date"]),
-                    exclude_reservation_id=res_id,
-                )
-                if overlap:
-                    return jsonify({"error": overlap}), 409
-                cur.execute(
-                    """INSERT INTO rentals (client_id, car_vin, start_date, end_date)
-                       VALUES (%s,%s,%s,%s)""",
-                    (existing["client_id"], existing["car_vin"],
-                     existing["start_date"], existing["end_date"]),
-                )
-                cur.execute("DELETE FROM reservations WHERE id = %s", (res_id,))
-        _log_activity(int(existing["company_id"]), "update", "reservation",
-                      f'{_car_label(existing["car_vin"])} — reservation activated → rented by client',
-                      ref=f'car:{existing["car_vin"]}')
-        return jsonify({"ok": True, "converted": True})
-
-    row = execute(
-        "UPDATE reservations SET status = %s WHERE id = %s RETURNING *",
-        (new_status, res_id),
-        returning=True,
-    )
-    _log_activity(int(existing["company_id"]), "update", "reservation",
-                  f'{_car_label(existing["car_vin"])} — status: {existing.get("status")}→{new_status}',
-                  ref=f'car:{existing["car_vin"]}')
-    return jsonify(_clean(row))
-
-
-@app.delete("/api/reservations/<int:res_id>")
-def delete_reservation(res_id):
-    existing = query("SELECT company_id, car_vin FROM reservations WHERE id = %s",
-                     (res_id,), one=True)
-    if not existing:
-        return jsonify({"error": "Not found"}), 404
-    if not _can_edit_company(int(existing["company_id"])):
-        return jsonify({"error": "Not authorized"}), 403
-    execute("DELETE FROM reservations WHERE id = %s", (res_id,))
-    _log_activity(int(existing["company_id"]), "delete", "reservation",
-                  existing.get("car_vin"))
-    return ("", 204)
 
 
 # ----------------------- ADMIN DASHBOARD ---------------------------------
@@ -4120,17 +4121,24 @@ def admin_active_rentals():
     """Cars currently rented out to individual clients (not yet returned) —
     the admin's "Cars rented by individuals" view. Columns intentionally mirror
     the B2B "rented by companies" table so the two render identically.
-    Admin-only. Bounded so it never loads the whole rentals history."""
+    Admin-only. Bounded so it never loads the whole rentals history.
+
+    `status` is the BOOKING state (pending / active / cancelled) and rides along
+    because that table's status column is a picker, not a read-out — without it
+    every row would render as the 'active' fallback and flipping one would look
+    like a no-op. It stays orthogonal to the returned_at filter above: a booking
+    that was never handed over is still un-returned, so pending and cancelled
+    rows belong in this list."""
     if not _is_admin_request():
         return jsonify({"error": "Not authorized"}), 403
     rows = query(
-        """SELECT rental_id, client_name, client_father, client_mother,
+        """SELECT rental_id, client_id, client_name, client_father, client_mother,
                   client_personid, client_nationality, client_dob, client_phone,
                   client_licenseid, client_photo,
-                  company_name, company_code, company_phone, company_location,
-                  company_x, company_y,
+                  company_id, company_name, company_code, company_phone,
+                  company_location, company_x, company_y,
                   car_vin, car_model, car_type, car_color, car_plate, car_has_gps,
-                  start_date, end_date
+                  start_date, end_date, status
              FROM v_client_rentals
             WHERE returned_at IS NULL
             ORDER BY start_date DESC
@@ -4223,23 +4231,29 @@ def _report_company(require_data=True):
 def reservations_report():
     """Reservation report for the calling company — every reservation with its
     client, car, dates, status and the branch the car belongs to. Read-only;
-    usable with an API key."""
+    usable with an API key.
+
+    Since migration 040 a reservation is a rental with status 'pending', so this
+    reads `rentals` and returns the bookings that haven't started yet. The row
+    shape is unchanged for existing integrations. Note `status` is now the
+    booking status ('pending'), where it used to be the reservation status —
+    the old 'inactive' value is 'cancelled' now and no longer appears here."""
     company_id, err = _report_company()
     if err:
         return err
     rows = query(
-        """SELECT rv.id, rv.car_vin, rv.client_id, rv.start_date, rv.end_date,
-                  rv.status, rv.notes, rv.created_at,
+        """SELECT r.id, r.car_vin, r.client_id, r.start_date, r.end_date,
+                  r.status, r.notes, r.created_at,
                   c.name  AS client_name, c.phonenumber AS client_phone,
                   ca.model AS car_model, ca.platenumber AS car_plate,
                   ca.branch_id AS car_branch_id,
                   COALESCE(b.branchname, 'Main') AS car_branch_name
-             FROM reservations rv
-             JOIN clients c  ON c.id = rv.client_id
-             JOIN cars    ca ON ca.vin = rv.car_vin
+             FROM rentals r
+             JOIN clients c  ON c.id = r.client_id
+             JOIN cars    ca ON ca.vin = r.car_vin
              LEFT JOIN branches b ON b.id = ca.branch_id
-            WHERE rv.company_id = %s
-            ORDER BY rv.created_at DESC""",
+            WHERE ca.company_id = %s AND r.status = 'pending'
+            ORDER BY r.created_at DESC""",
         (company_id,),
     )
     return jsonify(_clean(rows))

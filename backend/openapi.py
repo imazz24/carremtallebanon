@@ -411,12 +411,21 @@ def build_spec():
                         "start_date": {"type": "string", "format": "date", "example": "2026-08-01"},
                         "end_date": {"type": "string", "format": "date", "example": "2026-08-07",
                                      "description": "On or after start_date. Must not overlap another booking of the same car."},
+                        "status": {"type": "string", "enum": ["active", "pending", "cancelled"],
+                                   "default": "active", "example": "active",
+                                   "description": "Booking state. 'pending' = booked but not started "
+                                                  "(what used to be a reservation), 'active' = out with "
+                                                  "the renter, 'cancelled' = called off (frees the car). "
+                                                  "Optional — defaults to 'active'."},
+                        "notes": {"type": "string", "nullable": True, "example": "Airport pickup"},
                     },
                     "example": _RENTAL_EXAMPLE,
                 },
                 "ReservationInput": {
                     "type": "object",
-                    "description": "A future booking (reservation) for one of your cars.",
+                    "description": ("A future booking for one of your cars. Reservations are now simply "
+                                    "rentals with status 'pending' — this endpoint is kept unchanged for "
+                                    "compatibility and writes a pending rental."),
                     "required": ["car_vin", "client_id", "start_date", "end_date"],
                     "properties": {
                         "car_vin": {"type": "string", "example": "1HGCM82633A004352"},
@@ -450,6 +459,11 @@ def build_spec():
                                     "description": "VIN of one of your active cars (optional)."},
                         "start_date": {"type": "string", "format": "date", "example": "2026-09-01"},
                         "end_date": {"type": "string", "format": "date", "example": "2026-09-30"},
+                        "status": {"type": "string", "enum": ["active", "pending", "cancelled"],
+                                   "default": "active", "example": "active",
+                                   "description": "Booking state. 'pending' = agreed but not started, "
+                                                  "'active' = the company holds the car, 'cancelled' = "
+                                                  "called off. Optional — defaults to 'active'."},
                         "notes": {"type": "string", "nullable": True},
                     },
                     "example": _COMPANY_RENTAL_EXAMPLE,
@@ -494,7 +508,12 @@ def build_spec():
                         "client_id": {"type": "integer"},
                         "start_date": {"type": "string", "format": "date"},
                         "end_date": {"type": "string", "format": "date"},
-                        "status": {"type": "string"},
+                        "status": {"type": "string", "enum": ["pending"], "example": "pending",
+                                   "description": "Always 'pending' — this report lists bookings that "
+                                                  "haven't started. The old reservation states are gone: "
+                                                  "an activated booking is now a rental with status "
+                                                  "'active', and 'inactive' is now 'cancelled'; neither "
+                                                  "appears here. See GET /api/reports/rentals."},
                         "notes": {"type": "string", "nullable": True},
                         "created_at": {"type": "string", "format": "date-time"},
                         "client_name": {"type": "string"},
@@ -517,6 +536,11 @@ def build_spec():
                         "car_plate": {"type": "string"},
                         "start_date": {"type": "string", "format": "date"},
                         "end_date": {"type": "string", "format": "date"},
+                        "status": {"type": "string", "enum": ["active", "pending", "cancelled"],
+                                   "example": "active",
+                                   "description": "Booking state: 'pending' = booked but not started, "
+                                                  "'active' = out with the renter, 'cancelled' = called "
+                                                  "off (holds no car)."},
                         "car_branch_id": {"type": "integer", "nullable": True,
                                           "description": "Branch the car belongs to (null = head office)."},
                         "car_branch_name": {"type": "string", "example": "Main"},
