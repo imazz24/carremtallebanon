@@ -401,6 +401,11 @@ function refreshFilterDropdowns(){
   }
   populateFilterSelect($("#filter-report-client-co"), coRows.map(r => r.client_name));
   populateFilterSelect($("#filter-report-car-co"),    coRows.map(carLabel));
+  // Cars & Rentals → "rented by individuals" toolbar. Same rows, but its own
+  // pair of dropdowns: the hub's filters are deliberately kept apart from the
+  // Report tab's so neither clears the other.
+  populateFilterSelect($("#filter-ind-client"), coRows.map(r => r.client_name));
+  populateFilterSelect($("#filter-ind-car"),    coRows.map(carLabel));
 }
 
 // Applied companies-table filters. Only updated when the admin clicks "Search",
@@ -510,7 +515,9 @@ function renderCompanies(){
         <td>${logo}</td>
         <td><span class="company-name-cell"><span class="company-name-text">${escape(c.companyname)}</span>${branchToggle}</span></td>
         <td>${owner}</td>
-        <td class="company-loc-td">${locCell(c.location, c.x, c.y)}${mainHeadBadge}</td>
+        <td class="company-loc-td">${mainHeadBadge
+          ? `<span class="company-loc-stack">${locCell(c.location, c.x, c.y)}${mainHeadBadge}</span>`
+          : locCell(c.location, c.x, c.y)}</td>
         <td>${escape(c.companyid)}</td>
         <td>${phone}</td>
       </tr>`);
@@ -695,6 +702,10 @@ function renderFleet(){
       ? `${nCo} ${t(nCo === 1 ? "fleet.company" : "fleet.companies")} · ${totalCars} ${t(totalCars === 1 ? "fleet.carOne" : "fleet.carMany")}`
       : "";
   }
+
+  // The tab badge counts the same cars this tree is about to draw, so it moves
+  // with the fleet filters rather than lagging a filter behind.
+  if (typeof AdminCarsHub !== "undefined") AdminCarsHub.syncCounts();
 
   if (!companies.length){
     host.innerHTML = `<div class="fleet-empty">${escape(t("report.none"))}</div>`;
@@ -1007,14 +1018,26 @@ const EntityDetail = (() => {
   const K = (key) => escape(t(key));
 
   /* A saved company/branch coordinate is (x = lng, y = lat) — Google Maps wants
-     "lat,lng", so the query is y,x. Returns a "See location" link, or a dash. */
+     "lat,lng", so the query is y,x. Only the PDF export builds a Google link
+     now; on screen the location opens the in-app map instead (see locView). */
   const mapsUrl = (x, y) => (x != null && y != null)
     ? `https://www.google.com/maps?q=${encodeURIComponent(y)},${encodeURIComponent(x)}` : "";
-  const mapsLink = (x, y) => {
-    const u = mapsUrl(x, y);
-    return u
-      ? `<a href="${escape(u)}" target="_blank" rel="noopener" class="rd-maplink">${K("companies.seeLoc")}</a>`
-      : "—";
+
+  /* ONE location control: the place name and the map opener are the same thing.
+     This used to be two rows — "Location" (the name + a small pin button) and
+     "Map location" (a link out to Google Maps) — which named one place twice
+     and offered two different maps for it. Now the whole row is the control,
+     and it opens the in-app map full-page. Coordinates open it directly; a bare
+     place name is geocoded (MapPicker.openLocation handles both), so a company
+     that was never pinned still opens a map. */
+  const locView = (name, x, y) => {
+    const hasXY = x != null && y != null && x !== "";
+    if (!name && !hasXY) return "—";
+    const coordAttrs = hasXY ? ` data-x="${x}" data-y="${y}"` : "";
+    return `<button type="button" class="rd-loc-view" data-name="${escape(name || "")}"${coordAttrs} title="${K("companies.viewOnMap")}">`
+      + `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s7-6.5 7-11.5A7 7 0 0 0 5 9.5C5 14.5 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>`
+      + `<span class="rd-loc-view-text">${name ? escape(name) : K("companies.seeLoc")}</span>`
+      + `</button>`;
   };
 
   /* A clickable map-pin that opens the location on the in-app map. Coordinates
@@ -1045,18 +1068,19 @@ const EntityDetail = (() => {
       <dl class="detail-grid">
         <dt>${K("register.f.owner")}</dt>  <dd>${V(c.owner_name)}</dd>
         <dt>${K("companies.f.cid")}</dt>   <dd>${V(c.companyid)}</dd>
-        <dt>${K("companies.f.loc")}</dt>   <dd>${V(c.location)}${locPin(c.location, c.x, c.y)}</dd>
+        <dt>${K("companies.f.loc")}</dt>   <dd>${locView(c.location, c.x, c.y)}</dd>
         <dt>${K("companies.f.phone")}</dt> <dd>${c.phonenumber ? formatPhonesCell(c.phonenumber) : "—"}</dd>
-        <dt>${K("companies.f.maploc")}</dt><dd>${mapsLink(c.x, c.y)}</dd>
       </dl>
       <section class="rd-branch-section">
         <h4 class="rd-h">${K("detail.branches")} (${branches.length})</h4>
         ${brHtml}
       </section>`;
   }
-  // Wire every map-pin in the company modal to open the in-app map viewer.
+  // Wire every map control in the company modal to open the in-app map viewer:
+  // the one big location row (.rd-loc-view) and the small per-branch pins in the
+  // branch list (.rd-loc-pin), which point at different places and so stay.
   function bindLocPins(root){
-    $$(".rd-loc-pin", root).forEach(btn => {
+    $$(".rd-loc-pin, .rd-loc-view", root).forEach(btn => {
       btn.addEventListener("click", () => {
         MapPicker.openLocation({
           x: btn.dataset.x != null ? Number(btn.dataset.x) : null,
@@ -1122,9 +1146,8 @@ const EntityDetail = (() => {
       <div class="rd-idhead"><div class="rd-idname">${V(b.branchname)}${head}</div></div>
       <dl class="detail-grid">
         <dt>${K("cars.f.company")}</dt> <dd><strong>${V(b.companyname)}</strong></dd>
-        <dt>${K("companies.f.loc")}</dt> <dd>${V(b.location)}${locPin(b.location, b.x, b.y)}</dd>
+        <dt>${K("companies.f.loc")}</dt> <dd>${locView(b.location, b.x, b.y)}</dd>
         <dt>${K("companies.f.phone")}</dt> <dd>${b.phonenumber ? `<span class="ltr">${escape(b.phonenumber)}</span>` : "—"}</dd>
-        <dt>${K("companies.f.maploc")}</dt> <dd>${mapsLink(b.x, b.y)}</dd>
       </dl>`;
   }
   function openBranch(branchId){
@@ -1285,13 +1308,11 @@ function getReportRows(){
     // Date filter = "rentals active in this range" (overlap).
     if (from) rows = rows.filter(r => r.end_date   && r.end_date   >= from);
     if (to)   rows = rows.filter(r => r.start_date && r.start_date <= to);
-    // With no filter active, default to the last 30 days so the initial
-    // view stays small; any filter unlocks the full history.
-    if (!client && !car && !from && !to){
-      const cutoff = new Date();
-      cutoff.setMonth(cutoff.getMonth() - 1);
-      rows = rows.filter(r => r.start_date && new Date(r.start_date) >= cutoff);
-    }
+    // No 30-day default here any more. The table groups these rows into one
+    // row per client and calls the panel below it that client's HISTORY — a
+    // history that silently stopped a month back would be a lie. Size is held
+    // by paging the CLIENTS instead (see renderReportCompany), and From/To are
+    // there for anyone who does want a window.
   } else if (u && u.role === "admin"){
     const company = $("#filter-report-company")?.value || "";
     const client  = $("#filter-report-client")?.value  || "";
@@ -1329,6 +1350,157 @@ function _daysBetween(a, b){
   return Math.max(0, Math.round((d2 - d1) / 86400000));
 }
 
+/* ============== ADMIN REPORT: ONE RENTAL, ONE MODAL ==============
+   The report row used to expand a panel underneath itself. It opens this modal
+   instead — same receipt (Company / Vehicle / Client / Rental period), but with
+   room to show the fields the row can't: both sides' phone lists, colour, plate,
+   exact dates, booking status.
+
+   `open()` is handed the report row OBJECT, and reads nothing back out of the
+   DOM. That matters: the table underneath can re-render — a filter change, a
+   page turn, a language switch — without this modal going stale or losing what
+   it's showing.
+
+   The three drill buttons leave for the company / client / vehicle modals, which
+   are untouched. This one closes as they open, so two backdrops never stack. */
+const ReportRow = (() => {
+  let _cur = null;      // the rental currently on screen
+  let _wired = false;
+
+  const dash = `<span class="cell-dash">—</span>`;
+  const ltr  = (v) => `<span class="ltr">${escape(v)}</span>`;
+  const day  = (d) => d ? ltr(String(d).slice(0, 10)) : dash;
+  // A phone field may hold several numbers joined by commas/semicolons — render
+  // each on its own line as a tappable tel: link so two+ numbers stay readable.
+  const telList = (raw) => {
+    const parts = String(raw || "").split(/[,;\n/]+/).map(s => s.trim()).filter(Boolean);
+    if (!parts.length) return dash;
+    return parts.map(p => `<a href="tel:${escape(p)}" class="ltr rd-phone">${escape(p)}</a>`).join("");
+  };
+  const yn = (on) => on
+    ? `<span class="badge yes">${escape(t("yes"))}</span>`
+    : `<span class="badge no">${escape(t("no"))}</span>`;
+  // A labelled field (key left, value right).
+  const field = (key, val) =>
+    `<div class="rd-item"><span class="rd-k">${escape(t(key))}</span><span class="rd-v">${val}</span></div>`;
+  // A titled group of fields.
+  const group = (titleKey, fieldsHtml) =>
+    `<section class="rd-group"><h4 class="rd-h">${escape(t(titleKey))}</h4><div class="rd-fields">${fieldsHtml}</div></section>`;
+
+  const ICO = {
+    company: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M15 9h.01M9 13h.01M15 13h.01M10 21v-4h4v4"/></svg>`,
+    client:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>`,
+    car:     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 17h14M4 17v-4l2-5h12l2 5v4"/><circle cx="7.5" cy="17" r="1.8"/><circle cx="16.5" cy="17" r="1.8"/></svg>`,
+  };
+  // A drill button, but only when there's actually something to open — a row
+  // missing its client_id would otherwise render a button that does nothing.
+  const drill = (kind, key, labelKey) => (key == null || key === "")
+    ? ""
+    : `<button type="button" class="rd-drill" data-drill="${escape(kind)}" data-drillkey="${escape(String(key))}">`
+      + `${ICO[kind]}<span>${escape(t(labelKey))}</span></button>`;
+
+  function bodyHtml(r){
+    const status = _raStatus(r, _raToday()) === "active"
+      ? `<span class="badge yes">${escape(t("report.active"))}</span>`
+      : `<span class="badge no">${escape(t("report.ended"))}</span>`;
+    return `
+      <div class="report-detail">
+        ${group("report.company",
+            field("report.cname",  r.company_name ? escape(r.company_name) : dash) +
+            field("report.cphone", telList(r.company_phone)))}
+        ${group("report.vehicle",
+            field("cars.f.model", r.car_model ? escape(r.car_model) : dash) +
+            field("cars.f.color", r.car_color ? escape(r.car_color) : dash) +
+            field("report.plate", r.car_plate ? ltr(r.car_plate) : dash) +
+            field("report.gps",   yn(r.car_has_gps)))}
+        ${group("report.client",
+            field("report.cliName", r.client_name ? escape(r.client_name) : dash) +
+            field("report.phone",   telList(r.client_phone)))}
+        ${group("report.period",
+            field("report.from",   day(r.start_date)) +
+            field("report.to",     day(r.end_date)) +
+            field("report.status", status))}
+        <div class="rd-drills">
+          ${drill("company", r.company_id, "report.openCompany")}
+          ${drill("client",  r.client_id,  "report.openClient")}
+          ${drill("car",     r.car_vin,    "report.openVehicle")}
+        </div>
+      </div>`;
+  }
+
+  function open(r){
+    if (!r) return;
+    _cur = r;
+    const body = $("#report-row-body");
+    if (body) body.innerHTML = bodyHtml(r);
+    // Name the rental in the title bar so a stack of these is still legible.
+    const ttl = $("#report-row-title");
+    if (ttl){
+      const who = [r.car_model, r.client_name].filter(Boolean).join(" · ");
+      ttl.textContent = who ? `${t("report.rowTitle")} — ${who}` : t("report.rowTitle");
+    }
+    showModal("#report-row-modal");
+  }
+  const close = () => hideModal("#report-row-modal");
+
+  function setup(){
+    if (_wired) return;
+    _wired = true;
+    $("#report-row-close")?.addEventListener("click", close);
+    $("#report-row-cancel")?.addEventListener("click", close);
+    // Click the backdrop (not the card) to dismiss — the house pattern.
+    $("#report-row-modal")?.addEventListener("click", (e) => {
+      if (e.target.id === "report-row-modal") close();
+    });
+    // Photos / video / extra drivers live in the shared Detail modal. Hand off.
+    $("#report-row-media")?.addEventListener("click", () => {
+      const r = _cur;
+      close();
+      if (r) Detail.open(r);
+    });
+    // Drilling leaves for another modal; close first so only one is ever up.
+    $("#report-row-body")?.addEventListener("click", (e) => {
+      const b = e.target.closest(".rd-drill");
+      if (!b) return;
+      const { drill: kind, drillkey: key } = b.dataset;
+      close();
+      EntityDetail.open(kind, key);
+    });
+  }
+
+  return { open, close, setup };
+})();
+
+/* The admin report's currently-rendered rows, and whether its tbody has been
+   wired yet. The tbody OUTLIVES a re-render (only its innerHTML is replaced),
+   so its click listener must be attached exactly once — attaching it per render
+   would stack a fresh copy each time and open the modal once per past render.
+   The listener therefore reads the rows from here rather than from a closure. */
+let _reportRows = [];
+let _reportRowsWired = false;
+
+/* Delegated, so it survives the tbody's innerHTML being rewritten. The drill
+   cells and the row itself both want the click; the innermost match wins:
+     .cell-drill   -> that entity's own modal (company / vehicle / client)
+     <a>           -> a tel: link, leave it alone
+     anywhere else -> this rental's full record, in the ReportRow modal */
+function wireReportRowClicks(tbl){
+  if (_reportRowsWired || !tbl || !tbl.tBodies[0]) return;
+  _reportRowsWired = true;
+  tbl.tBodies[0].addEventListener("click", (e) => {
+    const drill = e.target.closest(".cell-drill");
+    if (drill){
+      EntityDetail.open(drill.dataset.drill, drill.dataset.drillkey);
+      return;
+    }
+    if (e.target.closest("a")) return;
+    const tr = e.target.closest("tr.report-row");
+    if (!tr) return;
+    // data-row is the page-ABSOLUTE index, so page 2 opens page 2's rentals.
+    ReportRow.open(_reportRows[Number(tr.dataset.row)]);
+  });
+}
+
 function renderReport(){
   const tbl = $("#tbl-report");
   const rows = getReportRows();
@@ -1338,16 +1510,17 @@ function renderReport(){
   if (_u && _u.role === "company") return renderReportCompany(rows);
   renderReportAnalytics(rows);
   if (!rows.length){
-    const pt = $("#pager-top-report"); if (pt) pt.hidden = true;
-    const pb = $("#pager-report"); if (pb) pb.hidden = true;
+    if (typeof AdminCarsHub !== "undefined") AdminCarsHub.syncReportCount(0);
+    const pt = $("#pager-top-report-admin"); if (pt) pt.hidden = true;
+    const pb = $("#pager-report-admin"); if (pb) pb.hidden = true;
     return emptyRow(tbl, 7);
   }
 
   // The admin report is a COMPACT summary — one row per rental showing
-  //   company · vehicle · client · period · GPS(green/red) · status(green/red)
-  // plus a 👁 button. Clicking 👁 (or the row) EXPANDS an inline detail panel
-  // beneath the row that lists every field (both phones, colour, plate, exact
-  // dates, status…) and a button to the full media / extra-driver modal.
+  //   company · vehicle · client · period · GPS(green/red) · status(picker)
+  // plus a Details button. Clicking that button, or anywhere else on the row,
+  // opens the ReportRow MODAL with every field (both phones, colour, plate,
+  // exact dates, status) and the way out to photos / extra drivers.
   // Atomic Latin tokens (dates, phones, plate) are LTR-isolated so they read
   // correctly even when the UI is Arabic/RTL.
   const info  = Pager.slice("report", rows);
@@ -1355,160 +1528,245 @@ function renderReport(){
   const ltr   = (v) => `<span class="ltr">${escape(v)}</span>`;
   const dash  = `<span class="cell-dash">—</span>`;
   const day   = (d) => d ? String(d).slice(0, 10) : "";
-  const dayC  = (d) => d ? ltr(String(d).slice(0, 10)) : dash;   // for detail cells
-  const tel   = (p) => p ? `<a href="tel:${escape(p)}" class="ltr">${escape(p)}</a>` : dash;
-  // A phone field may hold several numbers joined by commas/semicolons — render
-  // each on its own line as a tappable tel: link so two+ numbers stay readable.
-  const telList = (raw) => {
-    const parts = String(raw || "").split(/[,;\n/]+/).map(s => s.trim()).filter(Boolean);
-    if (!parts.length) return dash;
-    return parts.map(p => `<a href="tel:${escape(p)}" class="ltr rd-phone">${escape(p)}</a>`).join("");
-  };
   // green Yes / red No pill (badge yes|no).
   const yn = (on) => on
     ? `<span class="badge yes">${escape(t("yes"))}</span>`
     : `<span class="badge no">${escape(t("no"))}</span>`;
-  // A labelled field (key left, value right) inside the expanded detail panel.
-  const field = (key, val) =>
-    `<div class="rd-item"><span class="rd-k">${escape(t(key))}</span><span class="rd-v">${val}</span></div>`;
-  // A titled group of fields inside the detail panel.
-  const group = (titleKey, fieldsHtml) =>
-    `<section class="rd-group"><h4 class="rd-h">${escape(t(titleKey))}</h4><div class="rd-fields">${fieldsHtml}</div></section>`;
+  // Between 721 and 1024px every row becomes a card and the <thead> is hidden,
+  // so a cell's only label is its data-label. Without one it right-aligns bare
+  // and you're left guessing which date is which.
+  const lbl = (k) => escape(t(k));
 
   tbl.tBodies[0].innerHTML = info.rows.map((r, i) => {
     const idx = (info.page - 1) * info.size + i;
-    // Active = out and not yet past its end date; anything else is "ended".
-    const status = _raStatus(r, today) === "active"
-      ? `<span class="badge yes">${escape(t("report.active"))}</span>`
-      : `<span class="badge no">${escape(t("report.ended"))}</span>`;
+    // The status cell READS the booking state the owning company set — it is
+    // not a control. Moving a booking is that company's call, from its own Cars
+    // & Rentals tables; the admin sees the result across every company.
+    // A RETURNED booking shows "Returned" and nothing else: the car is back, so
+    // the booking is settled and the state it was in on the way there is
+    // history. Pairing the two ("Active · Returned") read as a contradiction.
+    // Only an ACTIVE booking carries the date-derived Overdue badge — a pending
+    // or cancelled one has no car out to be late.
+    const bs = r.status || "active";
+    const status = r.returned_at
+      ? `<span class="return-badge returned">${escape(t("special.status.returned"))}</span>`
+      : statusTag(bs, bs === "active" && _raStatus(r, today) === "overdue"
+          ? `<span class="return-badge overdue">${escape(t("returns.overdue"))}</span>` : "");
     const gps    = yn(r.car_has_gps);
     const period = `${ltr(day(r.start_date)) || dash}<span class="rp-arrow">→</span>${ltr(day(r.end_date)) || dash}`;
 
-    // The full breakdown shown when the row is expanded — grouped into
-    // Company / Vehicle / Client / Rental cards so it reads like a receipt.
-    const detail = `
-      <div class="report-detail">
-        ${group("report.company", field("report.cphone", telList(r.company_phone)))}
-        ${group("report.vehicle",
-            field("cars.f.model", r.car_model ? escape(r.car_model) : dash) +
-            field("cars.f.color", r.car_color ? escape(r.car_color) : dash) +
-            field("report.plate", r.car_plate ? ltr(r.car_plate) : dash) +
-            field("report.gps",   gps))}
-        ${group("report.client", field("report.phone", telList(r.client_phone)))}
-        ${group("report.period",
-            field("report.from",   dayC(r.start_date)) +
-            field("report.to",     dayC(r.end_date)) +
-            field("report.status", status))}
-        <div class="report-detail-actions">
-          <button type="button" class="row-btn report-media" data-media="${idx}">${escape(t("report.openMedia"))}</button>
-        </div>
-      </div>`;
-
-    return `<tr data-row="${idx}" class="report-row">
-        <td data-col="company">${drillCell("company", r.company_id, r.company_name, true)}</td>
-        <td data-col="vehicle">${drillCell("car", r.car_vin, r.car_model, false)}</td>
-        <td data-col="client">${drillCell("client", r.client_id, r.client_name, true)}</td>
-        <td data-col="period">${period}</td>
-        <td data-col="gps">${gps}</td>
-        <td data-col="status">${status}</td>
+    return `<tr data-row="${idx}" class="report-row al-click-row">
+        <td data-col="company" data-label="${lbl("report.company")}">${drillCell("company", r.company_id, r.company_name, true)}</td>
+        <td data-col="vehicle" data-label="${lbl("report.vehicle")}">${drillCell("car", r.car_vin, r.car_model, false)}</td>
+        <td data-col="client" data-label="${lbl("report.client")}">${drillCell("client", r.client_id, r.client_name, true)}</td>
+        <td data-col="period" data-label="${lbl("report.period")}">${period}</td>
+        <td data-col="gps" data-label="${lbl("report.gps")}">${gps}</td>
+        <td data-col="status" data-label="${lbl("report.status")}">${status}</td>
         <td data-col="view">
           <button type="button" class="row-btn report-view" data-detail="${idx}"
-                  aria-expanded="false" aria-controls="report-detail-${idx}"
-                  title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">
+                  title="${escape(t("report.rowTitle"))}"
+                  aria-label="${escape(t("report.rowTitle"))}">${ROW_MORE_ICO}</button>
+        </td>
+      </tr>`;
+  }).join("");
+
+  // The rows the delegated listener resolves against. renderReport re-runs on
+  // every filter change and page turn, so the listener can't close over `rows`
+  // — it would answer with the first render's data forever.
+  _reportRows = rows;
+  wireReportRowClicks(tbl);
+
+  // The tab badge counts what's ON SCREEN, so it tracks the toolbar filters
+  // instead of lagging a filter behind. Same reason the fleet badge reads
+  // fleet.summary. Guarded: the company role renders no hub.
+  if (typeof AdminCarsHub !== "undefined") AdminCarsHub.syncReportCount(rows.length);
+
+  Pager.render("report", "#pager-top-report-admin", "#pager-report-admin", info, renderReport);
+}
+
+/* Which clients' history panels are open in the company report. Keyed the same
+   way the master rows are, so an open panel survives a re-render (a filter
+   change, a page turn, a language switch) instead of snapping shut. */
+const expandedReportClients = new Set();
+
+/* Fold the filtered rental rows into ONE ENTRY PER CLIENT — the master rows of
+   the company report. Every entry keeps its own rentals (newest first), so the
+   panel below it reads as that client's history with this company.
+   The rows arriving here are already scoped to the company and narrowed by the
+   toolbar (see getReportRows), so both levels answer the same filter. */
+function groupReportByClient(rows){
+  const byClient = new Map();
+  rows.forEach((r, idx) => {
+    // client_id is the identity; the name is only a fallback for a row that
+    // somehow arrives without one, so two same-named clients never merge.
+    const key = r.client_id != null ? `id:${r.client_id}` : `name:${r.client_name || ""}`;
+    let g = byClient.get(key);
+    if (!g){
+      g = { key, name: r.client_name || "", phone: r.client_phone || "", rentals: [] };
+      byClient.set(key, g);
+    }
+    // Keep the row's index in `rows` — that's what the media button reopens.
+    g.rentals.push({ r, idx });
+    if (!g.phone && r.client_phone) g.phone = r.client_phone;
+  });
+  const started = (x) => String(x.r.start_date || "").slice(0, 10);
+  const groups = [...byClient.values()];
+  groups.forEach(g => {
+    g.rentals.sort((a, b) => started(b).localeCompare(started(a)));
+    // Distinct cars, not rentals: renting the same car twice is one car.
+    g.cars   = new Set(g.rentals.map(x => x.r.car_vin || carLabel(x.r))).size;
+    g.latest = g.rentals[0].r;
+  });
+  // Most recently active client first — the history you're most likely after.
+  return groups.sort((a, b) =>
+    String(b.latest.start_date || "").localeCompare(String(a.latest.start_date || "")));
+}
+
+/* Company rental report — a MASTER–DETAIL history of the company's own clients.
+   Master row: client · phone · rentals · distinct cars · latest period · toggle.
+   Detail panel: every car that client rented from this company, newest first,
+   each with plate / colour / GPS / dates / booking status and a button to the
+   shared Detail modal (photos, video, extra driver).
+   Paging counts CLIENTS here, not rentals — the table's unit is the client. */
+function renderReportCompany(rows){
+  const tbl = $("#tbl-report-co");
+  if (!tbl) return;
+  const groups = groupReportByClient(rows);
+  // Push the FILTERED client count at the hub's tab badge, same as the admin
+  // report pushes its own (see AdminCarsHub.syncReportCount). Pulling it from
+  // the hub would report the unfiltered feed and lag the toolbar by one change.
+  if (typeof CoClientsHub !== "undefined") CoClientsHub.syncHistoryCount(groups.length);
+  if (!groups.length){
+    const pt = $("#pager-top-report"); if (pt) pt.hidden = true;
+    const pb = $("#pager-report");     if (pb) pb.hidden = true;
+    return emptyRow(tbl, 6);
+  }
+  const info  = Pager.slice("report", groups);
+  const today = _raToday();
+  const ltr   = (v) => `<span class="ltr">${escape(v)}</span>`;
+  const dash  = `<span class="cell-dash">—</span>`;
+  const day   = (d) => d ? ltr(String(d).slice(0, 10)) : dash;
+  const lbl   = (key) => escape(t(key));
+  const gpsPill = (on) => on
+    ? `<span class="badge yes">${escape(t("yes"))}</span>`
+    : `<span class="badge no">${escape(t("no"))}</span>`;
+
+  // One rental inside a client's history panel.
+  const historyItem = (r, idx) => {
+    // Booking state (pending / active / cancelled) as a read-only pill — the
+    // report reads history; moving a booking is the Cars & Rentals tables' job.
+    // A RETURNED rental shows "Returned" ALONE: the car is back, the booking is
+    // settled, and the state it held on the way there is history. Only an
+    // un-returned, non-cancelled booking can still be out and therefore late.
+    const st = BOOKING_STATUSES.includes(r.status) ? r.status : "active";
+    let tags;
+    if (r.returned_at){
+      tags = `<span class="return-badge returned">${escape(t("special.status.returned"))}</span>`;
+    } else {
+      const late = st !== "cancelled" && _raStatus(r, today) === "overdue"
+        ? `<span class="return-badge overdue">${escape(t("returns.overdue"))}</span>` : "";
+      tags = `<span class="status-tag ${st}">${escape(t("status." + st + ".short"))}</span>${late}`;
+    }
+    return `<li class="ch-item${st === "cancelled" ? " ch-item-off" : ""}">
+      <div class="ch-car">
+        <span class="ch-model">${r.car_model ? escape(r.car_model) : dash}</span>
+        <span class="ch-sub">
+          <span class="ch-plate">${r.car_plate ? ltr(r.car_plate) : dash}</span>
+          <span class="ch-dot" aria-hidden="true">·</span>
+          <span class="ch-color">${r.car_color ? escape(r.car_color) : dash}</span>
+          <span class="ch-dot" aria-hidden="true">·</span>
+          <span class="ch-gps">${lbl("report.gps")} ${gpsPill(r.car_has_gps)}</span>
+        </span>
+      </div>
+      <div class="ch-dates">${day(r.start_date)}<span class="rp-arrow">→</span>${day(r.end_date)}</div>
+      <div class="ch-tags">${tags}</div>
+      <button type="button" class="row-btn ch-media" data-media="${idx}">${lbl("report.openMedia")}</button>
+    </li>`;
+  };
+
+  tbl.tBodies[0].innerHTML = info.rows.map((g, i) => {
+    const open  = expandedReportClients.has(g.key);
+    const panel = `history-${info.page}-${i}`;
+    const count = g.rentals.length;
+    const period = `${day(g.latest.start_date)}<span class="rp-arrow">→</span>${day(g.latest.end_date)}`;
+    const avatar = `<span class="ch-avatar" style="background:${_avatarColor(g.name)}" aria-hidden="true">${escape(_initials(g.name))}</span>`;
+
+    // The panel ships EMPTY — its list and pager are filled in below, by the
+    // same function a page turn calls, so first paint and page 2 go through
+    // one code path.
+    return `<tr class="client-master-row${open ? " is-expanded" : ""}" data-client="${escape(g.key)}">
+        <td data-col="client" data-label="${lbl("report.client")}">
+          <span class="ch-client">${avatar}<strong>${escape(g.name) || "—"}</strong></span>
+        </td>
+        <td data-col="phone" data-label="${lbl("report.phone")}">${formatPhonesCell(g.phone)}</td>
+        <td data-col="rentals" data-label="${lbl("report.rentals")}">${count}</td>
+        <td data-col="cars" data-label="${lbl("report.carsCount")}">${g.cars}</td>
+        <td data-col="latest" data-label="${lbl("report.latest")}">${period}</td>
+        <td data-col="view">
+          <button type="button" class="row-btn client-toggle" aria-expanded="${open}"
+                  aria-controls="${panel}"
+                  title="${escape(t(open ? "report.hide" : "report.history"))}"
+                  aria-label="${escape(t(open ? "report.hide" : "report.history"))}">
             <span class="rv-eye" aria-hidden="true">${ROW_MORE_ICO}</span>
             <span class="rv-chev" aria-hidden="true">⌄</span>
           </button>
         </td>
       </tr>
-      <tr class="report-detail-row" id="report-detail-${idx}" hidden>
-        <td colspan="7">${detail}</td>
+      <tr class="client-history-row" id="${panel}"${open ? "" : " hidden"}>
+        <td colspan="6">
+          <div class="client-history">
+            <h4 class="ch-h">${lbl("report.history")} · ${count} ${lbl(count === 1 ? "report.result" : "report.results")}</h4>
+            <div id="${panel}-top" class="pager-wrap ch-pager" hidden></div>
+            <ol id="${panel}-list" class="ch-list"></ol>
+            <div id="${panel}-nav" class="pager-wrap ch-pager" hidden></div>
+          </div>
+        </td>
       </tr>`;
   }).join("");
 
-  // Toggle the inline detail panel from the 👁 button or a click on the row.
-  const toggleDetail = (idx, btn) => {
-    const dr = document.getElementById(`report-detail-${idx}`);
-    if (!dr) return;
-    const opening = dr.hasAttribute("hidden");
-    if (opening) dr.removeAttribute("hidden"); else dr.setAttribute("hidden", "");
+  /* Fill (or re-fill) one client's history list — a long-standing client can
+     have more rentals than anyone wants to scroll, so the panel pages too.
+     Its pager is keyed by CLIENT, not by screen position, so the page a client
+     is on survives a re-render and two open panels page independently. Pager
+     hides itself at ≤10 entries, so a short history stays a plain list. */
+  const renderHistory = (g, panel) => {
+    const list = $(`#${panel}-list`);
+    if (!list) return;
+    const key = `report-history:${g.key}`;
+    const hi  = Pager.slice(key, g.rentals);
+    list.innerHTML = hi.rows.map(x => historyItem(x.r, x.idx)).join("");
+    // Each entry's button opens that rental's full record (photos, video, extra
+    // driver) — the same modal the flat list used to open on a row click. Bound
+    // per page: these buttons are replaced on every page turn.
+    $$(".ch-media", list).forEach(b => {
+      b.addEventListener("click", () => Detail.open(rows[Number(b.dataset.media)]));
+    });
+    Pager.render(key, `#${panel}-top`, `#${panel}-nav`, hi, () => renderHistory(g, panel));
+  };
+  info.rows.forEach((g, i) => renderHistory(g, `history-${info.page}-${i}`));
+
+  // Open / close a client's history in place — no re-render, so the rest of
+  // the page (and any other open panel) stays exactly where it was.
+  const toggle = (tr) => {
+    const key  = tr.dataset.client;
+    const btn  = $(".client-toggle", tr);
+    const row  = tr.nextElementSibling;
+    if (!row || !row.classList.contains("client-history-row")) return;
+    const open = row.hasAttribute("hidden");
+    row.hidden = !open;
+    tr.classList.toggle("is-expanded", open);
+    if (open) expandedReportClients.add(key); else expandedReportClients.delete(key);
     if (btn){
-      btn.setAttribute("aria-expanded", String(opening));
-      // Flip the label so the icon reads as "view" (closed) / "hide" (open).
-      const lbl = opening ? t("report.hide") : t("action.view");
-      btn.title = lbl; btn.setAttribute("aria-label", lbl);
+      btn.setAttribute("aria-expanded", String(open));
+      const label = t(open ? "report.hide" : "report.history");
+      btn.title = label; btn.setAttribute("aria-label", label);
     }
   };
-  $$("tr.report-row", tbl).forEach(tr => {
-    const idx = Number(tr.dataset.row);
-    const btn = $(".report-view", tr);
+  $$("tr.client-master-row", tbl).forEach(tr => {
     tr.addEventListener("click", (e) => {
       if (e.target.closest("a")) return;   // don't hijack tel: links
-      toggleDetail(idx, btn);
+      toggle(tr);
     });
-  });
-  // Company / car / client values jump to that entity's detail modal. Stop the
-  // click bubbling so it doesn't also toggle the inline detail row.
-  $$(".cell-drill", tbl).forEach(b => {
-    b.addEventListener("click", (e) => {
-      e.stopPropagation();
-      EntityDetail.open(b.dataset.drill, b.dataset.drillkey);
-    });
-  });
-  // The detail panel's button opens the full modal (photos / video / extra driver).
-  $$(".report-media", tbl).forEach(b => {
-    b.addEventListener("click", (e) => {
-      e.stopPropagation();
-      Detail.open(rows[Number(b.dataset.media)]);
-    });
-  });
-  Pager.render("report", "#pager-top-report", "#pager-report", info, renderReport);
-}
-
-/* Company rental report — a compact, at-a-glance list. Columns:
-   client full name · phone · vehicle · color · plate · GPS (green/red) ·
-   from · to · 👁. The eye button (and any row click) opens the shared
-   Detail modal, where the company can view the record and attach photos,
-   a video, or an extra driver (co-renter). */
-function renderReportCompany(rows){
-  const tbl = $("#tbl-report-co");
-  if (!tbl) return;
-  if (!rows.length){
-    const pt = $("#pager-top-report"); if (pt) pt.hidden = true;
-    const pb = $("#pager-report");     if (pb) pb.hidden = true;
-    return emptyRow(tbl, 9);
-  }
-  const info = Pager.slice("report", rows);
-  const ltr  = (v) => `<span class="ltr">${escape(v)}</span>`;
-  const dash = `<span class="cell-dash">—</span>`;
-  const day  = (d) => d ? ltr(String(d).slice(0, 10)) : dash;
-
-  tbl.tBodies[0].innerHTML = info.rows.map((r, i) => {
-    const idx = (info.page - 1) * info.size + i;
-    // GPS: green "Yes" / red "No" pill (badge yes|no).
-    const gps = r.car_has_gps
-      ? `<span class="badge yes">${escape(t("yes"))}</span>`
-      : `<span class="badge no">${escape(t("no"))}</span>`;
-    const phone = r.client_phone
-      ? `<a href="tel:${escape(r.client_phone)}" class="ltr">${escape(r.client_phone)}</a>`
-      : dash;
-    return `<tr data-row="${idx}" class="report-row">
-      <td data-col="client"><strong>${escape(r.client_name) || "—"}</strong></td>
-      <td data-col="phone">${phone}</td>
-      <td data-col="vehicle">${r.car_model ? escape(r.car_model) : dash}</td>
-      <td data-col="color">${r.car_color ? escape(r.car_color) : dash}</td>
-      <td data-col="plate">${r.car_plate ? ltr(r.car_plate) : dash}</td>
-      <td data-col="gps">${gps}</td>
-      <td data-col="from">${day(r.start_date)}</td>
-      <td data-col="to">${day(r.end_date)}</td>
-      <td data-col="view">
-        <button type="button" class="row-btn report-view" data-detail="${idx}"
-                title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">${ROW_MORE_ICO}</button>
-      </td>
-    </tr>`;
-  }).join("");
-
-  $$("tr.report-row", tbl).forEach(tr => {
-    tr.addEventListener("click", () => Detail.open(rows[Number(tr.dataset.row)]));
   });
   Pager.render("report", "#pager-top-report", "#pager-report", info, renderReport);
 }
@@ -3806,21 +4064,21 @@ function setupAddCarForm(){
       const vinHintEl = $("#add-car-vin-hint");
       if (vinHintEl){ vinHintEl.hidden = true; vinHintEl.textContent = ""; }
       lastVinSeen = "";
-      showAddCarStatus(editing
-        ? t("addCar.updated")
-        : t("addCar.saved").replace("{plate}", platenumber));
+      // Saved — drop the modal so the fleet table behind it is what you see.
+      // The toast carries the confirmation; the in-modal banner would be hidden.
+      hideModal("#add-car-modal");
       toast(editing ? t("toast.saved") : t("toast.added"), "success");
       // Refresh this tab's own table and the create-rental / create-reservation
       // Car dropdowns so the new/edited entry shows without a page refresh.
       await refreshMyCarsTable();
       refreshRentalPickers();
-      Reservations.refreshPickers();
+      if (typeof CarsHub !== "undefined") CarsHub.show("fleet");
     } catch (err){
       toast(err.message || t("toast.error"), "error");
     }
   });
 
-  // ---- Edit-an-existing-car (typo correction, max 2×, VIN locked) ----
+  // ---- Edit-an-existing-car (typo correction, unlimited, VIN locked) ----
   const carSubmitBtn = $("#add-car-submit");
   const carCancelBtn = $("#add-car-cancel-edit");
 
@@ -3838,8 +4096,12 @@ function setupAddCarForm(){
     }
     if (carCancelBtn) carCancelBtn.hidden = false;
     form.classList.add("car-editing");
+    // The form lives in a modal now — retitle it and bring it up rather than
+    // scrolling to a panel that isn't on the page.
+    const ttl = $("#add-car-modal-title");
+    if (ttl){ ttl.removeAttribute("data-i18n"); ttl.textContent = t("addCar.editTitle"); }
+    showModal("#add-car-modal");
     showAddCarStatus(t("addCar.editingNow").replace("{plate}", c.platenumber || c.vin || ""));
-    form.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function exitCarEditMode(){
@@ -3849,6 +4111,8 @@ function setupAddCarForm(){
       carSubmitBtn.setAttribute("data-i18n", "addCar.action");
       carSubmitBtn.textContent = t("addCar.action");
     }
+    const ttl = $("#add-car-modal-title");
+    if (ttl){ ttl.setAttribute("data-i18n", "addCar.title"); ttl.textContent = t("addCar.title"); }
     if (carCancelBtn) carCancelBtn.hidden = true;
     form.classList.remove("car-editing");
     const vinInput2 = form.querySelector('input[name="vin"]');
@@ -3862,8 +4126,27 @@ function setupAddCarForm(){
       exitCarEditMode();
       form.reset();
       showAddCarStatus._t && clearTimeout(showAddCarStatus._t);
+      hideModal("#add-car-modal");
     });
   }
+
+  // Opening a blank Add-Car modal: always start from a clean, non-edit form so
+  // a half-finished edit never leaks into the next car you add.
+  window.openAddCarModal = () => {
+    exitCarEditMode();
+    form.reset();
+    clearAllFieldErrors(form);
+    [$("#add-car-type"), $("#add-car-model"), $("#add-car-color"), $("#add-car-icon"), $("#add-car-branch")].forEach(sel => {
+      if (!sel) return;
+      sel.value = "";
+      if (sel._ss) sel._ss.sync();
+    });
+    showAddCarStatus._t && clearTimeout(showAddCarStatus._t);
+    const st = $("#add-car-status"); if (st){ st.hidden = true; st.textContent = ""; }
+    showVinMode("picker");
+    loadFormBranches();
+    showModal("#add-car-modal");
+  };
 
   async function refreshMyCarsTable(){
     const tb = $("#my-cars-rows");
@@ -3876,13 +4159,12 @@ function setupAddCarForm(){
     } catch (e){ cars = []; }
     _myCars = Array.isArray(cars) ? cars : [];
     if (!_myCars.length){
-      tb.innerHTML = `<tr><td colspan="9" class="empty-cell">${escape(t("addCar.noCars"))}</td></tr>`;
+      tb.innerHTML = `<tr><td colspan="8" class="empty-cell">${escape(t("addCar.noCars"))}</td></tr>`;
       return;
     }
     const dash = `<span class="badge no">—</span>`;
     const cell = (v) => v ? escape(v) : dash;
     tb.innerHTML = _myCars.map(c => {
-      const edits = Number(c.edit_count || 0);
       const gps = c.has_gps
         ? `<span class="badge yes">${escape(t("yes"))}</span>`
         : `<span class="badge no">${escape(t("no"))}</span>`;
@@ -3895,7 +4177,6 @@ function setupAddCarForm(){
         <td>${branchCell(c.branchname)}</td>
         <td class="ltr">${cell(c.platenumber)}</td>
         <td>${gps}</td>
-        <td>${edits}</td>
         <td class="my-car-action">${action}</td>
       </tr>`;
     }).join("");
@@ -4347,7 +4628,8 @@ function setupAddClientForm(){
     }
 
     // Editing an existing client (typo fix) → PUT that record; otherwise
-    // create a new one. The backend caps company edits at two per client.
+    // create a new one. Company edits are unlimited — the backend records every
+    // change instead of capping them, and the admin audits them live.
     const editing = editingClientId != null;
     try {
       const r = await fetch(
@@ -4381,7 +4663,6 @@ function setupAddClientForm(){
       await refreshClients();
       await refreshMyClientsTable();
       refreshRentalPickers();
-      Reservations.refreshPickers();
     } catch (err){
       toast(err.message || t("toast.error"), "error");
     }
@@ -4468,7 +4749,7 @@ function setupAddClientForm(){
     await saveClient();
   });
 
-  // ---- Edit-an-existing-client (typo correction, max 2×) ----
+  // ---- Edit-an-existing-client (typo correction, unlimited) ----
   const submitBtn = $("#add-client-submit");
   const cancelBtn = $("#add-client-cancel-edit");
 
@@ -4518,13 +4799,12 @@ function setupAddClientForm(){
     } catch (e){ clients = []; }
     _myClients = Array.isArray(clients) ? clients : [];
     if (!_myClients.length){
-      tb.innerHTML = `<tr><td colspan="7" class="empty-cell">${escape(t("addClient.noClients"))}</td></tr>`;
+      tb.innerHTML = `<tr><td colspan="6" class="empty-cell">${escape(t("addClient.noClients"))}</td></tr>`;
       return;
     }
     const dash = `<span class="badge no">—</span>`;
     const cell = (v) => v ? escape(v) : dash;
     tb.innerHTML = _myClients.map(c => {
-      const edits = Number(c.edit_count || 0);
       const action = `<button type="button" class="row-btn my-client-edit" data-id="${c.id}">✎ ${escape(t("action.edit"))}</button>`;
       return `<tr>
         <td>${cell(c.name)}</td>
@@ -4532,7 +4812,6 @@ function setupAddClientForm(){
         <td>${cell(c.nationality)}</td>
         <td class="ltr">${cell(c.phonenumber)}</td>
         <td class="ltr">${cell(c.licenseid)}</td>
-        <td>${edits}</td>
         <td class="my-client-action">${action}</td>
       </tr>`;
     }).join("");
@@ -4643,6 +4922,7 @@ function setupCreateRentalForm(){
       client_id:  Number(fd.get("client_id")) || null,
       start_date: (fd.get("start_date") || "").toString().trim(),
       end_date:   (fd.get("end_date")   || "").toString().trim(),
+      status:     (fd.get("status")     || "active").toString(),
     };
 
     // Light client-side checks before the round-trip
@@ -4657,12 +4937,11 @@ function setupCreateRentalForm(){
     }
     if (firstError){ toast(t("toast.error"), "error"); return; }
 
-    const today = new Date().toISOString().slice(0, 10);
-    const isToday = body.start_date === today;
-    const endpoint = isToday ? "/api/rentals" : "/api/reservations";
-
+    // One endpoint now. A future booking used to be silently routed to
+    // /api/reservations; it's a rental with status "pending" instead, and the
+    // status is the user's explicit choice rather than a guess from the date.
     try {
-      const r = await fetch(API.url(endpoint), {
+      const r = await fetch(API.url("/api/rentals"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify(body),
@@ -4670,34 +4949,26 @@ function setupCreateRentalForm(){
       const data = await r.json().catch(() => ({}));
       if (!r.ok){
         const msg = data.error || t("toast.error");
-        if (/car/i.test(msg))  setFieldError(form, "car_vin", msg);
-        else if (/date/i.test(msg) || /reservation/i.test(msg)) setFieldError(form, "end_date", msg);
+        if (data.errors?.status) setFieldError(form, "status", data.errors.status);
+        else if (/car/i.test(msg))  setFieldError(form, "car_vin", msg);
+        else if (/date/i.test(msg) || /booking/i.test(msg)) setFieldError(form, "end_date", msg);
         toast(msg, "error");
         return;
       }
       form.reset();
-      if (isToday){
-        showCreateRentalStatus(t("rental.create.saved"));
-      } else {
-        showCreateRentalStatus(t("rental.create.reserved"));
-      }
-      toast(t("toast.added"), "success");
+      hideModal("#individual-rental-modal");
+      toast(t(`rental.create.saved.${body.status}`), "success");
       await refreshReport();
-      await Reservations.refresh();
+      if (typeof CarsHub !== "undefined") CarsHub.show("individual");
     } catch (err){
       toast(err.message || t("toast.error"), "error");
     }
   });
 }
 
-function showCreateRentalStatus(message){
-  const el = $("#create-rental-status");
-  if (!el) return;
-  el.textContent = message;
-  el.hidden = false;
-  clearTimeout(showCreateRentalStatus._t);
-  showCreateRentalStatus._t = setTimeout(hideCreateRentalStatus, 4500);
-}
+/* The create-rental form lives in a modal that closes on success, so there's
+   nowhere to show a lingering "saved" banner — the toast says it instead. This
+   only clears the banner (server errors still paint it via the field errors). */
 function hideCreateRentalStatus(){
   const el = $("#create-rental-status");
   if (!el) return;
@@ -5950,7 +6221,18 @@ const AdminSidebar = (() => {
   // "admin-home" is the card-based landing; the rest are the panels a card (or
   // the — now hidden — sidebar) opens. Dashboard is special-cased below because
   // it's shown via style.display, not the .admin-panel-active class.
-  const PANELS = ["admin-home", "dashboard", "companies", "cars", "car-gps", "clients", "admin-reservations", "report", "admin-special", "admin-individual", "support"];
+  // "report" is NOT here: #report is the company role's Clients History now.
+  // The admin's rental report is a view inside Cars (see CAR_VIEWS), so listing
+  // it would toggle .admin-panel-active on the company's section.
+  const PANELS = ["admin-home", "dashboard", "companies", "cars", "clients", "support"];
+  // The two "cars rented by …" tables, the GPS map and the rental report are
+  // views inside the Cars panel now, not panels of their own. Their old names
+  // survive in links and bookmarks, so they map onto Cars + the view they
+  // promised. Anything that opens a view belongs HERE, not in PANELS.
+  const CAR_VIEWS = {
+    "admin-special": "company", "admin-individual": "individual",
+    "car-gps": "gps", "report": "report",
+  };
   let _current = "admin-home";
 
   function show(panel){
@@ -5958,6 +6240,9 @@ const AdminSidebar = (() => {
       showModal("#register-modal");
       return;
     }
+    // Entering Cars by any other route lands on the fleet.
+    const carView = CAR_VIEWS[panel] || (panel === "cars" ? "fleet" : null);
+    if (carView) panel = "cars";
     _current = panel;
     PANELS.forEach(p => {
       if (p === "dashboard"){
@@ -5981,17 +6266,17 @@ const AdminSidebar = (() => {
     // loaders no-op the re-render when the payload is unchanged.
     switch (panel){
       case "companies":          refreshCompanies(); break;
-      case "cars":               refreshCars();      break;
-      case "car-gps":            /* CarGps.onShow() loads its own full list */ break;
-      case "clients":            refreshClients();   break;
-      case "report":             refreshReport();    break;
-      case "admin-reservations": Reservations.refresh(); break;
-      case "admin-special":      AdminSpecial.refresh(); break;
-      case "admin-individual":   AdminIndividual.refresh(); break;
+      case "cars":               refreshCars(); AdminCarsHub.refresh(); break;
+      // The two history views load themselves when their tab is opened
+      // (ClientsHub.show) — this only refreshes the register and the badges.
+      case "clients":            refreshClients(); ClientsHub.refresh(); break;
+      // No "report" case: it resolved to "cars" above, and AdminCarsHub.show()
+      // loads the report feed when that view is the one being opened.
     }
-    // The GPS/map tab needs a nudge once it's visible: Leaflet can only size
-    // itself against a laid-out container.
-    if (panel === "car-gps" && typeof CarGps !== "undefined") CarGps.onShow();
+    // Switch the view only once the panel is on screen — the GPS view in
+    // particular can't size its map until it's laid out. AdminCarsHub.show()
+    // handles that.
+    if (carView) AdminCarsHub.show(carView);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -6060,8 +6345,11 @@ function applyRoleUI(){
     AdminSidebar.setup();
     AdminSpecial.setup();
     AdminIndividual.setup();
+    AdminCarsHub.setup();
+    ClientsHub.setup();   // also sets up the two history views it owns
     AuditLog.setup();
     EntityDetail.setup();
+    ReportRow.setup();   // the admin report's row modal (company role has none)
     const collapseBtn = $("#sidebar-collapse-btn");
     if (collapseBtn){
       collapseBtn.addEventListener("click", () => {
@@ -6081,10 +6369,22 @@ function applyRoleUI(){
   if (user.role === "company"){
     // "company-home" is the card-based landing; the rest are the individual
     // panels a card (or the sidebar) opens.
-    const COMPANY_PANELS = ["company-home", "report", "reservations", "company-returns", "company-info", "company-cars", "company-clients", "company-special", "company-api", "support"];
+    // "company-special" is gone — the B2B table and form now live inside the
+    // Cars hub (#company-cars) alongside the fleet and individual rentals.
+    // "report" is gone too: the Clients History is a VIEW inside #company-clients
+    // now (see CO_CLIENT_VIEWS below), so listing it here would toggle
+    // .company-panel-active on an element that no longer exists.
+    const COMPANY_PANELS = ["company-home", "company-returns", "company-info", "company-cars", "company-clients", "company-api", "support"];
+    // The Clients History's old panel name survives in links and the Return-Due
+    // widget, so it maps onto the panel plus the view it promised. Anything that
+    // opens a view belongs HERE, not in COMPANY_PANELS.
+    const CO_CLIENT_VIEWS = { "report": "history" };
     let _compCurrent = "company-home";
 
     function showCompanyPanel(panel){
+      // Entering the clients panel by any other route lands on the register.
+      const coClientView = CO_CLIENT_VIEWS[panel] || (panel === "company-clients" ? "add" : null);
+      if (coClientView) panel = "company-clients";
       _compCurrent = panel;
       COMPANY_PANELS.forEach(p => {
         const el = $(`#${p}`);
@@ -6096,9 +6396,6 @@ function applyRoleUI(){
       // The card home has its own body class so we can drop the sidebar offset
       // and let the grid breathe full-width.
       document.body.classList.toggle("company-home-active", panel === "company-home");
-      // Opening the Reservations tab: rebuild the car/client pickers so cars
-      // (or clients) added on another tab are selectable without a refresh.
-      if (panel === "reservations") Reservations.refreshPickers();
       // Opening the Returns tab: pull fresh rentals so due/overdue dates are
       // current without a page refresh.
       if (panel === "company-returns") Returns.refresh();
@@ -6108,19 +6405,25 @@ function applyRoleUI(){
       // Opening the branch section: sync the "this is my head office" checkbox on
       // the company form with whether a branch currently holds the head office.
       if (panel === "company-info" && window.refreshCompanyHeadOffice) window.refreshCompanyHeadOffice();
-      // Opening the special-companies tab: refresh the car checklist + the
-      // recorded-companies list.
-      if (panel === "company-special") SpecialRentals.refresh();
-      // Opening the Add-Client tab: refresh the "clients you added" table so
-      // freshly-added / edited clients (and remaining edit counts) show.
-      if (panel === "company-clients" && window.refreshMyClientsTable) window.refreshMyClientsTable();
-      // Opening the Add-Car tab: refresh the "cars you added" table and the
-      // branch dropdown (branches may have been added since page load / login).
-      if (panel === "company-cars" && window.refreshMyCarsTable) window.refreshMyCarsTable();
-      if (panel === "company-cars" && window.refreshAddCarBranches) window.refreshAddCarBranches();
-      // Opening the Report card: pull fresh rentals so the client-rental
-      // list reflects any rentals just created on another panel.
-      if (panel === "report") refreshReport();
+      // Opening the clients hub: refresh the "clients you added" table so
+      // freshly-added / edited clients (and remaining edit counts) show. The
+      // hub owns that call now, and loads the history feed if that's the view
+      // being opened. The view is passed in rather than switched afterwards, so
+      // the panel paints once instead of painting the old view first.
+      if (panel === "company-clients") CoClientsHub.refresh(coClientView);
+      // Opening the Cars hub: refresh the fleet table and the branch dropdown
+      // (branches may have been added since page load / login), then let the
+      // hub load the individual + B2B tables and repaint its counts.
+      if (panel === "company-cars"){
+        (async () => {
+          if (window.refreshMyCarsTable) await window.refreshMyCarsTable();
+          if (window.refreshAddCarBranches) window.refreshAddCarBranches();
+          await CarsHub.refresh();
+        })();
+      }
+      // No "report" case: it resolved to "company-clients" above, and
+      // CoClientsHub.refresh() pulls fresh rentals when the view it opens is
+      // the history one.
       // Jumping between panels can leave you scrolled halfway down a long form.
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -7209,7 +7512,13 @@ const MapPicker = (() => {
   }
 
   async function show(){
-    $("#map-modal").hidden = false;
+    const m = $("#map-modal");
+    // Full-page in VIEW mode, dialog-sized in PICK mode. This has to be set
+    // BEFORE the paint wait: Leaflet measures itself against the laid-out
+    // container, so resizing the card afterwards would leave the map sized to
+    // the wrong box. Same ordering rule as CarGps.onShow().
+    m.classList.toggle("is-view", mode === "view");
+    m.hidden = false;
     document.body.classList.add("modal-open");
     await nextPaint();
     ensureMap();
@@ -7221,9 +7530,26 @@ const MapPicker = (() => {
     document.body.classList.remove("modal-open");
   }
 
+  /* applyI18n() rewrites textContent for every [data-i18n] on a language switch,
+     so anything set imperatively here must either own a key or drop the
+     attribute — otherwise the next switch silently reverts it. A place name is
+     not translatable, hence the literal half. */
+  function setI18nKey(el, key){
+    if (!el) return;
+    el.setAttribute("data-i18n", key);
+    el.textContent = t(key);
+  }
+  function setLiteral(el, text){
+    if (!el) return;
+    el.removeAttribute("data-i18n");
+    el.textContent = text;
+  }
+
   async function openPick(opts = {}){
     mode   = "pick";
     picked = null;
+    setI18nKey($("#map-modal .modal-head h3"), "map.title");
+    setI18nKey($("#map-cancel"), "map.cancel");
     target = {
       xSel:      opts.xSel      || DEFAULT_TARGET.xSel,
       ySel:      opts.ySel      || DEFAULT_TARGET.ySel,
@@ -7258,6 +7584,12 @@ const MapPicker = (() => {
 
   async function openView({ x, y, label }){
     mode = "view";
+    // Nothing is being picked here, so the header names the place instead of
+    // prompting for one, and "Cancel" becomes "Close" — there's no pick to
+    // abandon. The pin hint is hidden in CSS for the same reason.
+    const h3 = $("#map-modal .modal-head h3");
+    if (label) setLiteral(h3, label); else setI18nKey(h3, "companies.viewOnMap");
+    setI18nKey($("#map-cancel"), "map.close");
     await show();
     if (!map) return;
     placeMarker(y, x, label);
@@ -7555,694 +7887,12 @@ const CarGps = (() => {
   return { setup, onShow, populate };
 })();
 
-/* ============== RESERVATIONS ============== */
-const Reservations = (() => {
-  let _data = [];
-  let _view = "calendar";     // "calendar" | "list" (company-user view)
-  let _calCursor = null;      // first-of-month Date currently shown in calendar
-
-  async function refresh(){
-    const u = AUTH.user();
-    if (!u) return;
-    try {
-      const r = await fetch(API.url("/api/reservations"), { headers: authHeaders() });
-      if (!r.ok) return;
-      _data = await r.json();
-    } catch (e){ _data = []; }
-    render();
-  }
-
-  // Newest-first: most recently booked reservation on top. Falls back to
-  // start_date when created_at is missing on older rows.
-  function _byNewest(a, b){
-    const ka = a.created_at || a.start_date || "";
-    const kb = b.created_at || b.start_date || "";
-    return kb < ka ? -1 : (kb > ka ? 1 : 0);
-  }
-
-  function _carLabel(rv){
-    const m = rv.car_model || "";
-    const p = rv.car_plate || "";
-    return p ? `${m} — ${p}` : m;
-  }
-
-  // Format an ISO/SQL timestamp as a short, locale-aware date+time.
-  function _fmtBooked(ts){
-    if (!ts) return "";
-    const d = new Date(ts);
-    if (isNaN(d)) return String(ts).slice(0, 16).replace("T", " ");
-    return d.toLocaleString(undefined, {
-      year: "numeric", month: "short", day: "numeric",
-      hour: "2-digit", minute: "2-digit",
-    });
-  }
-
-  function _populateAdminFilters(){
-    populateFilterSelect($("#filter-arv-company"), _data.map(rv => rv.companyname));
-    populateFilterSelect($("#filter-arv-client"),  _data.map(rv => rv.client_name));
-    populateFilterSelect($("#filter-arv-car"),     _data.map(_carLabel));
-    populateFilterSelect($("#filter-arv-plate"),   _data.map(rv => rv.car_plate));
-  }
-
-  function _getAdminFiltered(){
-    const company = $("#filter-arv-company")?.value || "";
-    const client  = $("#filter-arv-client")?.value  || "";
-    const car     = $("#filter-arv-car")?.value     || "";
-    const plate   = $("#filter-arv-plate")?.value   || "";
-    const status  = $("#filter-arv-status")?.value  || "";
-    const from    = ($("#arv-from")?.value || "").trim();
-    const to      = ($("#arv-to")?.value   || "").trim();
-
-    let rows = _data.slice();
-    if (company) rows = rows.filter(rv => (rv.companyname || "") === company);
-    if (client)  rows = rows.filter(rv => (rv.client_name || "") === client);
-    if (car)     rows = rows.filter(rv => _carLabel(rv) === car);
-    if (plate)   rows = rows.filter(rv => (rv.car_plate || "") === plate);
-    if (status)  rows = rows.filter(rv => (rv.status || "") === status);
-    // Date filter = "reservations active in this range" (overlap), same
-    // semantics as the Report tab.
-    if (from) rows = rows.filter(rv => rv.end_date   && rv.end_date   >= from);
-    if (to)   rows = rows.filter(rv => rv.start_date && rv.start_date <= to);
-
-    rows.sort(_byNewest);
-    return rows;
-  }
-
-  function renderAdmin(){
-    const tbl = $("#tbl-admin-reservations");
-    if (!tbl) return;
-    _populateAdminFilters();
-    const rows = _getAdminFiltered();
-    if (!rows.length){
-      const pt = $("#pager-top-admin-reservations"); if (pt) pt.hidden = true;
-      const pb = $("#pager-admin-reservations"); if (pb) pb.hidden = true;
-      return emptyRow(tbl, 13);
-    }
-    const today = _today();
-    const info = Pager.slice("admin-reservations", rows);
-    const dash = `<span class="cell-dash">—</span>`;
-    const cell = (v) => v == null || v === "" ? dash : escape(String(v));
-    tbl.tBodies[0].innerHTML = info.rows.map((rv, i) => {
-      const idx = (info.page - 1) * info.size + i;
-      const statusCls = rv.status || "pending";
-      const statusLabel = t(`reservations.${statusCls}`) || rv.status;
-      // Highlight reservations booked today so the newest stand out.
-      const isToday = (rv.created_at || "").slice(0, 10) === today;
-      const cPhone = rv.company_phone
-        ? `<a href="tel:${escape(rv.company_phone)}" class="ltr">${escape(rv.company_phone)}</a>` : dash;
-      const clPhone = rv.client_phone
-        ? `<a href="tel:${escape(rv.client_phone)}" class="ltr">${escape(rv.client_phone)}</a>` : dash;
-      return `<tr${isToday ? ' class="rv-row-today"' : ""}>
-        <td>${idx + 1}</td>
-        <td data-col="company">${drillCell("company", rv.company_id, rv.companyname, true)}</td>
-        <td data-col="cphone">${cPhone}</td>
-        <td data-col="client">${drillCell("client", rv.client_id, rv.client_name, true)}</td>
-        <td data-col="clphone">${clPhone}</td>
-        <td data-col="model">${drillCell("car", rv.car_vin, rv.car_model, false)}</td>
-        <td data-col="color">${cell(rv.car_color)}</td>
-        <td data-col="plate"><span class="ltr">${cell(rv.car_plate)}</span></td>
-        <td data-col="gps">${_gpsDot(rv.car_has_gps)}</td>
-        <td data-col="from"><span class="ltr">${cell(rv.start_date)}</span></td>
-        <td data-col="to"><span class="ltr">${cell(rv.end_date)}</span></td>
-        <td data-col="status"><span class="reservation-status-badge ${statusCls}">${escape(statusLabel)}</span></td>
-        <td data-col="view">
-          <button type="button" class="row-btn rv-detail-btn" data-rv-detail="${rv.id}"
-                  title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">${ROW_MORE_ICO}</button>
-        </td>
-      </tr>`;
-    }).join("");
-    tbl.querySelectorAll(".rv-detail-btn").forEach(btn => {
-      btn.addEventListener("click", () => {
-        const rec = _data.find(x => x.id === Number(btn.dataset.rvDetail));
-        if (rec) _openReservationDetail(rec);
-      });
-    });
-    // Company / car / client values open that entity's detail modal.
-    tbl.querySelectorAll(".cell-drill").forEach(btn => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        EntityDetail.open(btn.dataset.drill, btn.dataset.drillkey);
-      });
-    });
-    Pager.render("admin-reservations", "#pager-top-admin-reservations",
-                 "#pager-admin-reservations", info, renderAdmin);
-  }
-
-  // Small green (has GPS) / red (no GPS) status dot for the reservations table.
-  function _gpsDot(on){
-    const cls = on ? "on" : "off";
-    const label = escape(t(on ? "yes" : "no"));
-    return `<span class="gps-dot ${cls}" title="${label}" aria-label="${label}"></span>`;
-  }
-
-  // Read-only "everything not shown in the columns" popup: the full related
-  // company / client / car records behind a reservation.
-  function _openReservationDetail(rv){
-    const body = $("#reservation-detail-body");
-    if (!body || !rv) return;
-    const k = (key) => escape(t(key));
-    const v = (x) => x == null || x === "" ? "—" : escape(String(x));
-    const idTypeKeys = {
-      passport: "addClient.idType.passport",
-      national_id: "addClient.idType.national",
-      license: "addClient.idType.license",
-      international_license: "addClient.idType.international",
-    };
-    const idType = rv.client_id_type
-      ? escape(t(idTypeKeys[rv.client_id_type] || rv.client_id_type)) : "—";
-    const gps = rv.car_has_gps ? k("yes") : k("no");
-    body.innerHTML = `
-      <section class="rvd-group">
-        <h4 class="rvd-h">${k("report.company")}</h4>
-        <dl class="detail-grid">
-          <dt>${k("companies.f.name")}</dt> <dd><strong>${v(rv.companyname)}</strong></dd>
-          <dt>${k("register.f.owner")}</dt>  <dd>${v(rv.company_owner)}</dd>
-          <dt>${k("companies.f.cid")}</dt>   <dd>${v(rv.company_regid)}</dd>
-          <dt>${k("report.cphone")}</dt>     <dd>${rv.company_phone ? `<a href="tel:${escape(rv.company_phone)}">${escape(rv.company_phone)}</a>` : "—"}</dd>
-          <dt>${k("companies.f.loc")}</dt>   <dd>${v(rv.company_location)}</dd>
-        </dl>
-      </section>
-      <section class="rvd-group">
-        <h4 class="rvd-h">${k("report.client")}</h4>
-        <dl class="detail-grid">
-          <dt>${k("clients.f.name")}</dt>        <dd><strong>${v(rv.client_name)}</strong></dd>
-          <dt>${k("report.phone")}</dt>          <dd>${rv.client_phone ? `<a href="tel:${escape(rv.client_phone)}">${escape(rv.client_phone)}</a>` : "—"}</dd>
-          <dt>${k("clients.f.pid")}</dt>         <dd>${v(rv.client_personid)}</dd>
-          <dt>${k("clients.f.father")}</dt>      <dd>${v(rv.client_father)}</dd>
-          <dt>${k("clients.f.mother")}</dt>      <dd>${v(rv.client_mother)}</dd>
-          <dt>${k("addClient.nationality")}</dt> <dd>${v(rv.client_nationality)}</dd>
-          <dt>${k("clients.f.dob")}</dt>         <dd>${v(rv.client_dob)}</dd>
-          <dt>${k("clients.f.lic")}</dt>         <dd><code>${v(rv.client_license)}</code></dd>
-          <dt>${k("addClient.idType")}</dt>      <dd>${idType}</dd>
-          <dt>${k("clients.f.licstart")}</dt>    <dd>${v(rv.client_license_start)}</dd>
-          <dt>${k("clients.f.licend")}</dt>      <dd>${v(rv.client_license_end)}</dd>
-        </dl>
-      </section>
-      <section class="rvd-group">
-        <h4 class="rvd-h">${k("report.vehicle")}</h4>
-        <dl class="detail-grid">
-          <dt>${k("cars.f.model")}</dt> <dd><strong>${v(rv.car_model)}</strong></dd>
-          <dt>${k("cars.f.type")}</dt>  <dd>${v(rv.car_type)}</dd>
-          <dt>${k("cars.f.color")}</dt> <dd>${v(rv.car_color)}</dd>
-          <dt>${k("report.plate")}</dt> <dd><span class="ltr">${v(rv.car_plate)}</span></dd>
-          <dt>${k("cars.f.vin")}</dt>   <dd><code class="ltr">${v(rv.car_vin)}</code></dd>
-          <dt>${k("report.gps")}</dt>   <dd>${gps}</dd>
-        </dl>
-      </section>
-      ${rv.notes ? `
-      <section class="rvd-group">
-        <h4 class="rvd-h">${k("reservations.notes")}</h4>
-        <p class="rvd-notes">${escape(rv.notes)}</p>
-      </section>` : ""}`;
-    showModal("#reservation-detail-modal");
-  }
-
-  function _today(){ return new Date().toISOString().slice(0, 10); }
-
-  function renderTodayBanner(){
-    const banner = $("#rv-today-banner");
-    const list   = $("#rv-today-list");
-    const count  = $("#rv-today-count");
-    if (!banner || !list) return;
-    const today = _today();
-    const todayItems = _data.filter(rv =>
-      rv.status === "pending" && rv.start_date === today
-    );
-    if (!todayItems.length){
-      banner.hidden = true; list.hidden = true; return;
-    }
-    banner.hidden = false; list.hidden = false;
-    if (count) count.textContent = todayItems.length;
-    const dash = `<span style="color:var(--muted)">—</span>`;
-    list.innerHTML = todayItems.map(rv => {
-      const phone = rv.client_phone
-        ? `<a href="tel:${escape(rv.client_phone)}">${escape(rv.client_phone)}</a>`
-        : dash;
-      return `<div class="rv-today-item">
-        <div>
-          <strong>${escape(rv.client_name || "")}</strong> — ${escape(rv.car_model || "")} (${escape(rv.car_plate || "")})
-          <span class="rv-today-meta"> · 📞 ${phone}</span>
-        </div>
-        <div class="row-actions">
-          <button type="button" class="rv-action-btn activate" data-rv-id="${rv.id}" data-action="active">${escape(t("reservations.activate"))}</button>
-          <button type="button" class="rv-action-btn cancel"   data-rv-id="${rv.id}" data-action="inactive">${escape(t("reservations.cancel"))}</button>
-        </div>
-      </div>`;
-    }).join("");
-    _wireActions(list);
-  }
-
-  function _getFiltered(){
-    const dateVal   = ($("#rv-filter-date")?.value || "").trim();
-    const statusVal = ($("#rv-filter-status")?.value || "").trim();
-    let rows = _data;
-    if (dateVal){
-      rows = rows.filter(rv => rv.start_date <= dateVal && rv.end_date >= dateVal);
-    }
-    if (statusVal){
-      rows = rows.filter(rv => rv.status === statusVal);
-    }
-    return rows;
-  }
-
-  function _wireActions(container){
-    container.querySelectorAll("[data-rv-id]").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        const id = Number(btn.dataset.rvId);
-        const action = btn.dataset.action;
-        if (action === "delete"){
-          if (!confirm(t("confirm.delete"))) return;
-          try {
-            await fetch(API.url(`/api/reservations/${id}`), {
-              method: "DELETE", headers: authHeaders(),
-            });
-            toast(t("toast.deleted"), "success");
-            await refresh();
-          } catch (e){ toast(e.message || t("toast.error"), "error"); }
-        } else {
-          try {
-            const r = await fetch(API.url(`/api/reservations/${id}`), {
-              method: "PUT",
-              headers: { "Content-Type": "application/json", ...authHeaders() },
-              body: JSON.stringify({ status: action }),
-            });
-            const data = await r.json().catch(() => ({}));
-            if (!r.ok){
-              toast(data.error || t("toast.error"), "error");
-              return;
-            }
-            if (action === "active" && data.converted){
-              toast(t("reservations.converted"), "success");
-            } else {
-              toast(action === "active" ? t("reservations.activated") : t("reservations.cancelled"), "success");
-            }
-            await refresh();
-            await refreshReport();
-            // Activating converts the reservation into a live rental (it drops
-            // off this list and shows up under Returns as rented by client);
-            // cancelling frees the car. Either way the pickers may have changed.
-            await refreshPickers();
-            if (typeof Returns !== "undefined") await Returns.refresh();
-            if (typeof Notifications !== "undefined") Notifications.refresh();
-          } catch (e){ toast(e.message || t("toast.error"), "error"); }
-        }
-      });
-    });
-  }
-
-  function render(){
-    const u = AUTH.user();
-    if (u && u.role === "admin"){ renderAdmin(); return; }
-    renderTodayBanner();
-    const calView  = $("#rv-calendar-view");
-    const listView = $("#rv-list-view");
-    if (calView)  calView.hidden  = (_view !== "calendar");
-    if (listView) listView.hidden = (_view !== "list");
-    if (_view === "calendar") renderCalendar();
-    else renderList();
-  }
-
-  /* ---------- Calendar (Google-Calendar style month grid) ---------- */
-  function _firstOfMonth(){ const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); }
-  function _ymd(d){
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }
-  function _parseYmd(s){
-    const p = String(s).slice(0, 10).split("-").map(Number);
-    return new Date(p[0], (p[1] || 1) - 1, p[2] || 1);
-  }
-  function _addDays(d, n){ return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); }
-  function _dayDiff(a, b){ return Math.round((a - b) / 86400000); }
-
-  function _calEvents(){
-    const statusVal = ($("#rv-filter-status")?.value || "").trim();
-    let rows = _data.filter(rv => rv.start_date && rv.end_date);
-    if (statusVal) rows = rows.filter(rv => rv.status === statusVal);
-    return rows;
-  }
-
-  function _shiftMonth(n){
-    if (!_calCursor) _calCursor = _firstOfMonth();
-    _calCursor = new Date(_calCursor.getFullYear(), _calCursor.getMonth() + n, 1);
-    renderCalendar();
-  }
-
-  function renderCalendar(){
-    const grid = $("#rv-calendar");
-    if (!grid) return;
-    if (!_calCursor) _calCursor = _firstOfMonth();
-    const cur = _calCursor;
-    const lang = (typeof currentLang === "function") ? currentLang() : "en";
-
-    const titleEl = $("#cal-title");
-    if (titleEl){
-      titleEl.textContent = new Intl.DateTimeFormat(lang, { month: "long", year: "numeric" }).format(cur);
-    }
-    // Weekday headers, Sunday-first (2024-09-01 is a Sunday).
-    const wd = $("#cal-weekdays");
-    if (wd){
-      const fmt = new Intl.DateTimeFormat(lang, { weekday: "short" });
-      let h = "";
-      for (let i = 0; i < 7; i++) h += `<div class="cal-weekday">${escape(fmt.format(new Date(2024, 8, 1 + i)))}</div>`;
-      wd.innerHTML = h;
-    }
-
-    const firstOfMonth = new Date(cur.getFullYear(), cur.getMonth(), 1);
-    const gridStart = _addDays(firstOfMonth, -firstOfMonth.getDay());
-    const lastOfMonth = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
-    const gridEnd = _addDays(lastOfMonth, 6 - lastOfMonth.getDay());
-    const weeks = (_dayDiff(gridEnd, gridStart) + 1) / 7;
-    const todayStr = _today();
-    const events = _calEvents();
-
-    let html = "";
-    for (let w = 0; w < weeks; w++){
-      const weekStart = _addDays(gridStart, w * 7);
-      const weekStartStr = _ymd(weekStart);
-      const weekEndStr = _ymd(_addDays(weekStart, 6));
-
-      // Day cells (base layer).
-      let daysHtml = "";
-      for (let i = 0; i < 7; i++){
-        const d = _addDays(weekStart, i);
-        const inMonth = d.getMonth() === cur.getMonth();
-        const isToday = _ymd(d) === todayStr;
-        daysHtml += `<div class="cal-day${inMonth ? "" : " other-month"}${isToday ? " today" : ""}">` +
-          `<span class="cal-daynum">${d.getDate()}</span></div>`;
-      }
-
-      // Reservation segments overlapping this week.
-      const segs = [];
-      events.forEach(rv => {
-        const s = _parseYmd(rv.start_date), e = _parseYmd(rv.end_date);
-        if (_ymd(e) < weekStartStr || _ymd(s) > weekEndStr) return;
-        segs.push({
-          rv,
-          startCol: Math.max(0, _dayDiff(s, weekStart)),
-          endCol:   Math.min(6, _dayDiff(e, weekStart)),
-          contLeft:  _ymd(s) < weekStartStr,
-          contRight: _ymd(e) > weekEndStr,
-        });
-      });
-      // Stack into lanes so overlapping reservations don't collide.
-      segs.sort((a, b) => a.startCol - b.startCol || (b.endCol - b.startCol) - (a.endCol - a.startCol));
-      const laneEnds = [];
-      segs.forEach(seg => {
-        let lane = 0;
-        while (lane < laneEnds.length && laneEnds[lane] >= seg.startCol) lane++;
-        laneEnds[lane] = seg.endCol;
-        seg.lane = lane;
-      });
-      const lanes = Math.max(laneEnds.length, 1);
-
-      let barsHtml = "";
-      segs.forEach(seg => {
-        const rv = seg.rv;
-        const cls = rv.status || "pending";
-        const label = `${rv.client_name || ""}${rv.car_model ? " · " + rv.car_model : ""}`;
-        const text = `${seg.contLeft ? "‹ " : ""}${label}${seg.contRight ? " ›" : ""}`;
-        barsHtml += `<button type="button" class="cal-bar ${cls}" data-rv-id="${rv.id}" ` +
-          `style="grid-column:${seg.startCol + 1}/${seg.endCol + 2};grid-row:${seg.lane + 1}" ` +
-          `title="${escape(label)}">${escape(text)}</button>`;
-      });
-
-      html += `<div class="cal-week" style="--lanes:${lanes}">` +
-        `<div class="cal-week-grid">${daysHtml}</div>` +
-        `<div class="cal-week-bars">${barsHtml}</div></div>`;
-    }
-    grid.innerHTML = html;
-
-    grid.querySelectorAll(".cal-bar").forEach(bar => {
-      bar.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        const rv = _data.find(r => r.id === Number(bar.dataset.rvId));
-        if (rv) _openEventPop(rv, bar);
-      });
-    });
-  }
-
-  function _closeEventPop(){
-    const pop = $("#rv-event-pop");
-    if (pop){ pop.hidden = true; pop.innerHTML = ""; }
-    document.removeEventListener("mousedown", _onDocClickPop, true);
-    document.removeEventListener("keydown", _onKeyPop, true);
-  }
-  function _onDocClickPop(e){
-    const pop = $("#rv-event-pop");
-    if (pop && !pop.contains(e.target)) _closeEventPop();
-  }
-  function _onKeyPop(e){ if (e.key === "Escape") _closeEventPop(); }
-
-  function _openEventPop(rv, anchor){
-    const pop = $("#rv-event-pop");
-    if (!pop) return;
-    const cls = rv.status || "pending";
-    const statusLabel = t(`reservations.${cls}`) || rv.status;
-    const phone = rv.client_phone
-      ? `<a href="tel:${escape(rv.client_phone)}">${escape(rv.client_phone)}</a>`
-      : "—";
-    let actions = "";
-    if (rv.status === "pending"){
-      actions += `<button type="button" class="rv-action-btn activate" data-rv-id="${rv.id}" data-action="active">${escape(t("reservations.activate"))}</button>` +
-        `<button type="button" class="rv-action-btn cancel" data-rv-id="${rv.id}" data-action="inactive">${escape(t("reservations.cancel"))}</button>`;
-    }
-    actions += `<button type="button" class="rv-action-btn delete" data-rv-id="${rv.id}" data-action="delete">${escape(t("action.delete"))}</button>`;
-
-    pop.innerHTML = `
-      <div class="rv-pop-head">
-        <h4 class="rv-pop-title">${escape(rv.client_name || "")}</h4>
-        <button type="button" class="rv-pop-close" aria-label="Close">&times;</button>
-      </div>
-      <div class="rv-pop-row"><span class="rv-pop-ico">🚗</span><span>${escape(rv.car_model || "")}${rv.car_plate ? " — " + escape(rv.car_plate) : ""}</span></div>
-      <div class="rv-pop-row"><span class="rv-pop-ico">📅</span><span>${escape(rv.start_date || "")} → ${escape(rv.end_date || "")}</span></div>
-      <div class="rv-pop-row"><span class="rv-pop-ico">📞</span><span>${phone}</span></div>
-      ${rv.notes ? `<div class="rv-pop-row"><span class="rv-pop-ico">📝</span><span>${escape(rv.notes)}</span></div>` : ""}
-      <div class="rv-pop-row"><span class="rv-pop-ico">●</span><span class="reservation-status-badge ${cls}">${escape(statusLabel)}</span></div>
-      <div class="rv-pop-actions">${actions}</div>`;
-
-    pop.hidden = false;
-    const r = anchor.getBoundingClientRect();
-    const pw = pop.offsetWidth, ph = pop.offsetHeight;
-    let left = r.left;
-    let top = r.bottom + 6;
-    if (left + pw > window.innerWidth - 12) left = window.innerWidth - pw - 12;
-    if (left < 12) left = 12;
-    if (top + ph > window.innerHeight - 12) top = r.top - ph - 6;
-    if (top < 12) top = 12;
-    pop.style.left = left + "px";
-    pop.style.top = top + "px";
-
-    pop.querySelector(".rv-pop-close")?.addEventListener("click", _closeEventPop);
-    _wireActions(pop);
-    // Actions trigger a refresh()/re-render; close the popover once clicked.
-    pop.querySelectorAll("[data-rv-id]").forEach(b =>
-      b.addEventListener("click", () => setTimeout(_closeEventPop, 0)));
-
-    setTimeout(() => {
-      document.addEventListener("mousedown", _onDocClickPop, true);
-      document.addEventListener("keydown", _onKeyPop, true);
-    }, 0);
-  }
-
-  /* ---------- List (table) ---------- */
-  function renderList(){
-    const tbl = $("#tbl-reservations");
-    if (!tbl) return;
-    const filtered = _getFiltered();
-    if (!filtered.length){
-      const pt = $("#pager-top-reservations"); if (pt) pt.hidden = true;
-      const pb = $("#pager-reservations");     if (pb) pb.hidden = true;
-      return emptyRow(tbl, 9);
-    }
-    const dash = `<span class="badge no">—</span>`;
-    const info = Pager.slice("reservations", filtered);
-    tbl.tBodies[0].innerHTML = info.rows.map((rv, i) => {
-      const idx = (info.page - 1) * info.size + i;
-      const statusCls = rv.status || "pending";
-      const statusLabel = t(`reservations.${statusCls}`) || rv.status;
-      let actions = "";
-      if (rv.status === "pending"){
-        actions = `
-          <button type="button" class="rv-action-btn activate" data-rv-id="${rv.id}" data-action="active">${escape(t("reservations.activate"))}</button>
-          <button type="button" class="rv-action-btn cancel"   data-rv-id="${rv.id}" data-action="inactive">${escape(t("reservations.cancel"))}</button>`;
-      }
-      actions += `<button type="button" class="rv-action-btn delete" data-rv-id="${rv.id}" data-action="delete">${escape(t("action.delete"))}</button>`;
-      return `<tr>
-        <td>${idx + 1}</td>
-        <td>${escape(rv.client_name || "")}</td>
-        <td>${rv.client_phone ? `<a href="tel:${escape(rv.client_phone)}">${escape(rv.client_phone)}</a>` : dash}</td>
-        <td>${escape(rv.car_model || "")}</td>
-        <td>${escape(rv.car_plate || "")}</td>
-        <td>${escape(rv.start_date || "")}</td>
-        <td>${escape(rv.end_date || "")}</td>
-        <td><span class="reservation-status-badge ${statusCls}">${escape(statusLabel)}</span></td>
-        <td><div class="row-actions">${actions}</div></td>
-      </tr>`;
-    }).join("");
-    _wireActions(tbl);
-    Pager.render("reservations", "#pager-top-reservations", "#pager-reservations", info, render);
-  }
-
-  async function refreshPickers(){
-    const u = AUTH.user();
-    if (!u || u.role !== "company" || !u.company_id) return;
-    let cars = [], clients = [];
-    // Date-aware availability: once both reservation dates are filled in, only
-    // show cars free for THAT range — no pending reservation or un-returned
-    // rental that overlaps it. So a car out until June 2 is still bookable from
-    // June 2 onward (same-day handoff allowed). With no dates yet we can't
-    // compute overlap, so we show all of the company's cars and rely on the
-    // save-time conflict check.
-    const rform = $("#form-create-reservation");
-    const from = (rform?.querySelector('[name="start_date"]')?.value || "").trim();
-    const to   = (rform?.querySelector('[name="end_date"]')?.value   || "").trim();
-    let carsUrl = `/api/cars?company_id=${u.company_id}`;
-    if (from && to && to >= from){
-      carsUrl += `&available=1&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
-    }
-    try { cars = await fetch(API.url(carsUrl), { headers: authHeaders() }).then(r => r.json()); } catch (e){}
-    try { clients = await fetch(API.url("/api/clients"), { headers: authHeaders() }).then(r => r.json()); } catch (e){}
-
-    const carSel = $("#reservation-car-select");
-    if (carSel){
-      const prev = carSel.value;
-      const ph = carSel.querySelector('option[disabled][hidden]')?.outerHTML || "";
-      carSel.innerHTML = ph + cars.map(c =>
-        `<option value="${escape(c.vin)}">${escape(`${c.model} — ${c.platenumber} (${c.vin})`)}</option>`
-      ).join("");
-      // Keep the chosen car if it's still available for these dates; otherwise
-      // clear it and let the user know it clashes.
-      if (prev && cars.some(c => c.vin === prev)){
-        carSel.value = prev;
-      } else {
-        carSel.value = "";
-        if (prev) toast(t("reservations.carUnavailable"), "error");
-      }
-      if (carSel._ss) carSel._ss.sync();
-    }
-    const clientSel = $("#reservation-client-select");
-    if (clientSel){
-      const ph = clientSel.querySelector('option[disabled][hidden]')?.outerHTML || "";
-      clientSel.innerHTML = ph + clients.map(c =>
-        `<option value="${c.id}">${escape(`${c.name || c.personid} — ${c.licenseid || ""}`)}</option>`
-      ).join("");
-      clientSel.value = "";
-      if (clientSel._ss) clientSel._ss.sync();
-    }
-  }
-
-  function setup(){
-    const form = $("#form-create-reservation");
-    if (!form) return;
-
-    // Re-filter the car dropdown to the chosen date range as soon as either
-    // date changes, so only cars free for those dates are offered.
-    ["start_date", "end_date"].forEach(n => {
-      form.querySelector(`[name="${n}"]`)?.addEventListener("change", () => refreshPickers());
-    });
-
-    // Filter controls — reset to page 1 whenever the filter changes.
-    const rerender = () => { Pager.reset("reservations"); render(); };
-    $("#rv-filter-today")?.addEventListener("click", () => {
-      const dateEl = $("#rv-filter-date");
-      if (dateEl) dateEl.value = _today();
-      rerender();
-    });
-    $("#rv-filter-all")?.addEventListener("click", () => {
-      const dateEl = $("#rv-filter-date");
-      const statusEl = $("#rv-filter-status");
-      if (dateEl) dateEl.value = "";
-      if (statusEl) statusEl.value = "";
-      rerender();
-    });
-    $("#rv-filter-date")?.addEventListener("change", rerender);
-    $("#rv-filter-status")?.addEventListener("change", rerender);
-
-    // Calendar / List view toggle.
-    $$(".rv-view-btn").forEach(btn => {
-      btn.addEventListener("click", () => {
-        _view = btn.dataset.rvView || "calendar";
-        $$(".rv-view-btn").forEach(b => b.classList.toggle("active", b === btn));
-        render();
-      });
-    });
-    // Calendar month navigation.
-    $("#cal-prev")?.addEventListener("click", () => _shiftMonth(-1));
-    $("#cal-next")?.addEventListener("click", () => _shiftMonth(1));
-    $("#cal-today")?.addEventListener("click", () => { _calCursor = _firstOfMonth(); renderCalendar(); });
-
-    // Admin reservations filters — per-column dropdowns + status + date range.
-    const arvIds = ["filter-arv-company", "filter-arv-client", "filter-arv-car",
-                    "filter-arv-plate", "filter-arv-status", "arv-from", "arv-to"];
-    arvIds.forEach(id => {
-      $(`#${id}`)?.addEventListener("change", () => {
-        Pager.reset("admin-reservations");
-        renderAdmin();
-      });
-    });
-    $("#arv-reset")?.addEventListener("click", () => {
-      clearFilterSelect($("#filter-arv-company"));
-      clearFilterSelect($("#filter-arv-client"));
-      clearFilterSelect($("#filter-arv-car"));
-      clearFilterSelect($("#filter-arv-plate"));
-      const st = $("#filter-arv-status"); if (st){ st.value = ""; if (st._ss) st._ss.sync(); }
-      const f = $("#arv-from"); if (f) f.value = "";
-      const t2 = $("#arv-to");  if (t2) t2.value = "";
-      Pager.reset("admin-reservations");
-      renderAdmin();
-    });
-
-    // Reservation detail modal (admin eye button).
-    $("#reservation-detail-close")?.addEventListener("click", () => hideModal("#reservation-detail-modal"));
-    $("#reservation-detail-cancel")?.addEventListener("click", () => hideModal("#reservation-detail-modal"));
-
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const u = AUTH.user();
-      if (!u || u.role !== "company") return;
-      const fd = new FormData(form);
-      const body = {
-        car_vin:    (fd.get("car_vin")    || "").toString().trim(),
-        client_id:  Number(fd.get("client_id")) || null,
-        start_date: (fd.get("start_date") || "").toString().trim(),
-        end_date:   (fd.get("end_date")   || "").toString().trim(),
-        notes:      (fd.get("notes")      || "").toString().trim(),
-      };
-      if (!body.car_vin || !body.client_id || !body.start_date || !body.end_date){
-        toast(t("toast.fillAll"), "error");
-        return;
-      }
-      if (body.end_date < body.start_date){
-        toast(t("rental.create.err.range"), "error");
-        return;
-      }
-      try {
-        const r = await fetch(API.url("/api/reservations"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: JSON.stringify(body),
-        });
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok){
-          toast(data.error || t("toast.error"), "error");
-          return;
-        }
-        form.reset();
-        ["#reservation-car-select", "#reservation-client-select"].forEach(sel => {
-          const el = $(sel);
-          if (el){ el.value = ""; if (el._ss) el._ss.sync(); }
-        });
-        toast(t("reservations.saved"), "success");
-        await refresh();
-        // Drop the just-reserved car from the dropdown so it can't be
-        // reserved again to another client.
-        await refreshPickers();
-      } catch (err){ toast(err.message || t("toast.error"), "error"); }
-    });
-  }
-
-  return { refresh, refreshPickers, setup, render };
-})();
+/* ============== RESERVATIONS — retired (migration 040) ==============
+   A reservation was only ever a rental that hadn't started yet, so the whole
+   module (calendar, list, admin table, detail modal, create form) is gone. A
+   future booking is now a rental with status "pending", created and moved from
+   the Cars & Rentals hub — see CarsHub.renderIndividuals / setRentalStatus.
+   The public /api/reservations/* endpoints still exist for API clients. */
 
 /* ============== CONTACT SUPPORT ============== */
 function setupSupportForm(){
@@ -8542,6 +8192,10 @@ const Notifications = (() => {
       btn.addEventListener("click", () => {
         hideModal("#company-alerts-modal");
         if (typeof showCompanyPanel === "function") showCompanyPanel(btn.dataset.alertGo);
+        // Some targets are a view inside a panel (the Cars hub's three tables),
+        // so land on the right one rather than the panel's default.
+        const view = btn.dataset.alertView;
+        if (view && typeof CarsHub !== "undefined") CarsHub.show(view);
       });
     });
   }
@@ -8557,8 +8211,6 @@ async function loadAllData(){
         refreshReport(),
         loadCompanyInfo(),
         refreshRentalPickers(),
-        Reservations.refresh(),
-        Reservations.refreshPickers(),
         Notifications.refresh(),
       ]);
       // Report is now loaded — paint the home "Return Due" widget.
@@ -8566,7 +8218,7 @@ async function loadAllData(){
     } else {
       await Promise.all([
         refreshCompanies(), refreshCars(), refreshClients(),
-        refreshBranches(), refreshReport(), Reservations.refresh(),
+        refreshBranches(), refreshReport(),
       ]);
       updateStatsDashboard();
       loadInactiveAlerts();
@@ -8645,11 +8297,354 @@ function setupResponsiveTables(){
   });
 }
 
+/* ============== BOOKING STATUS PICKER ==============
+   The status column of the two "rented by" tables is the control, not just a
+   read-out: the pill IS a <select>, so pending / active / cancelled is one pick
+   away with no extra column of buttons widening the table. It keeps the pill
+   shape of the badges it sits with, so the column still scans at a glance.
+
+   `extra` is the date-derived badge (Overdue / Due today) — only an ACTIVE
+   booking has one, and it sits under the pill so the column stays narrow. A
+   settled (returned) booking gets a plain badge instead: the server refuses to
+   move it, so offering the choice would only invite a rejection. */
+const BOOKING_STATUSES = ["pending", "active", "cancelled"];
+
+function statusPicker(status, dataAttrs, extra = ""){
+  const st = BOOKING_STATUSES.includes(status) ? status : "active";
+  const opts = BOOKING_STATUSES.map(s =>
+    `<option value="${s}"${s === st ? " selected" : ""}>${escape(t("status." + s + ".short"))}</option>`
+  ).join("");
+  // data-ss-skip keeps SearchSelect off these — a native select drops its menu
+  // over the table instead of expanding a search box inside the cell. The
+  // wrapper is a plain span, not a label: the select is its only child and so
+  // covers the whole pill (caret included), leaving a label nothing to forward.
+  return `<div class="status-cell">
+    <span class="status-pick ${st}">
+      <select class="status-pick-sel" data-ss-skip ${dataAttrs}
+              aria-label="${escape(t("status.label"))}">${opts}</select>
+    </span>${extra}
+  </div>`;
+}
+
+/* ---- The admin's read-only twin of statusPicker ------------------------
+   A booking belongs to the company that took it: the company user moves it
+   between pending / active / cancelled from its own Cars & Rentals tables, and
+   the admin READS the result across every company. So the admin's three tables
+   render this instead of the picker — same three tints, same place in the row,
+   no caret and no <select>.
+
+   That rule is enforced on the server too, not just by leaving the control out:
+   /api/special-rentals/<id>/status is company-only (`_require_company_user`).
+   Hiding a control the API would still honour isn't a permission, it's a
+   suggestion.
+
+   `extra` is the date-derived Overdue badge, which is orthogonal to the booking
+   state — it sits under the tag exactly as it does under the picker, so the two
+   roles' tables stay the same shape. Do NOT pass "Returned" in here: a settled
+   booking has no state to show beside it, so callers branch and render that
+   badge alone. Only an ACTIVE booking can be overdue in the first place. */
+function statusTag(status, extra = ""){
+  const st = BOOKING_STATUSES.includes(status) ? status : "active";
+  return `<div class="status-cell">
+    <span class="status-tag ${st}">${escape(t("status." + st + ".short"))}</span>${extra}
+  </div>`;
+}
+
 /* ============== SPECIAL-COMPANY RENTALS (B2B) ==============
    The enterprise records another company it rents its own cars OUT to: that
    company's contact details (many phones + many branches, each with a "+"),
    plus a searchable dropdown per car it currently holds. The recorded list
    shows the full car detail. */
+/* ============== CARS HUB (company: the "Cars & Rentals" panel) ==============
+   One panel, three tables: the fleet, the cars out with individual clients,
+   and the cars out with other companies (B2B). Data entry happens in modals
+   raised from here — "Add car" opens the car form; "Car rented" first asks
+   who's renting (individual or company) and then opens that form, switching
+   the table underneath to match. The B2B table/filters and the create-rental
+   form used to live in their own panels; only their host moved, so the
+   SpecialRentals / create-rental wiring still finds them by id. */
+const CarsHub = (() => {
+  const VIEWS = ["fleet", "individual", "company"];
+  let _view = "fleet";
+
+  /* ---- The individuals table: this company's client rentals ---- */
+
+  // Rows = the shared report feed, scoped to the signed-in company, then
+  // narrowed by this view's own toolbar (kept separate from the Report tab's
+  // filters so the two don't fight over one another's state).
+  function individualRows(){
+    const u = (typeof AUTH !== "undefined") ? AUTH.user() : null;
+    if (!u || u.role !== "company") return [];
+    let rows = (state.report || []).filter(r => Number(r.company_id) === Number(u.company_id));
+    // Client and car are dropdown picks, not free text, so they match exactly —
+    // the options are built from these same rows (see refreshFilterDropdowns),
+    // so a pick can never fall through to nothing.
+    const client = $("#filter-ind-client")?.value || "";
+    const car    = $("#filter-ind-car")?.value    || "";
+    const from   = ($("#filter-ind-from")?.value  || "").trim();
+    const to     = ($("#filter-ind-to")?.value    || "").trim();
+    if (client) rows = rows.filter(r => r.client_name === client);
+    if (car)    rows = rows.filter(r => carLabel(r) === car);
+    // Same overlap rule as the reports: From keeps rentals still running on or
+    // after it; To keeps those that had started by it.
+    if (from) rows = rows.filter(r => r.end_date   && String(r.end_date).slice(0, 10)   >= from);
+    if (to)   rows = rows.filter(r => r.start_date && String(r.start_date).slice(0, 10) <= to);
+    // Newest first — the rental you just recorded lands at the top.
+    return rows.sort((a, b) => String(b.start_date || "").localeCompare(String(a.start_date || "")));
+  }
+
+  function renderIndividuals(){
+    const tb = $("#rented-individual-rows");
+    if (!tb) return;
+    const all  = individualRows();
+    const cnt  = $("#hub-count-individual");
+    if (cnt) cnt.textContent = all.length;
+    if (!all.length){
+      tb.innerHTML = `<tr class="empty-row"><td colspan="6">${escape(t("carsHub.ind.empty"))}</td></tr>`;
+      return;
+    }
+    const today = _raToday();
+    const ltr  = (v) => `<span class="ltr">${escape(v)}</span>`;
+    const dash = `<span class="cell-dash">—</span>`;
+    const day  = (d) => d ? ltr(String(d).slice(0, 10)) : dash;
+    // Card mode (721–1024px) hides the <thead>, so data-label is a cell's only
+    // label — and merged cells make that matter more, not less.
+    const lbl  = (k) => escape(t(k));
+
+    tb.innerHTML = all.map((r, i) => {
+      // The status cell is a picker. A returned booking is settled — the server
+      // won't move it — so that one stays a plain badge. Only an ACTIVE booking
+      // also carries its date-derived state (Overdue), since a pending or
+      // cancelled booking has no car out to be overdue.
+      const bs = r.status || "active";
+      let status;
+      if (r.returned_at){
+        status = `<span class="return-badge returned">${escape(t("special.status.returned"))}</span>`;
+      } else {
+        const overdue = bs === "active" && _raStatus(r, today) === "overdue"
+          ? `<span class="return-badge overdue">${escape(t("returns.overdue"))}</span>` : "";
+        status = statusPicker(bs, `data-rental="${r.rental_id}"`, overdue);
+      }
+      const gps = r.car_has_gps
+        ? `<span class="badge yes">${escape(t("yes"))}</span>`
+        : `<span class="badge no">${escape(t("no"))}</span>`;
+      // WHO has it: the client leads, their phone is the supporting line.
+      // Two former columns, one cell, one thing described.
+      const phoneHtml = r.client_phone
+        ? `<a href="tel:${escape(r.client_phone)}" class="ltr">${escape(r.client_phone)}</a>` : "";
+      const clientCell = `<div class="sr-stack">
+          <span class="sr-main">${r.client_name ? escape(r.client_name) : dash}</span>
+          ${phoneHtml ? `<span class="sr-sub">${phoneHtml}</span>` : ""}
+        </div>`;
+
+      // WHAT they took: model leads; plate + colour say which one.
+      const vSub = [
+        r.car_plate ? `<span class="sr-plate ltr">${escape(r.car_plate)}</span>` : "",
+        r.car_color ? formatColorCell(r.car_color) : "",
+      ].filter(Boolean).join(`<span class="sr-dot">·</span>`);
+      const vehicleCell = r.car_model || r.car_plate
+        ? `<div class="sr-stack">
+             <span class="sr-main">${r.car_model ? escape(r.car_model) : dash}</span>
+             ${vSub ? `<span class="sr-sub">${vSub}</span>` : ""}
+           </div>`
+        : dash;
+
+      // WHEN: one span reads as a period; two columns read as two facts.
+      const period = `${day(r.start_date)}<span class="rp-arrow">→</span>${day(r.end_date)}`;
+
+      return `<tr data-ind-row="${i}" class="report-row${bs === "cancelled" ? " booking-cancelled-row" : ""}">
+        <td data-col="client"  data-label="${lbl("report.client")}">${clientCell}</td>
+        <td data-col="vehicle" data-label="${lbl("report.vehicle")}">${vehicleCell}</td>
+        <td data-col="period"  data-label="${lbl("report.period")}">${period}</td>
+        <td data-col="gps"     data-label="${lbl("report.gps")}">${gps}</td>
+        <td data-col="status"  data-label="${lbl("report.status")}">${status}</td>
+        <td data-col="view"><div class="row-actions">
+          <button type="button" class="row-btn ind-view" data-ind-detail="${i}"
+                  title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">${ROW_MORE_ICO}</button>
+        </div></td>
+      </tr>`;
+    }).join("");
+
+    // Row (or 👁) opens the shared Detail modal — same photos / video / extra
+    // drivers the Report tab shows. Clicks that land on a button or the status
+    // picker belong to that control: this listener sits ON the row, so it runs
+    // BEFORE any delegated handler on the tbody and a stopPropagation() up
+    // there can't hold it back.
+    $$("tr[data-ind-row]", tb).forEach(tr => {
+      tr.addEventListener("click", (e) => {
+        if (e.target.closest("button, .status-pick")) return;
+        Detail.open(all[Number(tr.dataset.indRow)]);
+      });
+    });
+  }
+
+  /* ---- Counts on the tabs ---- */
+  function setCount(sel, n){ const el = $(sel); if (el) el.textContent = n; }
+
+  // Fleet and B2B counts are read from whoever owns that data; the individual
+  // count is set by renderIndividuals as it paints. Re-read on every view
+  // change so a save on one tab can't leave another tab's badge stale.
+  function syncCounts(){
+    const fleetRows = $$("#my-cars-rows tr").filter(tr => !tr.querySelector(".empty-cell"));
+    setCount("#hub-count-fleet", fleetRows.length);
+    setCount("#hub-count-company", SpecialRentals.count());
+  }
+
+  /* ---- View switching ---- */
+  function show(view){
+    if (!VIEWS.includes(view)) view = "fleet";
+    _view = view;
+    $$("#company-cars .hub-view").forEach(v => {
+      v.hidden = v.dataset.carviewPanel !== view;
+    });
+    $$("#company-cars .hub-tab").forEach(b => {
+      const on = b.dataset.carview === view;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    syncCounts();
+    if (view === "individual") renderIndividuals();
+    // The B2B list is only fetched on demand — recount once it lands.
+    if (view === "company") Promise.resolve(SpecialRentals.refresh()).then(syncCounts);
+  }
+
+  // Called when the panel opens: pull whatever each table needs, then repaint
+  // the current view.
+  async function refresh(){
+    const u = (typeof AUTH !== "undefined") ? AUTH.user() : null;
+    if (!u || u.role !== "company") return;
+    await Promise.all([
+      (async () => { try { await refreshReport(); } catch (e){} })(),
+      (async () => { try { await SpecialRentals.refresh(); } catch (e){} })(),
+    ]);
+    renderIndividuals();
+    show(_view);
+  }
+
+  function setup(){
+    if (!$("#company-cars")) return;
+
+    // Primary actions.
+    $("#btn-open-add-car")?.addEventListener("click", () => window.openAddCarModal?.());
+    $("#btn-open-rented") ?.addEventListener("click", () => showModal("#car-rented-modal"));
+
+    // Add-car modal chrome (the form's own wiring lives in setupAddCarForm).
+    $("#add-car-modal-close")?.addEventListener("click", () => hideModal("#add-car-modal"));
+
+    // "Car rented" → who's renting? Each pick closes the chooser, switches the
+    // table behind it, and opens that kind's data-entry modal.
+    $("#car-rented-close")?.addEventListener("click", () => hideModal("#car-rented-modal"));
+    $$("#car-rented-modal [data-rented-kind]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const kind = btn.dataset.rentedKind;
+        hideModal("#car-rented-modal");
+        show(kind);
+        if (kind === "individual") openIndividualModal();
+        else SpecialRentals.openAdd();
+      });
+    });
+
+    // Per-view "add another" buttons.
+    $("#btn-new-individual-rental")?.addEventListener("click", openIndividualModal);
+    $("#btn-new-special-rental")?.addEventListener("click", () => SpecialRentals.openAdd());
+    $("#individual-rental-close")?.addEventListener("click", () => hideModal("#individual-rental-modal"));
+
+    // Tabs.
+    $$("#company-cars .hub-tab").forEach(b => {
+      b.addEventListener("click", () => show(b.dataset.carview));
+    });
+
+    // Individuals toolbar — re-renders the loaded rows, no re-fetch. The two
+    // pickers only ever fire `change` (SearchSelect dispatches it on choose);
+    // the date inputs also fire `input` as they're typed into.
+    ["#filter-ind-client", "#filter-ind-car"].forEach(sel => {
+      $(sel)?.addEventListener("change", renderIndividuals);
+    });
+    ["#filter-ind-from", "#filter-ind-to"].forEach(sel => {
+      $(sel)?.addEventListener("input",  renderIndividuals);
+      $(sel)?.addEventListener("change", renderIndividuals);
+    });
+    $("#filter-ind-reset")?.addEventListener("click", () => {
+      // A picker resets through clearFilterSelect — blanking .value alone would
+      // leave the SearchSelect trigger showing the old pick.
+      clearFilterSelect($("#filter-ind-client"));
+      clearFilterSelect($("#filter-ind-car"));
+      ["#filter-ind-from", "#filter-ind-to"].forEach(sel => {
+        const el = $(sel); if (el) el.value = "";
+      });
+      renderIndividuals();
+    });
+
+    // 👁 opens the detail modal. It must stop the event — the row itself also
+    // opens the detail modal.
+    $("#rented-individual-rows")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".ind-view");
+      if (!btn) return;
+      e.stopPropagation();
+      const rows = individualRows();
+      const rec = rows[Number(btn.dataset.indDetail)];
+      if (rec) Detail.open(rec);
+    });
+
+    // Picking a status in the table moves the booking.
+    $("#rented-individual-rows")?.addEventListener("change", (e) => {
+      const sel = e.target.closest(".status-pick-sel");
+      if (!sel) return;
+      setRentalStatus(sel.dataset.rental, sel.value);
+    });
+
+    // Esc closes whichever of this panel's modals is on top.
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      ["#add-car-modal", "#car-rented-modal", "#individual-rental-modal", "#special-rental-modal"]
+        .forEach(sel => { const m = $(sel); if (m && !m.hidden) hideModal(sel); });
+    });
+  }
+
+  // Move a booking between pending / active / cancelled. The server re-checks
+  // overlap when a booking reclaims a car, so a 409 here is a real clash — and
+  // a rejected move must repaint, or the picker would keep showing the status
+  // the server just refused.
+  async function setRentalStatus(rentalId, to){
+    if (!rentalId || !to) return;
+    try {
+      const r = await fetch(API.url(`/api/rentals/${rentalId}/status`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ status: to }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok){ toast(data.error || t("toast.error"), "error"); renderIndividuals(); return; }
+      toast(t("status.moved").replace("{status}", t("status." + to + ".short")), "success");
+      await refreshReport();
+      renderIndividuals();
+      if (typeof Notifications !== "undefined") Notifications.refresh();
+    } catch (err){
+      toast(err.message || t("toast.error"), "error");
+      renderIndividuals();
+    }
+  }
+
+  // Blank the create-rental form, refresh its pickers (cars/clients added on
+  // other tabs), then raise it.
+  function openIndividualModal(){
+    const form = $("#form-create-rental");
+    if (form){
+      form.reset();
+      clearAllFieldErrors(form);
+    }
+    // form.reset() restores the select's first option (Active) but leaves the
+    // SearchSelect trigger showing whatever was picked last — sync repaints it.
+    const st = $("#rental-status");
+    if (st){ st.value = "active"; st._ss?.sync?.(); }
+    hideCreateRentalStatus();
+    refreshRentalPickers();
+    showModal("#individual-rental-modal");
+  }
+
+  return { setup, refresh, show, renderIndividuals };
+})();
+
 const SpecialRentals = (() => {
   let _cars = [];      // the enterprise's own cars (VIN → full detail)
   let _records = [];   // saved special-company records
@@ -8771,31 +8766,41 @@ const SpecialRentals = (() => {
   const _z2 = n => String(n).padStart(2, "0");
   function _todayStr(){ const d = new Date(); return `${d.getFullYear()}-${_z2(d.getMonth()+1)}-${_z2(d.getDate())}`; }
 
-  // Status badge for a B2B record: Returned (handed back), or — while still
-  // out — Overdue / Due today / Out based on end_date vs today.
+  // Status cell for a B2B record — a picker, same as the individuals table. A
+  // record handed back is settled, so that one stays a plain badge. Only an
+  // ACTIVE record still out carries its date-derived state (Overdue / Due
+  // today) under the picker; a pending or cancelled record has no car out, so
+  // an "Overdue" badge on it would be a lie.
   function _statusCell(r){
+    const st = r.status || "active";
     if (r.returned_at){
       const at = String(r.returned_at).slice(0, 10);
       return `<span class="return-badge returned" title="${escape(at)}">${escape(t("special.status.returned"))}</span>`;
     }
+    return statusPicker(st, `data-sr="${r.id}"`, st === "active" ? _dueBadge(r) : "");
+  }
+
+  // The date-derived half of an active record's status: Overdue / Due today, or
+  // nothing at all — plain "Out" is what the picker already says.
+  function _dueBadge(r){
     const end = r.end_date ? String(r.end_date).slice(0, 10) : "";
-    if (!end) return `<span class="return-badge upcoming">${escape(t("special.status.out"))}</span>`;
+    if (!end) return "";
     const today = _todayStr();
-    if (end < today) return `<span class="return-badge overdue">${escape(t("returns.overdue"))}</span>`;
+    if (end < today)  return `<span class="return-badge overdue">${escape(t("returns.overdue"))}</span>`;
     if (end === today) return `<span class="return-badge today">${escape(t("returns.dueToday"))}</span>`;
-    return `<span class="return-badge upcoming">${escape(t("special.status.out"))}</span>`;
+    return "";
   }
 
   function renderRecords(){
     const tb = $("#special-rows");
     if (!tb) return;
     if (!_records.length){
-      tb.innerHTML = `<tr class="empty-row"><td colspan="12">${escape(t("special.empty"))}</td></tr>`;
+      tb.innerHTML = `<tr class="empty-row"><td colspan="6">${escape(t("special.empty"))}</td></tr>`;
       return;
     }
     const rows = getFiltered();
     if (!rows.length){
-      tb.innerHTML = `<tr class="empty-row"><td colspan="12">${escape(t("special.noMatch"))}</td></tr>`;
+      tb.innerHTML = `<tr class="empty-row"><td colspan="6">${escape(t("special.noMatch"))}</td></tr>`;
       return;
     }
     const carByVin = {};
@@ -8804,40 +8809,66 @@ const SpecialRentals = (() => {
     const dash = '<span class="muted-cell">—</span>';
     const ltr = (v) => `<span class="ltr">${escape(v)}</span>`;
     const day = (d) => d ? ltr(String(d).slice(0, 10)) : dash;
+    // Card mode (721–1024px) hides the <thead>, so data-label is a cell's only
+    // label — and merged cells make that matter more, not less.
+    const lbl = (k) => escape(t(k));
 
     tb.innerHTML = rows.map((r) => {
       const phones = r.phones ? splitCsv(r.phones) : [r.phone, r.extra_phone].filter(Boolean);
-      const phoneHtml = phones.length
-        ? phones.map(p => `<a href="tel:${escape(p)}" class="ltr">${escape(p)}</a>`).join(" · ")
-        : dash;
+      const phoneHtml = phones
+        .map(p => `<a href="tel:${escape(p)}" class="ltr">${escape(p)}</a>`)
+        .join(`<span class="sr-dot">·</span>`);
       const c = carByVin[recordVin(r)] || {};
       const gps = c.has_gps
         ? `<span class="badge yes">${escape(t("yes"))}</span>`
         : `<span class="badge no">${escape(t("no"))}</span>`;
-      // Edits are unlimited now; show how many times the record was edited.
-      const edits = Number(r.edit_count || 0);
+
+      // WHO took it: the renting company leads; its owner and phones are the
+      // supporting lines. Three former columns, one cell, one thing described.
+      // (No "Rented from" column here, unlike the admin's copy — these are this
+      // company's own records, so the owner is never in question.)
+      const sub = [
+        r.owner_name ? escape(r.owner_name) : "",
+        phoneHtml,
+      ].filter(Boolean).join(`<span class="sr-dot">·</span>`);
+      const renterCell = `<div class="sr-stack">
+          <span class="sr-main">${escape(r.company_name)}</span>
+          ${sub ? `<span class="sr-sub">${sub}</span>` : ""}
+        </div>`;
+
+      // WHAT they took: model leads, plate + colour identify which one.
+      const vSub = [
+        c.platenumber ? `<span class="sr-plate ltr">${escape(c.platenumber)}</span>` : "",
+        c.color ? formatColorCell(c.color) : "",
+      ].filter(Boolean).join(`<span class="sr-dot">·</span>`);
+      const vehicleCell = c.model || c.platenumber
+        ? `<div class="sr-stack">
+             <span class="sr-main">${c.model ? escape(c.model) : dash}</span>
+             ${vSub ? `<span class="sr-sub">${vSub}</span>` : ""}
+           </div>`
+        : dash;
+
+      // WHEN: one span reads as a period; two columns read as two facts.
+      const period = `${day(r.start_date)}<span class="rp-arrow">→</span>${day(r.end_date)}`;
       // A car still out can be extended or handed back to a branch; once
-      // returned those actions disappear and only Edit remains.
+      // returned those actions disappear and only Edit remains. Only an ACTIVE
+      // booking has a car out at all — there's nothing to extend or hand back
+      // on a pending or cancelled record, so those get Edit alone.
       const returned = !!r.returned_at;
+      const out = !returned && (r.status || "active") === "active";
       const editBtn = `<button type="button" class="row-btn special-edit" data-id="${r.id}">✎ ${escape(t("action.edit"))}</button>`;
-      const extendBtn = returned ? "" :
-        `<button type="button" class="row-btn special-extend" data-id="${r.id}">${escape(t("extend.action"))}</button>`;
-      const returnBtn = returned ? "" :
-        `<button type="button" class="row-btn special-return" data-id="${r.id}">${escape(t("returns.backToOffice"))}</button>`;
+      const extendBtn = out
+        ? `<button type="button" class="row-btn special-extend" data-id="${r.id}">${escape(t("extend.action"))}</button>` : "";
+      const returnBtn = out
+        ? `<button type="button" class="row-btn special-return" data-id="${r.id}">${escape(t("returns.backToOffice"))}</button>` : "";
       const action = `<div class="row-actions">${editBtn}${extendBtn}${returnBtn}</div>`;
 
       return `<tr${returned ? ' class="special-returned-row"' : ""}>
-        <td data-col="company"><strong>${escape(r.company_name)}</strong></td>
-        <td data-col="owner">${r.owner_name ? escape(r.owner_name) : dash}</td>
-        <td data-col="phone">${phoneHtml}</td>
-        <td data-col="model">${c.model ? escape(c.model) : dash}</td>
-        <td data-col="color">${c.color ? escape(c.color) : dash}</td>
-        <td data-col="plate">${c.platenumber ? ltr(c.platenumber) : dash}</td>
-        <td data-col="gps">${gps}</td>
-        <td data-col="from">${day(r.start_date)}</td>
-        <td data-col="to">${day(r.end_date)}</td>
-        <td data-col="status">${_statusCell(r)}</td>
-        <td data-col="edits">${edits}</td>
+        <td data-col="renter"  data-label="${lbl("special.th.rentedBy")}">${renterCell}</td>
+        <td data-col="vehicle" data-label="${lbl("special.th.vehicle")}">${vehicleCell}</td>
+        <td data-col="period"  data-label="${lbl("report.period")}">${period}</td>
+        <td data-col="gps"     data-label="${lbl("special.th.gps")}">${gps}</td>
+        <td data-col="status"  data-label="${lbl("special.th.status")}">${_statusCell(r)}</td>
         <td data-col="action" class="my-car-action">${action}</td>
       </tr>`;
     }).join("");
@@ -8888,11 +8919,46 @@ const SpecialRentals = (() => {
     } catch (err){ toast(err.message || t("toast.error"), "error"); }
   }
 
+  // Move a B2B record between pending / active / cancelled from the table. Its
+  // own endpoint, not the full PUT — flipping a dropdown isn't an edit of the
+  // record and mustn't bump the edit count. Repaint either way: a move changes
+  // which row actions apply (only an active record can be extended or handed
+  // back), and a rejected one must snap the picker back to the real status.
+  async function _setRecordStatus(id, to){
+    if (!id || !to) return;
+    try {
+      const r = await fetch(API.url(`/api/special-rentals/${id}/status`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ status: to }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok){ toast(data.error || t("toast.error"), "error"); renderRecords(); return; }
+      toast(t("status.moved").replace("{status}", t("status." + to + ".short")), "success");
+      await refresh();
+      if (typeof Notifications !== "undefined") Notifications.refresh();
+    } catch (err){
+      toast(err.message || t("toast.error"), "error");
+      renderRecords();
+    }
+  }
+
+  // The booking-status <select> (distinct from setStatus above, which drives
+  // the form's status BANNER). It's SearchSelect-wrapped, so setting .value
+  // alone leaves the visible trigger showing the old label — sync() repaints it.
+  function setStatusField(value){
+    const sel = $("#special-status");
+    if (!sel) return;
+    sel.value = value || "active";
+    sel._ss?.sync?.();
+  }
+
   function resetForm(){
     const form = $("#form-special-rental");
     if (form) form.reset();
     PhoneList.setPhones("#special-phones", "");
     setBranches("");
+    setStatusField("active");
     populateCarSelect("");
     $("#special-x").value = "";
     $("#special-y").value = "";
@@ -8900,7 +8966,7 @@ const SpecialRentals = (() => {
     if (ms){ ms.classList.add("empty"); ms.classList.remove("filled"); ms.textContent = t("companies.maploc.empty"); }
   }
 
-  // ---- Edit an existing record (typo correction, max 2×) ----
+  // ---- Edit an existing record (typo correction, unlimited) ----
   function enterEditMode(rec){
     const form = $("#form-special-rental");
     if (!form) return;
@@ -8914,6 +8980,7 @@ const SpecialRentals = (() => {
     setVal("end_date",     (rec.end_date   || "").slice(0, 10));
     PhoneList.setPhones("#special-phones", rec.phones || "");
     setBranches(rec.branches || "");
+    setStatusField(rec.status);
     populateCarSelect(recordVin(rec));
     $("#special-x").value = rec.x != null ? rec.x : "";
     $("#special-y").value = rec.y != null ? rec.y : "";
@@ -8926,8 +8993,11 @@ const SpecialRentals = (() => {
     const btn = $("#special-submit");
     if (btn){ btn.removeAttribute("data-i18n"); btn.textContent = t("special.update"); }
     const cancel = $("#special-cancel-edit"); if (cancel) cancel.hidden = false;
+    const ttl = $("#special-modal-title");
+    if (ttl){ ttl.removeAttribute("data-i18n"); ttl.textContent = t("special.editTitle"); }
     setStatus(t("special.editingNow").replace("{company}", rec.company_name || ""));
-    form.scrollIntoView({ behavior: "smooth", block: "start" });
+    // The form is a modal now — raise it instead of scrolling to a panel.
+    showModal("#special-rental-modal");
   }
 
   function exitEditMode(){
@@ -8935,7 +9005,16 @@ const SpecialRentals = (() => {
     const btn = $("#special-submit");
     if (btn){ btn.setAttribute("data-i18n", "special.action"); btn.textContent = t("special.action"); }
     const cancel = $("#special-cancel-edit"); if (cancel) cancel.hidden = true;
+    const ttl = $("#special-modal-title");
+    if (ttl){ ttl.setAttribute("data-i18n", "special.title"); ttl.textContent = t("special.title"); }
     setStatus("");
+  }
+
+  // "New record" → a guaranteed-blank add form, then raise the modal.
+  function openAdd(){
+    exitEditMode();
+    resetForm();
+    showModal("#special-rental-modal");
   }
 
   async function refresh(){
@@ -8974,6 +9053,7 @@ const SpecialRentals = (() => {
       car_vin:    getCarVin(),
       start_date: (fd.get("start_date") || "").toString().trim(),
       end_date:   (fd.get("end_date") || "").toString().trim(),
+      status:     (fd.get("status") || "active").toString(),
     };
     try {
       if (_editId != null){
@@ -8985,6 +9065,7 @@ const SpecialRentals = (() => {
       }
       exitEditMode();
       resetForm();
+      hideModal("#special-rental-modal");
       await refresh();
     } catch (err){
       setStatus(err.message || "Save failed", "error");
@@ -9047,8 +9128,20 @@ const SpecialRentals = (() => {
       }
     });
 
-    // Cancel an in-progress edit → back to a blank "add" form.
-    $("#special-cancel-edit")?.addEventListener("click", () => { exitEditMode(); resetForm(); });
+    // Picking a status in the table moves the record.
+    $("#special-rows")?.addEventListener("change", (e) => {
+      const sel = e.target.closest(".status-pick-sel");
+      if (sel) _setRecordStatus(sel.dataset.sr, sel.value);
+    });
+
+    // Cancel an in-progress edit → close the modal on a blank "add" form.
+    $("#special-cancel-edit")?.addEventListener("click", () => {
+      exitEditMode(); resetForm(); hideModal("#special-rental-modal");
+    });
+    // Modal chrome: × closes without saving.
+    $("#special-rental-close")?.addEventListener("click", () => {
+      exitEditMode(); resetForm(); hideModal("#special-rental-modal");
+    });
 
     // Filters: any change re-renders the already-loaded records (no re-fetch).
     ["#filter-sr-company", "#filter-sr-car", "#filter-sr-from", "#filter-sr-to"].forEach(sel => {
@@ -9064,7 +9157,7 @@ const SpecialRentals = (() => {
     });
   }
 
-  return { setup, refresh };
+  return { setup, refresh, openAdd, count: () => _records.length };
 })();
 
 /* ============== ADMIN: CARS RENTED BY COMPANIES (B2B report) ==============
@@ -9120,7 +9213,7 @@ const AdminSpecial = (() => {
     if (!tb) return;
     _view = filtered();
     if (!_view.length){
-      tb.innerHTML = `<tr class="empty-row"><td colspan="11">${escape(t("adminSpecial.empty"))}</td></tr>`;
+      tb.innerHTML = `<tr class="empty-row"><td colspan="7">${escape(t("adminSpecial.empty"))}</td></tr>`;
       const pt = $("#pager-top-admin-special"); if (pt) pt.hidden = true;
       const pb = $("#pager-admin-special");     if (pb) pb.hidden = true;
       return;
@@ -9130,13 +9223,14 @@ const AdminSpecial = (() => {
     const ltr = (v) => `<span class="ltr">${escape(v)}</span>`;
     const day = (d) => d ? ltr(String(d).slice(0, 10)) : dash;
     const splitCsv = (s) => String(s || "").split(",").map(x => x.trim()).filter(Boolean);
+    // Card mode (721–1024px) hides the <thead>, so data-label is a cell's only
+    // label. Merged cells make this matter more, not less — "Rented by" has to
+    // say so when the header isn't there to.
+    const lbl = (k) => escape(t(k));
 
     tb.innerHTML = info.rows.map((r, i) => {
       const idx = (info.page - 1) * info.size + i;   // absolute index into _view
       const phones = r.phones ? splitCsv(r.phones) : [r.phone, r.extra_phone].filter(Boolean);
-      const phoneHtml = phones.length
-        ? phones.map(p => `<a href="tel:${escape(p)}" class="ltr">${escape(p)}</a>`).join(" · ")
-        : dash;
       const gps = r.has_gps
         ? `<span class="badge yes">${escape(t("yes"))}</span>`
         : `<span class="badge no">${escape(t("no"))}</span>`;
@@ -9147,20 +9241,56 @@ const AdminSpecial = (() => {
       const fromCell = ownerCo
         ? drillCell("company", ownerCo.id, ownerCo.companyname, true)
         : dash;
-      return `<tr class="al-click-row" data-idx="${idx}" title="${escape(t("action.view"))}">
-        <td data-col="from-company">${fromCell}</td>
-        <td data-col="company"><strong>${escape(r.company_name)}</strong></td>
-        <td data-col="owner">${r.owner_name ? escape(r.owner_name) : dash}</td>
-        <td data-col="phone">${phoneHtml}</td>
-        <td data-col="model">${r.model ? escape(r.model) : dash}</td>
-        <td data-col="color">${r.color ? escape(r.color) : dash}</td>
-        <td data-col="plate">${r.platenumber ? ltr(r.platenumber) : dash}</td>
-        <td data-col="from">${day(r.start_date)}</td>
-        <td data-col="to">${day(r.end_date)}</td>
-        <td data-col="gps">${gps}</td>
+
+      // WHO took it: the renting company leads; its owner and phones are the
+      // supporting lines. Three former columns, one cell, one thing described.
+      const phoneHtml = phones
+        .map(p => `<a href="tel:${escape(p)}" class="ltr">${escape(p)}</a>`)
+        .join(`<span class="sr-dot">·</span>`);
+      const sub = [
+        r.owner_name ? escape(r.owner_name) : "",
+        phoneHtml,
+      ].filter(Boolean).join(`<span class="sr-dot">·</span>`);
+      const renterCell = `<div class="sr-stack">
+          <span class="sr-main">${escape(r.company_name)}</span>
+          ${sub ? `<span class="sr-sub">${sub}</span>` : ""}
+        </div>`;
+
+      // WHAT they took: model leads, plate + colour identify which one.
+      const vSub = [
+        r.platenumber ? `<span class="sr-plate ltr">${escape(r.platenumber)}</span>` : "",
+        r.color ? formatColorCell(r.color) : "",
+      ].filter(Boolean).join(`<span class="sr-dot">·</span>`);
+      const vehicleCell = r.model || r.platenumber
+        ? `<div class="sr-stack">
+             <span class="sr-main">${r.model ? escape(r.model) : dash}</span>
+             ${vSub ? `<span class="sr-sub">${vSub}</span>` : ""}
+           </div>`
+        : dash;
+
+      // WHEN: one span reads as a period; two columns read as two facts.
+      const period = `${day(r.start_date)}<span class="rp-arrow">→</span>${day(r.end_date)}`;
+
+      // Read-only: the owning company moves its own B2B records from its Cars &
+      // Rentals table. A returned record shows "Returned" ALONE — it's settled,
+      // so the state it was in is history. Only an ACTIVE record can be late.
+      const bs = r.status || "active";
+      const status = r.returned_at
+        ? `<span class="return-badge returned">${escape(t("special.status.returned"))}</span>`
+        : statusTag(bs, bs === "active" && r.end_date && String(r.end_date).slice(0, 10) < _raToday()
+            ? `<span class="return-badge overdue">${escape(t("returns.overdue"))}</span>` : "");
+
+      return `<tr class="al-click-row" data-idx="${idx}" title="${escape(t("special.detail.title"))}">
+        <td data-col="from-company" data-label="${lbl("adminSpecial.th.fromCompany")}">${fromCell}</td>
+        <td data-col="renter" data-label="${lbl("adminSpecial.th.rentedBy")}">${renterCell}</td>
+        <td data-col="vehicle" data-label="${lbl("adminSpecial.th.vehicle")}">${vehicleCell}</td>
+        <td data-col="period" data-label="${lbl("report.period")}">${period}</td>
+        <td data-col="gps" data-label="${lbl("special.th.gps")}">${gps}</td>
+        <td data-col="status" data-label="${lbl("report.status")}">${status}</td>
         <td data-col="view">
           <button type="button" class="row-btn admin-special-view" data-idx="${idx}"
-                  title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">${ROW_MORE_ICO}</button>
+                  title="${escape(t("special.detail.title"))}"
+                  aria-label="${escape(t("special.detail.title"))}">${ROW_MORE_ICO}</button>
         </td>
       </tr>`;
     }).join("");
@@ -9213,25 +9343,54 @@ const AdminSpecial = (() => {
     });
   }
 
-  return { setup, refresh };
+  return { setup, refresh, count: () => _all.length };
 })();
 
 /* ============== ADMIN: CARS RENTED BY INDIVIDUALS ==============
    Currently-out individual-client rentals (returned_at IS NULL). Deliberately
-   mirrors AdminSpecial so the two admin cards render as matching tables. */
+   mirrors AdminSpecial so the two tables in the Cars hub read as a matching
+   pair: the same merged .sr-stack cells, the same labelled row button, the
+   same movable status picker.
+
+   The toolbar used to be one free-text box matching client / phone / company /
+   model / plate / colour. It's now prefix-searchable dropdowns (client, car)
+   plus a From/To window — the same shape as the company hub's individuals
+   table and the report. Worth knowing what that trades away: the box could
+   also match a PHONE or a COLOUR, and the dropdowns can't. What you gain is
+   that a pick can never return an empty table (the options are built from the
+   very rows being rendered) and there's nothing to mistype. */
 const AdminIndividual = (() => {
   let _all = [];
   let _view = [];
   let _wired = false;
 
+  // "Model — Plate": unique per car, so two identical models stay distinct.
+  function carLabelOf(r){
+    if (!r || !r.car_model) return "";
+    return r.car_plate ? `${r.car_model} — ${r.car_plate}` : r.car_model;
+  }
+
+  function populateFilters(){
+    if (typeof populateFilterSelect !== "function") return;
+    populateFilterSelect($("#filter-ai-client"), _all.map(r => r.client_name));
+    populateFilterSelect($("#filter-ai-car"),    _all.map(carLabelOf));
+  }
+
+  // Client and car are dropdown picks, so they match EXACTLY. Dates use the
+  // same "active in range" overlap rule as the report and the B2B table: From
+  // keeps rentals still running on/after it, To keeps those that had started
+  // by it.
   function filtered(){
     let rows = _all.slice();
-    const q = ($("#filter-individual-search")?.value || "").trim().toLowerCase();
-    if (q){
-      rows = rows.filter(r =>
-        [r.client_name, r.client_phone, r.company_name, r.car_model, r.car_plate, r.car_color]
-          .some(v => String(v || "").toLowerCase().includes(q)));
-    }
+    const client = $("#filter-ai-client")?.value || "";
+    const car    = $("#filter-ai-car")?.value    || "";
+    const from   = ($("#filter-ai-from")?.value  || "").trim();
+    const to     = ($("#filter-ai-to")?.value    || "").trim();
+    const d = (v) => v ? String(v).slice(0, 10) : "";
+    if (client) rows = rows.filter(r => r.client_name === client);
+    if (car)    rows = rows.filter(r => carLabelOf(r) === car);
+    if (from)   rows = rows.filter(r => r.end_date   && d(r.end_date)   >= from);
+    if (to)     rows = rows.filter(r => r.start_date && d(r.start_date) <= to);
     return rows;
   }
 
@@ -9240,7 +9399,7 @@ const AdminIndividual = (() => {
     if (!tb) return;
     _view = filtered();
     if (!_view.length){
-      tb.innerHTML = `<tr class="empty-row"><td colspan="9">${escape(t("adminIndividual.empty"))}</td></tr>`;
+      tb.innerHTML = `<tr class="empty-row"><td colspan="6">${escape(t("adminIndividual.empty"))}</td></tr>`;
       const pt = $("#pager-top-admin-individual"); if (pt) pt.hidden = true;
       const pb = $("#pager-admin-individual");     if (pb) pb.hidden = true;
       return;
@@ -9249,23 +9408,55 @@ const AdminIndividual = (() => {
     const dash = '<span class="muted-cell">—</span>';
     const ltr = (v) => `<span class="ltr">${escape(v)}</span>`;
     const day = (d) => d ? ltr(String(d).slice(0, 10)) : dash;
+    const today = _raToday();
+    // Card mode (721–1024px) hides the <thead>, so data-label is a cell's only
+    // label — and merged cells make that matter more, not less.
+    const lbl = (k) => escape(t(k));
+
     tb.innerHTML = info.rows.map((r, i) => {
       const idx = (info.page - 1) * info.size + i;   // absolute index into _view
       const gps = r.car_has_gps
         ? `<span class="badge yes">${escape(t("yes"))}</span>`
         : `<span class="badge no">${escape(t("no"))}</span>`;
-      const phone = r.client_phone
-        ? `<a href="tel:${escape(r.client_phone)}" class="ltr">${escape(r.client_phone)}</a>` : dash;
+
+      // WHO has it: the client leads, their phone is the supporting line.
+      const phoneHtml = r.client_phone
+        ? `<a href="tel:${escape(r.client_phone)}" class="ltr">${escape(r.client_phone)}</a>` : "";
+      const clientCell = `<div class="sr-stack">
+          <span class="sr-main">${r.client_name ? escape(r.client_name) : dash}</span>
+          ${phoneHtml ? `<span class="sr-sub">${phoneHtml}</span>` : ""}
+        </div>`;
+
+      // WHAT they took: model leads; plate + colour say which one.
+      const vSub = [
+        r.car_plate ? `<span class="sr-plate ltr">${escape(r.car_plate)}</span>` : "",
+        r.car_color ? formatColorCell(r.car_color) : "",
+      ].filter(Boolean).join(`<span class="sr-dot">·</span>`);
+      const vehicleCell = r.car_model || r.car_plate
+        ? `<div class="sr-stack">
+             <span class="sr-main">${r.car_model ? escape(r.car_model) : dash}</span>
+             ${vSub ? `<span class="sr-sub">${vSub}</span>` : ""}
+           </div>`
+        : dash;
+
+      // WHEN: one span reads as a period; two columns read as two facts.
+      const period = `${day(r.start_date)}<span class="rp-arrow">→</span>${day(r.end_date)}`;
+
+      // Read-only, same as the other two admin tables: the company that took the
+      // booking moves it; the admin reads it. These rows are all un-returned
+      // (the endpoint filters on it), so only Overdue can apply here.
+      const bs = r.status || "active";
+      const overdue = bs === "active" && _raStatus(r, today) === "overdue"
+        ? `<span class="return-badge overdue">${escape(t("returns.overdue"))}</span>` : "";
+      const status = statusTag(bs, overdue);
+
       return `<tr class="al-click-row" data-idx="${idx}" title="${escape(t("action.view"))}">
-        <td data-col="client"><strong>${r.client_name ? escape(r.client_name) : dash}</strong></td>
-        <td data-col="company">${r.company_name ? escape(r.company_name) : dash}</td>
-        <td data-col="phone">${phone}</td>
-        <td data-col="model">${r.car_model ? escape(r.car_model) : dash}</td>
-        <td data-col="color">${r.car_color ? escape(r.car_color) : dash}</td>
-        <td data-col="plate">${r.car_plate ? ltr(r.car_plate) : dash}</td>
-        <td data-col="from">${day(r.start_date)}</td>
-        <td data-col="to">${day(r.end_date)}</td>
-        <td data-col="gps">${gps}</td>
+        <td data-col="client" data-label="${lbl("adminIndividual.th.client")}">${clientCell}</td>
+        <td data-col="company" data-label="${lbl("special.th.company")}">${r.company_name ? escape(r.company_name) : dash}</td>
+        <td data-col="vehicle" data-label="${lbl("adminSpecial.th.vehicle")}">${vehicleCell}</td>
+        <td data-col="period" data-label="${lbl("report.period")}">${period}</td>
+        <td data-col="gps" data-label="${lbl("special.th.gps")}">${gps}</td>
+        <td data-col="status" data-label="${lbl("report.status")}">${status}</td>
       </tr>`;
     }).join("");
     Pager.render("admin-individual", "#pager-top-admin-individual", "#pager-admin-individual", info, render);
@@ -9277,6 +9468,7 @@ const AdminIndividual = (() => {
     if (!u || u.role !== "admin") return;
     try { _all = await API.listAdminActiveRentals(); }
     catch (e){ _all = []; }
+    populateFilters();
     Pager.reset("admin-individual");
     render();
   }
@@ -9284,9 +9476,24 @@ const AdminIndividual = (() => {
   function setup(){
     if (_wired) return;
     _wired = true;
-    $("#filter-individual-search")?.addEventListener("input", () => { Pager.reset("admin-individual"); render(); });
+    // The two pickers only ever fire `change` — SearchSelect dispatches that and
+    // never `input`, so wiring these to `input` would mean picks silently never
+    // apply. The date inputs fire both as they're typed into.
+    ["#filter-ai-client", "#filter-ai-car"].forEach(sel => {
+      $(sel)?.addEventListener("change", () => { Pager.reset("admin-individual"); render(); });
+    });
+    ["#filter-ai-from", "#filter-ai-to"].forEach(sel => {
+      $(sel)?.addEventListener("input",  () => { Pager.reset("admin-individual"); render(); });
+      $(sel)?.addEventListener("change", () => { Pager.reset("admin-individual"); render(); });
+    });
     $("#individual-reset")?.addEventListener("click", () => {
-      const el = $("#filter-individual-search"); if (el) el.value = "";
+      // Blanking .value alone would leave the SearchSelect trigger showing the
+      // old pick — clearFilterSelect syncs the wrapper too.
+      clearFilterSelect($("#filter-ai-client"));
+      clearFilterSelect($("#filter-ai-car"));
+      ["#filter-ai-from", "#filter-ai-to"].forEach(sel => {
+        const el = $(sel); if (el) el.value = "";
+      });
       Pager.reset("admin-individual"); render();
     });
     // Click a row (client / company / car) to open the full rental detail
@@ -9300,7 +9507,630 @@ const AdminIndividual = (() => {
     });
   }
 
-  return { setup, refresh };
+  return { setup, refresh, count: () => _all.length };
+})();
+
+/* ============== COMPANY CLIENTS HUB (the views inside #company-clients) ======
+   The register and the clients' rental history are two questions about the same
+   people, so they share one panel — "Add Client & See History" — instead of two
+   home cards. Same shape as CarsHub / ClientsHub: this only swaps the view and
+   keeps the tab badges honest. The history table stays owned by
+   renderReportCompany(), which is keyed by element id, so the markup moved here
+   without touching it.
+
+   Scoping is NOT this module's job and never was: getReportRows() filters the
+   feed to `u.company_id` for every company user, so a company only ever sees
+   its own clients. Moving the table into this panel didn't widen that by a row. */
+const CoClientsHub = (() => {
+  const VIEWS = ["add", "history"];
+  let _view = "add";
+  let _wired = false;
+  // Held here, pushed in by renderReportCompany, so a syncCounts() from the
+  // register tab can't blank it.
+  let _historyCount = 0;
+
+  function setCount(sel, n){ const el = $(sel); if (el) el.textContent = n; }
+
+  // The register badge counts the rows you can actually see in "Clients you
+  // added", not every client in the system.
+  function syncCounts(){
+    const rows = $$("#my-clients-rows tr").filter(tr => !tr.querySelector(".empty-cell"));
+    setCount("#hub-count-coclients-add", rows.length);
+    setCount("#hub-count-coclients-history", _historyCount);
+  }
+
+  function syncHistoryCount(n){
+    _historyCount = n;
+    setCount("#hub-count-coclients-history", n);
+  }
+
+  function show(view){
+    if (!VIEWS.includes(view)) view = "add";
+    _view = view;
+    $$("#company-clients .hub-view").forEach(v => {
+      v.hidden = v.dataset.coclientviewPanel !== view;
+    });
+    $$("#company-clients .hub-tab").forEach(b => {
+      const on = b.dataset.coclientview === view;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    // The history feed is a per-open load — big, and nobody needs the number
+    // before clicking the tab. refreshReport() repaints the table, which pushes
+    // the badge back through syncHistoryCount.
+    if (view === "history"){
+      renderReportCompanyHead();
+      refreshReport();
+    }
+    syncCounts();
+  }
+
+  // Panel opened: refresh the register table, then paint the view being opened
+  // (the caller passes it, so we don't paint the previous one first).
+  function refresh(view){
+    if (view && VIEWS.includes(view)) _view = view;
+    if (window.refreshMyClientsTable) Promise.resolve(window.refreshMyClientsTable()).then(syncCounts);
+    show(_view);
+  }
+
+  function setup(){
+    if (_wired || !$("#company-clients")) return;
+    _wired = true;
+    $$("#company-clients .hub-tab").forEach(b => {
+      b.addEventListener("click", () => show(b.dataset.coclientview));
+    });
+  }
+
+  return { setup, show, refresh, syncCounts, syncHistoryCount, view: () => _view };
+})();
+
+/* ============== ADMIN CARS HUB (the views inside #cars) ==============
+   The fleet tree and the two "who is this car out with?" tables are three
+   answers about the same cars, so they share one panel instead of three
+   sidebar entries. Mirrors the company Cars hub. The tables stay owned by
+   AdminSpecial / AdminIndividual — this only swaps the view and keeps the tab
+   counts honest. */
+const AdminCarsHub = (() => {
+  const VIEWS = ["fleet", "individual", "company", "gps", "report"];
+  let _view = "fleet";
+  let _wired = false;
+
+  function setCount(sel, n){ const el = $(sel); if (el) el.textContent = n; }
+
+  // The report badge is pushed IN by renderReport (which knows the filtered
+  // count) rather than pulled here, so it tracks the toolbar instead of the
+  // unfiltered feed. Held so a syncCounts() from another tab can't blank it.
+  let _reportCount = 0;
+  function syncReportCount(n){
+    if (typeof n === "number") _reportCount = n;
+    setCount("#hub-count-admin-report", _reportCount);
+  }
+
+  // The fleet badge is read from the same summary the tree renders, so a
+  // filtered fleet and its badge can't disagree.
+  function syncCounts(){
+    const total = Object.values(fleet.summary || {}).reduce((s, e) => s + (e.total || 0), 0);
+    setCount("#hub-count-admin-fleet", total);
+    setCount("#hub-count-admin-individual", AdminIndividual.count());
+    setCount("#hub-count-admin-company", AdminSpecial.count());
+    syncReportCount();
+  }
+
+  function show(view){
+    if (!VIEWS.includes(view)) view = "fleet";
+    _view = view;
+    $$("#cars .hub-view").forEach(v => { v.hidden = v.dataset.adminviewPanel !== view; });
+    $$("#cars .hub-tab").forEach(b => {
+      const on = b.dataset.adminview === view;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    syncCounts();
+    // Leaflet can only measure itself against a laid-out container, so the map
+    // has to be told the moment its view stops being hidden — not before. This
+    // is also where it loads its cars, which is why the tab carries no badge.
+    if (view === "gps" && typeof CarGps !== "undefined") CarGps.onShow();
+    // The report is the one view whose rows aren't already in memory: the other
+    // tabs are fetched by refresh() below, but the report feed is big enough
+    // that it stays a per-open load. refreshReport() repaints on arrival.
+    if (view === "report") refreshReport();
+  }
+
+  // Both tables are fetched on demand. Load them together so every badge is
+  // right whichever view the admin lands on — the counts are the reason to
+  // click a tab, so they can't wait for the click.
+  async function refresh(){
+    const u = (typeof AUTH !== "undefined") ? AUTH.user() : null;
+    if (!u || u.role !== "admin") return;
+    await Promise.all([
+      (async () => { try { await AdminIndividual.refresh(); } catch (e){} })(),
+      (async () => { try { await AdminSpecial.refresh();    } catch (e){} })(),
+    ]);
+    syncCounts();
+  }
+
+  function setup(){
+    if (_wired || !$("#cars")) return;
+    _wired = true;
+    $$("#cars .hub-tab").forEach(b => {
+      b.addEventListener("click", () => show(b.dataset.adminview));
+    });
+    // The report's own Export PDF (the #report section's button belongs to the
+    // company's Clients History and stays wired to it).
+    $("#btn-export-pdf-admin")?.addEventListener("click", () => {
+      const rows = state.report || [];
+      if (!rows.length){ toast(t("table.empty"), "error"); return; }
+      downloadAuthed(API.url(`/api/report.pdf?lang=${currentLang()}`), "rental_report.pdf");
+    });
+    // No status listener here: the admin's status cells are read-only tags. A
+    // booking is moved by the company that took it, from its own tables.
+  }
+
+  return { setup, show, refresh, syncCounts, syncReportCount, view: () => _view };
+})();
+
+/* ============== SHARED: one master-detail history table ==============
+   Both admin history tables are the same table with different nouns: a master
+   row (a person / a renting company) that expands into that master's own
+   records, newest first. Rather than write the renderer twice, the two modules
+   below hand this one a small config.
+
+   It is deliberately NOT merged with renderReportCompany(): that one is the
+   COMPANY's, scoped to its own clients, keyed on its own pager and reachable
+   from `#report`. Sharing the markup shape is free (`.master-detail`); sharing
+   the function would mean one body serving two roles' scoping rules — the same
+   trap the admin/company row-detail split avoids.
+
+   `expandedMasters` mirrors `expandedReportClients`: which panels are open has
+   to survive a re-render (a filter change, a page turn, a language switch), so
+   it's keyed by master, not by screen position. */
+const expandedMasters = new Set();
+
+function renderMasterHistory(cfg){
+  const tbl = $(cfg.table);
+  if (!tbl) return;
+  const groups = cfg.groups;
+  const count  = $(cfg.countEl);
+  if (count) count.textContent = String(groups.length);
+  if (typeof ClientsHub !== "undefined") ClientsHub.syncCounts();
+  if (!groups.length){
+    const pt = $(cfg.pagerTop); if (pt) pt.hidden = true;
+    const pb = $(cfg.pagerBot); if (pb) pb.hidden = true;
+    return emptyRow(tbl, cfg.cols);
+  }
+
+  const info = Pager.slice(cfg.pagerKey, groups);
+  const lbl  = (k) => escape(t(k));
+
+  tbl.tBodies[0].innerHTML = info.rows.map((g, i) => {
+    const open  = expandedMasters.has(g.key);
+    const panel = `${cfg.panelPrefix}-${info.page}-${i}`;
+    const n     = g.rentals.length;
+    return `<tr class="client-master-row${open ? " is-expanded" : ""}" data-master="${escape(g.key)}">
+        ${cfg.masterCells(g)}
+        <td data-col="view">
+          <button type="button" class="row-btn client-toggle" aria-expanded="${open}"
+                  aria-controls="${panel}"
+                  title="${escape(t(open ? "report.hide" : "report.history"))}"
+                  aria-label="${escape(t(open ? "report.hide" : "report.history"))}">
+            <span class="rv-eye" aria-hidden="true">${ROW_MORE_ICO}</span>
+            <span class="rv-chev" aria-hidden="true">⌄</span>
+          </button>
+        </td>
+      </tr>
+      <tr class="client-history-row" id="${panel}"${open ? "" : " hidden"}>
+        <td colspan="${cfg.cols}">
+          <div class="client-history">
+            <h4 class="ch-h">${lbl("report.history")} · ${n} ${lbl(n === 1 ? "report.result" : "report.results")}</h4>
+            <div id="${panel}-top" class="pager-wrap ch-pager" hidden></div>
+            <ol id="${panel}-list" class="ch-list"></ol>
+            <div id="${panel}-nav" class="pager-wrap ch-pager" hidden></div>
+          </div>
+        </td>
+      </tr>`;
+  }).join("");
+
+  // Fill (or re-fill) one master's panel. Its pager is keyed by MASTER, so two
+  // open panels page independently and a page survives a re-render.
+  const renderPanel = (g, panel) => {
+    const list = $(`#${panel}-list`);
+    if (!list) return;
+    const key = `${cfg.pagerKey}-history:${g.key}`;
+    const hi  = Pager.slice(key, g.rentals);
+    // The index handed to item() is ABSOLUTE within this master's list, not
+    // within the page — the buttons are rebuilt on every page turn, and a
+    // page-relative index would open entry 1 of page 2 as entry 1 of page 1.
+    list.innerHTML = hi.rows.map((x, j) => cfg.item(x, (hi.page - 1) * hi.size + j)).join("");
+    $$(".ch-open", list).forEach(b => {
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        cfg.openItem(g.rentals[Number(b.dataset.i)]);
+      });
+    });
+    Pager.render(key, `#${panel}-top`, `#${panel}-nav`, hi, () => renderPanel(g, panel));
+  };
+  info.rows.forEach((g, i) => renderPanel(g, `${cfg.panelPrefix}-${info.page}-${i}`));
+
+  // Open / close in place — no re-render, so every other open panel stays put.
+  const toggle = (tr) => {
+    const row = tr.nextElementSibling;
+    if (!row || !row.classList.contains("client-history-row")) return;
+    const open = row.hasAttribute("hidden");
+    row.hidden = !open;
+    tr.classList.toggle("is-expanded", open);
+    if (open) expandedMasters.add(tr.dataset.master); else expandedMasters.delete(tr.dataset.master);
+    const btn = $(".client-toggle", tr);
+    if (btn){
+      btn.setAttribute("aria-expanded", String(open));
+      const lab = t(open ? "report.hide" : "report.history");
+      btn.title = lab;
+      btn.setAttribute("aria-label", lab);
+    }
+  };
+  $$("tr.client-master-row", tbl).forEach(tr => {
+    tr.addEventListener("click", (e) => {
+      // A drill cell / link inside the master row wins over the expander.
+      const drill = e.target.closest(".cell-drill");
+      if (drill){ e.stopPropagation(); EntityDetail.open(drill.dataset.drill, drill.dataset.drillkey); return; }
+      if (e.target.closest("a")) return;
+      toggle(tr);
+    });
+  });
+  // No applyTranslations() here: every label above already goes through t(),
+  // and this markup carries no [data-i18n]. Calling it would retranslate the
+  // whole document on every filter change and page turn for nothing.
+  Pager.render(cfg.pagerKey, cfg.pagerTop, cfg.pagerBot, info, cfg.rerender);
+}
+
+/* ============== ADMIN: one client's history across EVERY company ==============
+   The Cars hub's Report view answers "what rentals happened?" — one row per
+   rental. This answers "who is this person, and what have they rented from
+   anyone?" — one row per CLIENT, expanding into their rentals across every
+   company. Same feed (state.report), different unit, so neither duplicates. */
+const AdminClientHistory = (() => {
+  let _wired = false;
+  let _groups = [];
+
+  function rows(){
+    let rs = (state.report || []).slice();
+    const client = $("#filter-ch-client")?.value || "";
+    const car    = $("#filter-ch-car")?.value    || "";
+    const from   = ($("#ch-from")?.value || "").trim();
+    const to     = ($("#ch-to")?.value   || "").trim();
+    if (client) rs = rs.filter(r => r.client_name === client);
+    if (car)    rs = rs.filter(r => carLabel(r) === car);
+    // "Rentals running in this window" — an overlap, not a start-date match, so
+    // a long rental that spans the window still counts.
+    if (from) rs = rs.filter(r => r.end_date   && String(r.end_date).slice(0, 10)   >= from);
+    if (to)   rs = rs.filter(r => r.start_date && String(r.start_date).slice(0, 10) <= to);
+    return rs;
+  }
+
+  function populateFilters(){
+    // Built from the same feed the table renders, so a pick can't come back empty.
+    populateFilterSelect($("#filter-ch-client"), (state.report || []).map(r => r.client_name));
+    populateFilterSelect($("#filter-ch-car"),    (state.report || []).map(r => carLabel(r)));
+  }
+
+  function render(){
+    const today = _raToday();
+    const ltr   = (v) => `<span class="ltr">${escape(v)}</span>`;
+    const dash  = `<span class="cell-dash">—</span>`;
+    const day   = (d) => d ? ltr(String(d).slice(0, 10)) : dash;
+    const lbl   = (k) => escape(t(k));
+    const gpsPill = (on) => on
+      ? `<span class="badge yes">${escape(t("yes"))}</span>`
+      : `<span class="badge no">${escape(t("no"))}</span>`;
+
+    _groups = groupReportByClient(rows());
+    // How many DIFFERENT companies this client has rented from — the fact that
+    // makes this table worth having, so it gets its own column.
+    _groups.forEach(g => {
+      g.companies = new Set(g.rentals.map(x => x.r.company_id)).size;
+    });
+
+    renderMasterHistory({
+      table: "#tbl-client-history", cols: 7,
+      pagerKey: "client-history",
+      pagerTop: "#pager-top-client-history", pagerBot: "#pager-client-history",
+      countEl: "#ch-count", panelPrefix: "chist", groups: _groups,
+      rerender: render,
+      masterCells: (g) => {
+        const avatar = `<span class="ch-avatar" style="background:${_avatarColor(g.name)}" aria-hidden="true">${escape(_initials(g.name))}</span>`;
+        const period = `${day(g.latest.start_date)}<span class="rp-arrow">→</span>${day(g.latest.end_date)}`;
+        return `
+          <td data-col="client" data-label="${lbl("report.client")}">
+            <span class="ch-client">${avatar}<strong>${escape(g.name) || "—"}</strong></span>
+          </td>
+          <td data-col="phone" data-label="${lbl("report.phone")}">${formatPhonesCell(g.phone)}</td>
+          <td data-col="rentals" data-label="${lbl("report.rentals")}">${g.rentals.length}</td>
+          <td data-col="cars" data-label="${lbl("report.carsCount")}">${g.cars}</td>
+          <td data-col="companies" data-label="${lbl("clientHistory.th.companies")}">${g.companies}</td>
+          <td data-col="latest" data-label="${lbl("report.latest")}">${period}</td>`;
+      },
+      // One rental. The COMPANY leads the sub-line here — "which company did
+      // they rent this from" is the question this table exists to answer.
+      item: (x, i) => {
+        const r = x.r;
+        const st = BOOKING_STATUSES.includes(r.status) ? r.status : "active";
+        let tags;
+        if (r.returned_at){
+          tags = `<span class="return-badge returned">${escape(t("special.status.returned"))}</span>`;
+        } else {
+          const late = st !== "cancelled" && _raStatus(r, today) === "overdue"
+            ? `<span class="return-badge overdue">${escape(t("returns.overdue"))}</span>` : "";
+          tags = `<span class="status-tag ${st}">${escape(t("status." + st + ".short"))}</span>${late}`;
+        }
+        return `<li class="ch-item${st === "cancelled" ? " ch-item-off" : ""}">
+          <div class="ch-car">
+            <span class="ch-model">${r.car_model ? escape(r.car_model) : dash}</span>
+            <span class="ch-sub">
+              <span class="ch-org">${lbl("clientHistory.rentedFrom")} ${r.company_name ? escape(r.company_name) : dash}</span>
+              <span class="ch-dot" aria-hidden="true">·</span>
+              <span class="ch-plate">${r.car_plate ? ltr(r.car_plate) : dash}</span>
+              <span class="ch-dot" aria-hidden="true">·</span>
+              <span class="ch-gps">${lbl("report.gps")} ${gpsPill(r.car_has_gps)}</span>
+            </span>
+          </div>
+          <div class="ch-dates">${day(r.start_date)}<span class="rp-arrow">→</span>${day(r.end_date)}</div>
+          <div class="ch-tags">${tags}</div>
+          <button type="button" class="row-btn ch-open" data-i="${i}">${lbl("report.details")}</button>
+        </li>`;
+      },
+      // groupReportByClient wraps each rental as {r, idx}; the modal wants the
+      // rental itself. It takes the ROW OBJECT, never an index into a feed, so
+      // the table underneath can re-render without the modal going stale.
+      openItem: (x) => ReportRow.open(x.r),
+    });
+  }
+
+  async function refresh(){
+    const u = (typeof AUTH !== "undefined") ? AUTH.user() : null;
+    if (!u || u.role !== "admin") return;
+    // The report feed is shared with the Cars hub's Report view. Fetch it only
+    // if nobody has yet — opening this tab shouldn't re-download it.
+    if (!(state.report || []).length){
+      try { state.report = await API.report(); } catch (e){ state.report = []; }
+    }
+    populateFilters();
+    Pager.reset("client-history");
+    render();
+  }
+
+  function count(){ return _groups.length; }
+
+  function setup(){
+    if (_wired) return;
+    _wired = true;
+    ["#filter-ch-client", "#filter-ch-car"].forEach(sel => {
+      // SearchSelect dispatches `change` only — wiring `input` here silently
+      // never fires.
+      $(sel)?.addEventListener("change", () => { Pager.reset("client-history"); render(); });
+    });
+    ["#ch-from", "#ch-to"].forEach(sel => {
+      $(sel)?.addEventListener("change", () => { Pager.reset("client-history"); render(); });
+      $(sel)?.addEventListener("input",  () => { Pager.reset("client-history"); render(); });
+    });
+    $("#ch-reset")?.addEventListener("click", () => {
+      clearFilterSelect($("#filter-ch-client"));
+      clearFilterSelect($("#filter-ch-car"));
+      const f = $("#ch-from"); if (f) f.value = "";
+      const t2 = $("#ch-to");  if (t2) t2.value = "";
+      Pager.reset("client-history");
+      render();
+    });
+  }
+
+  return { setup, refresh, render, count, _rows: rows };
+})();
+
+/* ============== ADMIN: which companies rent, from whom, and what =============
+   The B2B feed one level up. The Cars hub's "Rented by companies" is one row
+   per RECORD; this is one row per RENTING COMPANY, expanding into which
+   registered company it took each car from. `company_name` on these records is
+   the RENTER (free text — a B2B counterparty, not a registered company), while
+   `company_id` is the registered company that OWNS the car and rented it out.
+   Getting those two backwards inverts the whole table. */
+const AdminCompanyHistory = (() => {
+  let _wired = false;
+  let _all = [];
+  let _groups = [];
+
+  const carLabelOf = (r) => !r || !r.model ? ""
+    : (r.platenumber ? `${r.model} — ${r.platenumber}` : r.model);
+  const ownerName = (r) => {
+    const co = (state.companies || []).find(c => c.id === Number(r.company_id));
+    return co ? co.companyname : "";
+  };
+
+  function rows(){
+    let rs = _all.slice();
+    const co   = $("#filter-coh-company")?.value || "";
+    const car  = $("#filter-coh-car")?.value     || "";
+    const from = ($("#coh-from")?.value || "").trim();
+    const to   = ($("#coh-to")?.value   || "").trim();
+    if (co)  rs = rs.filter(r => r.company_name === co);
+    if (car) rs = rs.filter(r => carLabelOf(r) === car);
+    if (from) rs = rs.filter(r => r.end_date   && String(r.end_date).slice(0, 10)   >= from);
+    if (to)   rs = rs.filter(r => r.start_date && String(r.start_date).slice(0, 10) <= to);
+    return rs;
+  }
+
+  function populateFilters(){
+    populateFilterSelect($("#filter-coh-company"), _all.map(r => r.company_name));
+    populateFilterSelect($("#filter-coh-car"),     _all.map(carLabelOf));
+  }
+
+  // Group by the RENTER. Its name is free text, so the name IS the identity —
+  // there's no id to key on the way client_id keys a client.
+  function groupByRenter(rs){
+    const by = new Map();
+    rs.forEach(r => {
+      const key = `co:${(r.company_name || "").trim().toLowerCase()}`;
+      let g = by.get(key);
+      if (!g){ g = { key, name: r.company_name || "", owner: r.owner_name || "", rentals: [] }; by.set(key, g); }
+      g.rentals.push(r);
+      if (!g.owner && r.owner_name) g.owner = r.owner_name;
+    });
+    const started = (r) => String(r.start_date || "").slice(0, 10);
+    const gs = [...by.values()];
+    gs.forEach(g => {
+      g.rentals.sort((a, b) => started(b).localeCompare(started(a)));
+      g.cars   = new Set(g.rentals.map(r => r.car_vin || carLabelOf(r))).size;
+      g.froms  = new Set(g.rentals.map(r => r.company_id)).size;
+      g.latest = g.rentals[0];
+    });
+    return gs.sort((a, b) => started(b.latest).localeCompare(started(a.latest)));
+  }
+
+  function render(){
+    const ltr  = (v) => `<span class="ltr">${escape(v)}</span>`;
+    const dash = `<span class="cell-dash">—</span>`;
+    const day  = (d) => d ? ltr(String(d).slice(0, 10)) : dash;
+    const lbl  = (k) => escape(t(k));
+    const gpsPill = (on) => on
+      ? `<span class="badge yes">${escape(t("yes"))}</span>`
+      : `<span class="badge no">${escape(t("no"))}</span>`;
+
+    _groups = groupByRenter(rows());
+
+    renderMasterHistory({
+      table: "#tbl-company-history", cols: 6,
+      pagerKey: "company-history",
+      pagerTop: "#pager-top-company-history", pagerBot: "#pager-company-history",
+      countEl: "#coh-count", panelPrefix: "cohist", groups: _groups,
+      rerender: render,
+      masterCells: (g) => {
+        const avatar = `<span class="ch-avatar" style="background:${_avatarColor(g.name)}" aria-hidden="true">${escape(_initials(g.name))}</span>`;
+        const period = `${day(g.latest.start_date)}<span class="rp-arrow">→</span>${day(g.latest.end_date)}`;
+        const sub = g.owner ? `<span class="sr-sub">${escape(g.owner)}</span>` : "";
+        return `
+          <td data-col="client" data-label="${lbl("coHistory.th.renter")}">
+            <span class="ch-client">${avatar}<span class="sr-stack"><strong>${escape(g.name) || "—"}</strong>${sub}</span></span>
+          </td>
+          <td data-col="from" data-label="${lbl("coHistory.th.from")}">${g.froms}</td>
+          <td data-col="rentals" data-label="${lbl("report.rentals")}">${g.rentals.length}</td>
+          <td data-col="cars" data-label="${lbl("report.carsCount")}">${g.cars}</td>
+          <td data-col="latest" data-label="${lbl("report.latest")}">${period}</td>`;
+      },
+      // One B2B record. "Rented from" leads: this table exists to say who each
+      // company took its cars from.
+      item: (r, i) => {
+        const st = BOOKING_STATUSES.includes(r.status) ? r.status : "active";
+        let tags;
+        if (r.returned_at){
+          tags = `<span class="return-badge returned">${escape(t("special.status.returned"))}</span>`;
+        } else {
+          const late = st === "active" && r.end_date && String(r.end_date).slice(0, 10) < _raToday()
+            ? `<span class="return-badge overdue">${escape(t("returns.overdue"))}</span>` : "";
+          tags = `<span class="status-tag ${st}">${escape(t("status." + st + ".short"))}</span>${late}`;
+        }
+        const from = ownerName(r);
+        return `<li class="ch-item${st === "cancelled" ? " ch-item-off" : ""}">
+          <div class="ch-car">
+            <span class="ch-model">${r.model ? escape(r.model) : dash}</span>
+            <span class="ch-sub">
+              <span class="ch-org">${lbl("clientHistory.rentedFrom")} ${from ? escape(from) : dash}</span>
+              <span class="ch-dot" aria-hidden="true">·</span>
+              <span class="ch-plate">${r.platenumber ? ltr(r.platenumber) : dash}</span>
+              <span class="ch-dot" aria-hidden="true">·</span>
+              <span class="ch-gps">${lbl("report.gps")} ${gpsPill(r.has_gps)}</span>
+            </span>
+          </div>
+          <div class="ch-dates">${day(r.start_date)}<span class="rp-arrow">→</span>${day(r.end_date)}</div>
+          <div class="ch-tags">${tags}</div>
+          <button type="button" class="row-btn ch-open" data-i="${i}">${lbl("report.details")}</button>
+        </li>`;
+      },
+      // Same single-car shape AdminSpecial.carsFor() builds — SpecialDetail
+      // wants a list, and an admin B2B row carries exactly one joined car.
+      openItem: (r) => SpecialDetail.open(r, [{
+        vin: r.car_vin, model: r.model, color: r.color,
+        platenumber: r.platenumber, has_gps: r.has_gps, type: r.type,
+      }]),
+    });
+  }
+
+  async function refresh(){
+    const u = (typeof AUTH !== "undefined") ? AUTH.user() : null;
+    if (!u || u.role !== "admin") return;
+    try { _all = await API.listAdminSpecialRentals(); }
+    catch (e){ _all = []; }
+    populateFilters();
+    Pager.reset("company-history");
+    render();
+  }
+
+  function count(){ return _groups.length; }
+
+  function setup(){
+    if (_wired) return;
+    _wired = true;
+    ["#filter-coh-company", "#filter-coh-car"].forEach(sel => {
+      $(sel)?.addEventListener("change", () => { Pager.reset("company-history"); render(); });
+    });
+    ["#coh-from", "#coh-to"].forEach(sel => {
+      $(sel)?.addEventListener("change", () => { Pager.reset("company-history"); render(); });
+      $(sel)?.addEventListener("input",  () => { Pager.reset("company-history"); render(); });
+    });
+    $("#coh-reset")?.addEventListener("click", () => {
+      clearFilterSelect($("#filter-coh-company"));
+      clearFilterSelect($("#filter-coh-car"));
+      const f = $("#coh-from"); if (f) f.value = "";
+      const t2 = $("#coh-to");  if (t2) t2.value = "";
+      Pager.reset("company-history");
+      render();
+    });
+  }
+
+  return { setup, refresh, render, count };
+})();
+
+/* ============== The Clients hub ==============
+   Same shape as AdminCarsHub: three views of the same people in one section,
+   swapped by the segmented control. `.hub-*` is generic, so this cost no CSS. */
+const ClientsHub = (() => {
+  const VIEWS = ["list", "history", "cohistory"];
+  let _view = "list";
+  let _wired = false;
+
+  function setCount(sel, n){ const el = $(sel); if (el) el.textContent = n; }
+
+  function syncCounts(){
+    setCount("#hub-count-clients-list", (state.clients || []).length);
+    setCount("#hub-count-clients-history", AdminClientHistory.count());
+    setCount("#hub-count-clients-cohistory", AdminCompanyHistory.count());
+  }
+
+  function show(view){
+    if (!VIEWS.includes(view)) view = "list";
+    _view = view;
+    $$("#clients .hub-view").forEach(v => { v.hidden = v.dataset.clientviewPanel !== view; });
+    $$("#clients .hub-tab").forEach(b => {
+      const on = b.dataset.clientview === view;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    // Both histories are per-open loads: their feeds are big, and unlike the
+    // Cars hub's badges nobody needs the number before clicking the tab.
+    if (view === "history")   AdminClientHistory.refresh();
+    if (view === "cohistory") AdminCompanyHistory.refresh();
+    syncCounts();
+  }
+
+  function refresh(){ syncCounts(); }
+
+  function setup(){
+    if (_wired || !$("#clients")) return;
+    _wired = true;
+    $$("#clients .hub-tab").forEach(b => {
+      b.addEventListener("click", () => show(b.dataset.clientview));
+    });
+    AdminClientHistory.setup();
+    AdminCompanyHistory.setup();
+  }
+
+  return { setup, show, refresh, syncCounts, view: () => _view };
 })();
 
 /* ============== B2B RENTAL DETAIL (view + car media) ==============
@@ -9514,9 +10344,10 @@ async function init(){
   setupApiKey();
   setupAddClientForm();
   setupCreateRentalForm();
-  Reservations.setup();
   Returns.setup();
   SpecialRentals.setup();
+  CarsHub.setup();          // after SpecialRentals — the hub drives its modal
+  CoClientsHub.setup();     // the register + clients-history tabs
   SpecialDetail.setup();
   Notifications.setup();
   setupSupportForm();
@@ -9545,6 +10376,5 @@ document.addEventListener("lang:changed", () => {
   renderCars();
   renderClients();
   renderReport();
-  Reservations.render();
   Returns.render();
 });

@@ -350,128 +350,369 @@ tbody tr.report-row:hover{ background: rgba(99,102,241,.06); }
 
 /* =================== REPORT TABLES ===================
    The admin (#tbl-report) rental report is a COMPACT summary — Company ·
-   Vehicle · Client · Period · GPS · Status · 👁 — that stays readable at a
-   glance. Clicking 👁 expands an inline detail panel below the row showing
-   every field (phones, colour, plate, dates, status…) plus a button to the
-   full media / extra-driver modal. The company table (#tbl-report-co, 9
-   cols) is already flat. Shared: true green/red status pills. */
+   Vehicle · Client · Period · GPS · Status · Details — that stays readable at a
+   glance. Clicking the row opens #report-row-modal with every field (phones,
+   colour, plate, dates, status) and the ways out to photos / extra drivers and
+   to the company / client / vehicle modals.
+   The company table (#tbl-report-co) is the same idea one level up, but it
+   still EXPANDS IN PLACE: each row is a CLIENT, and the panel below lists that
+   client's whole history with the company. Different on purpose — the admin
+   table shows one rental's fields (a modal is the roomier place for them),
+   while the company table shows a list you want to scan against its neighbours.
+   Shared: true green/red status pills. */
 /* GPS + "still active" use a hard RED for the off/no state (the global
    .badge.no is only a muted grey — wrong signal for these columns). */
-#tbl-report   .badge.no,
-#tbl-report-co .badge.no{
+#tbl-report .badge.no,
+.master-detail .badge.no{
   background: var(--danger-lt); color: var(--danger);
 }
-#tbl-report   .badge,
-#tbl-report-co .badge{ min-width: 3.4em; text-align: center; }
-/* Center the status pills + the 👁 action (header and body together). */
-#tbl-report   thead th:nth-child(5), #tbl-report   tbody td[data-col="gps"],
-#tbl-report   thead th:nth-child(6), #tbl-report   tbody td[data-col="status"],
-#tbl-report   thead th:nth-child(7), #tbl-report   tbody td[data-col="view"],
-#tbl-report-co thead th:nth-child(6), #tbl-report-co tbody td[data-col="gps"],
-#tbl-report-co thead th:nth-child(9), #tbl-report-co tbody td[data-col="view"]{
+#tbl-report .badge,
+.master-detail .badge{ min-width: 3.4em; text-align: center; }
+/* Center the status pills + the 👁 action (header and body together). The
+   master-detail tables centre their own columns via .master-detail rules
+   further down, so only the admin report's fixed column numbers live here. */
+#tbl-report thead th:nth-child(5), #tbl-report tbody td[data-col="gps"],
+#tbl-report thead th:nth-child(6), #tbl-report tbody td[data-col="status"],
+#tbl-report thead th:nth-child(7), #tbl-report tbody td[data-col="view"]{
   text-align: center;
 }
 /* Period cell: from → to on one line with a soft arrow. */
 #tbl-report tbody td[data-col="period"]{
   white-space: nowrap; font-variant-numeric: tabular-nums;
 }
-#tbl-report .rp-arrow{ color: var(--muted); margin: 0 .4rem; }
-#tbl-report-co tbody td[data-col="phone"],
-#tbl-report-co tbody td[data-col="plate"],
-#tbl-report-co tbody td[data-col="from"],
-#tbl-report-co tbody td[data-col="to"]{
+/* Generic, like .sr-stack: every table that merges From/To into one period cell
+   wants the same soft arrow, and listing table ids here just means the next one
+   silently renders a black arrow until someone notices. */
+.rp-arrow{ color: var(--muted); margin: 0 .4rem; }
+/* The three master-detail tables share the counts-and-latest shape: numeric
+   columns are narrow supporting facts, the name column carries the row. Listed
+   together rather than duplicated per table. */
+.master-detail tbody td[data-col="phone"],
+.master-detail tbody td[data-col="rentals"],
+.master-detail tbody td[data-col="cars"],
+.master-detail tbody td[data-col="companies"],
+.master-detail tbody td[data-col="from"]{
   font-variant-numeric: tabular-nums;
 }
+.master-detail tbody td[data-col="rentals"],
+.master-detail tbody td[data-col="cars"],
+.master-detail tbody td[data-col="companies"],
+.master-detail tbody td[data-col="from"]{ font-weight: 700; color: var(--ink); width: 1%; }
+.master-detail tbody td[data-col="latest"]{
+  white-space: nowrap; color: var(--ink-soft);
+  font-variant-numeric: tabular-nums; width: 1%;
+}
+/* Centre the numeric columns + the toggle, header and body together. */
+.master-detail tbody td[data-col="rentals"],
+.master-detail tbody td[data-col="cars"],
+.master-detail tbody td[data-col="companies"],
+.master-detail tbody td[data-col="from"],
+.master-detail tbody td[data-col="view"]{ text-align: center; }
 /* Primary names carry the row. */
-#tbl-report   tbody td[data-col="company"] strong,
-#tbl-report   tbody td[data-col="client"]  strong,
-#tbl-report-co tbody td[data-col="client"] strong{
+#tbl-report tbody td[data-col="company"] strong,
+#tbl-report tbody td[data-col="client"]  strong,
+.master-detail tbody td[data-col="client"] strong{
   color: var(--ink); font-weight: 700;
 }
-#tbl-report-co tbody td[data-col="color"]{ color: var(--ink-soft); }
 
-/* Admin "Cars rented by companies / individuals" are wide (10–11 cols). Give
-   the short columns (dates, GPS, action) tight widths and keep phone/plate on
-   one line so the renter + car columns get the room — otherwise every cell
-   wraps into cramped slivers and the table reads as noise. Names lead the row. */
-#tbl-admin-special   tbody td[data-col="from"],
-#tbl-admin-special   tbody td[data-col="to"],
-#tbl-admin-individual tbody td[data-col="from"],
-#tbl-admin-individual tbody td[data-col="to"]{
+/* All FOUR "Cars rented by …" tables are merged-cell now (see .sr-stack below):
+   who took it and what they took are one stacked cell each. Both roles have a
+   copy of each table, and the two copies differ only in what the role may DO
+   (the company's status cell is a picker, the admin's a read-only tag) — so
+   they read as one shape.
+
+   Give the short columns — period, GPS, status, action — tight widths so the
+   two stacked cells get the room; otherwise every cell wraps into cramped
+   slivers and the table reads as noise.
+
+   These stay ID-scoped on purpose. `.sr-stack` and friends went generic because
+   they're the SHAPE; column widths are per-table (same split as .master-detail).
+   A `.some-class tbody td[data-col=…]` selector would also be (0,2,2) and LOSE
+   to the card-mode rule at (0,3,3) — the id is what keeps these winning.
+
+   The old per-field rules (from / to / phone / plate / color) are gone with the
+   columns they styled — those fields are supporting lines inside a .sr-stack
+   now, not cells of their own. */
+#tbl-admin-special      tbody td[data-col="period"],
+#tbl-admin-individual   tbody td[data-col="period"],
+#tbl-special            tbody td[data-col="period"],
+#tbl-rented-individual  tbody td[data-col="period"]{
   white-space: nowrap; width: 1%;
   color: var(--ink-soft); font-variant-numeric: tabular-nums;
 }
-#tbl-admin-special   tbody td[data-col="gps"],
-#tbl-admin-special   tbody td[data-col="view"],
-#tbl-admin-individual tbody td[data-col="gps"]{
+#tbl-admin-special      tbody td[data-col="gps"],
+#tbl-admin-special      tbody td[data-col="view"],
+#tbl-admin-special      tbody td[data-col="status"],
+#tbl-admin-individual   tbody td[data-col="gps"],
+#tbl-admin-individual   tbody td[data-col="status"],
+#tbl-special            tbody td[data-col="gps"],
+#tbl-special            tbody td[data-col="status"],
+#tbl-rented-individual  tbody td[data-col="gps"],
+#tbl-rented-individual  tbody td[data-col="view"],
+#tbl-rented-individual  tbody td[data-col="status"]{
   white-space: nowrap; width: 1%; text-align: center;
 }
-#tbl-admin-special   tbody td[data-col="phone"],
-#tbl-admin-special   tbody td[data-col="plate"],
-#tbl-admin-individual tbody td[data-col="phone"],
-#tbl-admin-individual tbody td[data-col="plate"]{ white-space: nowrap; }
-#tbl-admin-special   tbody td[data-col="color"],
-#tbl-admin-individual tbody td[data-col="color"]{ color: var(--ink-soft); }
-#tbl-admin-special   tbody td[data-col="company"] strong,
-#tbl-admin-individual tbody td[data-col="client"]  strong{ color: var(--ink); font-weight: 700; }
+/* The company's B2B action cell holds up to three buttons (Edit / Extend /
+   Return), so it gets to keep its width rather than collapse to 1%. */
+#tbl-special tbody td[data-col="action"]{ white-space: nowrap; text-align: center; }
 /* Whole row opens the detail modal — show it's clickable. */
 .al-click-row{ cursor: pointer; }
 
-/* --- Expandable detail row --- */
-/* The 👁 button pairs an eye with a chevron that rotates + a filled look
-   while its panel is open, so the column clearly reads see ⇄ hide. */
-#tbl-report .report-view{
+/* --- A master-detail table's row toggle --- */
+/* A real expander: it opens that row's history *inside* the table, so it keeps
+   the chevron that rotates and the filled look while open. The admin report's
+   row button is NOT this — it opens a modal, so it has no open state to show
+   and shares none of these rules.
+   Scoped to `.master-detail`, not to a table id: three tables use this shape
+   now (the company's Clients History and the admin's Client / Company History),
+   and an id list means the fourth silently renders a dead chevron. */
+.master-detail .client-toggle{
   display: inline-flex; align-items: center; gap: .3rem;
   transition: background .12s, color .12s, border-color .12s;
 }
-#tbl-report .report-view .rv-chev{
+.master-detail .client-toggle .rv-chev{
   font-size: .8em; line-height: 1; transition: transform .18s ease;
 }
-#tbl-report .report-view[aria-expanded="true"]{
+.master-detail .client-toggle[aria-expanded="true"]{
   background: var(--primary-lt); color: var(--primary); border-color: var(--primary);
 }
-#tbl-report .report-view[aria-expanded="true"] .rv-chev{ transform: rotate(180deg); }
-/* The hidden detail <tr> carries no hover/zebra of its own; its single cell
-   hosts the panel. */
-#tbl-report tbody tr.report-detail-row:hover{ background: transparent; }
-#tbl-report tbody tr.report-detail-row > td{
-  padding: 0;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--line);
-}
-/* Grouped, receipt-style panel: cards laid side by side, each a titled list
-   of key→value rows. Reads far cleaner than a flat wall of fields. */
-#tbl-report .report-detail{
+.master-detail .client-toggle[aria-expanded="true"] .rv-chev{ transform: rotate(180deg); }
+
+/* (`.row-btn.has-label` — dots beside a word — lived here. Every row button is
+   icon-only again: the "Details" <th> already names the column, so the word in
+   each cell just repeated it down the whole table. The dots carry their meaning
+   via title/aria-label instead.) */
+
+/* Grouped, receipt-style panel: cards laid side by side, each a titled list of
+   key→value rows. Lives in #report-row-modal now — it used to be an inline <tr>
+   under the row, but a 7-column row's worth of fields never fit the grid it was
+   squeezed into. The markup moved verbatim; these rules just followed it. */
+#report-row-body .report-detail{
   display: grid; gap: 1rem 1.5rem;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  padding: 1.15rem 1.25rem 1.3rem;
   animation: rdIn .16s ease;
 }
 @keyframes rdIn{ from{ opacity:0; transform: translateY(-4px); } to{ opacity:1; transform:none; } }
-#tbl-report .rd-group{ display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
-#tbl-report .rd-h{
+#report-row-body .rd-group{ display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
+#report-row-body .rd-h{
   margin: 0; padding-bottom: .35rem;
   font-size: .66rem; font-weight: 800; letter-spacing: .08em;
   text-transform: uppercase; color: var(--primary);
   border-bottom: 1px solid var(--line);
 }
-#tbl-report .rd-fields{ display: flex; flex-direction: column; gap: .45rem; }
-#tbl-report .rd-item{
+#report-row-body .rd-fields{ display: flex; flex-direction: column; gap: .45rem; }
+#report-row-body .rd-item{
   display: flex; justify-content: space-between; align-items: baseline; gap: 1rem;
+  /* The dashboard's global .rd-item is a padded, tinted, left-bordered card.
+     Same class name, different thing — undo it rather than rename, so the panel
+     reads identically to the one that used to sit under the row. */
+  padding: 0; background: none; border: 0; border-radius: 0;
 }
-#tbl-report .rd-k{
+#report-row-body .rd-item:hover{ background: none; }
+#report-row-body .rd-k{
   font-size: .74rem; color: var(--muted); font-weight: 600; white-space: nowrap;
   flex: 0 0 auto;
 }
 /* Value column: right-aligned and able to STACK (a company with two phone
    numbers shows one per line instead of a run-on link). */
-#tbl-report .rd-v{
+#report-row-body .rd-v{
   font-size: .9rem; color: var(--ink); overflow-wrap: anywhere;
   display: flex; flex-direction: column; align-items: flex-end; gap: .12rem;
   text-align: end; min-width: 0;
 }
-#tbl-report .rd-v .rd-phone{ white-space: nowrap; }
-#tbl-report .report-detail-actions{ grid-column: 1 / -1; margin-top: .2rem; }
+#report-row-body .rd-v .rd-phone{ white-space: nowrap; }
+/* The three drill buttons (company / client / vehicle) sit on their own row
+   under the groups — they leave this modal for another one, so they shouldn't
+   read as part of the receipt. */
+#report-row-body .rd-drills{
+  grid-column: 1 / -1;
+  display: flex; flex-wrap: wrap; gap: .5rem;
+  padding-top: .9rem; border-top: 1px solid var(--line);
+}
+#report-row-body .rd-drill{
+  font: inherit; font-size: .8rem; font-weight: 600;
+  display: inline-flex; align-items: center; gap: .4rem;
+  padding: .45rem .8rem; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--ink-soft);
+  transition: all .12s;
+}
+#report-row-body .rd-drill:hover{
+  color: var(--primary); border-color: var(--primary); background: var(--primary-lt);
+}
+#report-row-body .rd-drill svg{ width: 15px; height: 15px; flex: 0 0 auto; }
+
+/* ==================== STACKED CELLS (.sr-stack) ====================
+   Both admin "Cars rented by …" tables used to be nine and eleven columns wide
+   — company, owner, phone, model, colour, plate, from, to … — which is more
+   horizontal scrolling than reading. The fields that describe ONE thing are
+   now one cell each: who took it (company · owner · phones, or client · phone),
+   what they took (model · plate · colour), and when (from → to). Six columns
+   each, same facts, and the full record is one click away in the detail modal.
+
+   Deliberately NOT scoped to a table id: this is a generic shape — a lead line
+   plus muted supporting lines — and the next table that needs it should only
+   have to write the markup. (It was #tbl-admin-special-scoped when only the
+   B2B table used it; the individuals table then needed every rule twice.) */
+.sr-stack{
+  display: flex; flex-direction: column; gap: .15rem; min-width: 0;
+}
+.sr-main{
+  font-weight: 700; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis;
+}
+.sr-sub{
+  font-size: .76rem; color: var(--muted); line-height: 1.45;
+  display: flex; flex-wrap: wrap; align-items: center; gap: .1rem .45rem;
+}
+/* Phones stay dialable but stop shouting — they're the second line, not the point. */
+.sr-sub a{ color: var(--ink-soft); text-decoration: none; }
+.sr-sub a:hover{ color: var(--primary); text-decoration: underline; }
+/* A thin separator between two facts on the same sub-line (owner · phone). */
+.sr-dot{ color: var(--line); }
+/* The plate is an identifier — give it the same monospace weight the VIN gets
+   in the detail modal so it scans as one. */
+.sr-plate{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .74rem; letter-spacing: .02em; color: var(--ink-soft);
+}
+
+/* =================== MASTER ROW → HISTORY PANEL ===================
+   `.master-detail` is the shape, not a table: a master row (a client, a renting
+   company) with the row underneath holding that master's history panel.
+   THREE tables use it — the company's Clients History (#tbl-report-co) and the
+   admin's Client History / Company History — so these rules are scoped to the
+   class. They were `#tbl-report-co`-scoped when only one table had the shape,
+   which is the same tax `.sr-stack` used to charge: the second table had to
+   copy forty rules to get a chevron that turns.
+   Column widths stay per-table (they differ); only the SHAPE is shared. */
+.master-detail tbody tr.client-master-row{ cursor: pointer; }
+.master-detail tbody tr.client-master-row:hover{ background: rgba(99,102,241,.06); }
+/* An open master row stays visibly tied to the panel it opened. */
+.master-detail tbody tr.client-master-row.is-expanded > td{ background: rgba(99,102,241,.06); }
+.master-detail .ch-client{ display: inline-flex; align-items: center; gap: .55rem; min-width: 0; }
+.master-detail .ch-avatar{
+  flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: .7rem; font-weight: 800; color: #0b1220; letter-spacing: .02em;
+}
+/* ---- The collapsed-row guard. Read this before touching it. ----
+   The card modes set `display` on EVERY tbody tr, which outranks the UA's
+   `[hidden]{display:none}` — a detail row would render permanently open.
+   The card rule is
+     body:is(.role-admin,.role-company) .table-wrap:not(.bento-table) tbody tr
+   = (0,3,3). A plain `.master-detail tbody tr.client-history-row[hidden]` is
+   only (0,3,2) and LOSES. The `.table-wrap` prefix buys the fourth class →
+   (0,4,2), which beats it on class count. That's why this reads oddly; it used
+   to buy the same win with a table id, which is what forced the per-table copy.
+   The card-mode overrides below are guarded with :not([hidden]) so they never
+   fight this rule at all. */
+.table-wrap .master-detail tbody tr.client-history-row[hidden]{ display: none; }
+.master-detail tbody tr.client-history-row:hover{ background: transparent; }
+.master-detail tbody tr.client-history-row > td{
+  padding: 0; background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+.master-detail .client-history{ padding: .9rem 1.1rem 1.1rem; animation: rdIn .16s ease; }
+.master-detail .ch-h{
+  margin: 0 0 .6rem; padding-bottom: .35rem;
+  font-size: .66rem; font-weight: 800; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--primary);
+  border-bottom: 1px solid var(--line);
+}
+.master-detail .ch-list{ list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
+/* A long-standing master's history pages too. It's the same pager the table
+   uses, sat inside a panel — so tighten it and drop its result count, which the
+   heading above already gives (and still gives when the pager hides itself at
+   ten entries or fewer). */
+.master-detail .ch-pager .pager-top{ padding: 0; margin-bottom: .5rem; }
+.master-detail .ch-pager .pager-info{ display: none; }
+.master-detail .ch-pager .pager-bottom{ padding: .55rem 0 0; margin-top: .1rem; }
+/* One entry: car on the left, dates and state on the right, action last. It
+   wraps rather than scrolls, so a narrow card keeps every field. */
+.master-detail .ch-item{
+  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem;
+  padding: .6rem .75rem; border-radius: 12px;
+  background: var(--surface); border: 1px solid var(--line);
+}
+/* A cancelled booking is kept for the record but isn't live — dim it, the same
+   way a cancelled row is dimmed in the Cars & Rentals tables. */
+.master-detail .ch-item-off{ opacity: .55; }
+.master-detail .ch-car{ flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: .15rem; }
+.master-detail .ch-model{ font-weight: 700; color: var(--ink); }
+.master-detail .ch-sub{
+  display: flex; align-items: center; flex-wrap: wrap; gap: .35rem;
+  font-size: .76rem; color: var(--ink-soft);
+}
+.master-detail .ch-sub .badge{ min-width: 0; }
+.master-detail .ch-dot{ color: var(--muted); }
+.master-detail .ch-dates{ flex: 0 0 auto; white-space: nowrap; font-size: .85rem; font-variant-numeric: tabular-nums; }
+.master-detail .ch-tags{ flex: 0 0 auto; display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
+.master-detail .ch-media{ flex: 0 0 auto; }
+/* The admin's two history panels name the other party on the entry — which
+   company a client rented from, or which company a renter took the car from.
+   The company table's panel has no such line: it's already scoped to one. */
+.master-detail .ch-org{
+  display: inline-flex; align-items: center; gap: .3rem;
+  font-weight: 600; color: var(--primary);
+}
+
+/* Read-only twin of .status-pick — same three tints, no caret and no <select>.
+   Used by the company's client-history panel and by ALL THREE of the admin's
+   Cars-hub tables: a booking belongs to the company that took it, so that
+   company moves it and the admin only reads the result.
+   Dark ink is gated :not(.theme-light) like every other shared dark rule, and
+   covers both roles — admin is dark by default too, and a .role-company-only
+   rule left these on the light palette (dark amber on a dark card). */
+.status-tag{
+  display: inline-block; padding: .2rem .55rem; border-radius: 999px;
+  font-size: .72rem; font-weight: 700; white-space: nowrap;
+  box-shadow: inset 0 0 0 1px rgba(15,23,42,.10);
+}
+.status-tag.pending{   background: rgba(245,158,11,.16); color: #92400e; }
+.status-tag.active{    background: rgba(16,185,129,.16); color: #047857; }
+.status-tag.cancelled{ background: #e2e8f0;              color: #475569; }
+body:is(.role-company, .role-admin):not(.theme-light) .status-tag{ box-shadow: inset 0 0 0 1px rgba(226,232,240,.14); }
+body:is(.role-company, .role-admin):not(.theme-light) .status-tag.pending{   background: rgba(245,158,11,.20); color: #fde68a; }
+body:is(.role-company, .role-admin):not(.theme-light) .status-tag.active{    background: rgba(16,185,129,.20); color: #a7f3d0; }
+body:is(.role-company, .role-admin):not(.theme-light) .status-tag.cancelled{ background: rgba(148,163,184,.18); color: #cbd5e1; }
+
+/* Card modes: an open history row must NOT become a card of its own beside its
+   client — strip the card chrome and let it span the grid, so it still reads as
+   "below this client". Collapsed rows are excluded via :not([hidden]) rather
+   than out-specified, so the display:none rule above keeps winning. */
+/* The `.table-wrap` prefix is load-bearing here too — see the specificity note
+   above; without it the card rule (0,3,3) out-ranks these and an open panel
+   becomes a card of its own beside its master row.
+   These were `body.role-company`-scoped when only the company had this shape.
+   The admin is NOT .role-company, so its two history tables would have skipped
+   this entirely and broken at 721–1024px — the same role-scoping trap the
+   status pills hit. The shape is role-agnostic; the rules are too now. */
+@media (min-width: 721px) and (max-width: 1024px){
+  .table-wrap .master-detail tbody tr.client-history-row:not([hidden]),
+  .table-wrap .master-detail tbody tr.client-history-row:not([hidden]):hover{
+    grid-column: 1 / -1; display: block;
+    padding: 0; border: 0; border-radius: 0; background: transparent;
+    box-shadow: none; transform: none;
+  }
+  .table-wrap .master-detail tbody tr.client-history-row > td{
+    display: block; width: auto !important; padding: 0; border-radius: 12px;
+  }
+}
+@media (max-width: 720px){
+  .table-wrap .master-detail tbody tr.client-history-row:not([hidden]),
+  .table-wrap .master-detail tbody tr.client-history-row:not([hidden]):hover{
+    display: block; padding: 0; margin-bottom: .75rem;
+    border: 0; border-radius: 0; background: transparent; box-shadow: none;
+  }
+  .table-wrap .master-detail tbody tr.client-history-row > td{
+    display: block; padding: 0; border-radius: 12px;
+  }
+  /* Stacked cards put every field on its own line; the history entry is
+     already a card, so let it use the full width instead of splitting into
+     label | value. */
+  .master-detail .ch-item{ flex-direction: column; align-items: stretch; }
+  .master-detail .ch-media{ width: 100%; }
+}
 
 /* =================== RENT PREVIEW =================== */
 .preview{
@@ -627,6 +868,21 @@ body.modal-open{ overflow: hidden; }
   transition: opacity .25s;
 }
 .map-host-wrap.has-pin .map-hint{ opacity: 0; }
+
+/* ---- View mode = the whole page ---------------------------------------
+   Opening a saved location is a "show me this place" job, not a "pick a point
+   in a dialog" job, so the card drops its width cap, fills the viewport and
+   loses its rounding. Pick mode keeps the dialog exactly as it was.
+   (dvh after vh: the fallback matters on mobile, where the URL bar makes vh
+   overshoot and would push the footer off-screen.) */
+#map-modal.is-view{ padding: 0; }
+#map-modal.is-view .modal-card{
+  width: 100%; max-width: none;
+  height: 100vh; height: 100dvh; max-height: none;
+  border-radius: 0;
+}
+/* Nothing is being dropped here, so the "click to drop a pin" hint would lie. */
+#map-modal.is-view .map-hint{ display: none; }
 @keyframes pulse-glow{
   0%  { box-shadow: 0 0 0 0 var(--primary-glow); }
   100%{ box-shadow: 0 0 0 14px rgba(99,102,241,0); }
@@ -902,11 +1158,8 @@ body.role-admin .hero{ display: none !important; }
 body.role-admin #admin-home,
 body.role-admin #companies,
 body.role-admin #cars,
-body.role-admin #car-gps,
 body.role-admin #clients,
-body.role-admin #report,
 body.role-admin #admin-reservations,
-body.role-admin #admin-special,
 body.role-admin #support{
   display: none;
 }
@@ -1012,9 +1265,7 @@ body.role-company #company-home,
 body.role-company #company-info,
 body.role-company #company-cars,
 body.role-company #company-clients,
-body.role-company #company-special,
 body.role-company #reservations,
-body.role-company #report,
 body.role-company #support{
   display: none;
 }
@@ -1031,90 +1282,135 @@ html[dir="rtl"] body.role-company .site-footer{
   margin-left: 0; margin-right: 0;
 }
 
-/* =================== ENTERPRISE CARD HOME =================== */
+/* =================== ENTERPRISE CARD HOME ===================
+   Both roles land here, so this is the first thing anyone sees.
+
+   The cards used to be full-bleed saturated gradient tiles — emerald, amber,
+   violet, blue, rose, teal — six competing hues on one screen, each under a
+   white gloss, each shouting equally. Nothing was subordinate to anything
+   else, so nothing looked deliberate. That, not the layout, is what read as
+   cheap.
+
+   A card is a SURFACE now, and its colour is an accent rather than a fill:
+   `--card-accent` tints the icon chip, draws a hairline on hover, and colours
+   the arrow. The card itself is --surface / --line / --ink.
+
+   Two things worth knowing before editing:
+
+   - It is theme-correct by construction. The old tiles hard-coded `#fff` ink
+     and got away with it because a saturated gradient is dark under either
+     theme; every rule below is token-driven, so the light toggle just works.
+   - The accents ARE gated. The base `--card-accent` is a mid-tone chosen to
+     read on white; the `:not(.theme-light)` block below lifts each to its
+     lighter twin so it stays legible on the dark card. Ungated, they'd be the
+     usual trap pointing the other way — dark ink on a dark surface. */
 .ent-home{ max-width: 1080px; margin: 0 auto; }
 
-/* Welcome hero above the card grid */
+/* Welcome hero above the card grid. Deep and near-neutral, lit by ONE hue —
+   the indigo→violet gradient with two purple blobs over it was competing with
+   the cards for attention, and losing. */
 .ent-home-hero{
   position: relative; overflow: hidden;
-  border-radius: 22px;
-  padding: 2.4rem 2.2rem;
-  margin-bottom: 1.8rem;
-  background: linear-gradient(120deg, #1e1b4b 0%, #312e81 45%, #4338ca 100%);
-  border: 1px solid rgba(255,255,255,.08);
-  box-shadow: 0 24px 60px -30px rgba(49,46,129,.9);
+  border-radius: 20px;
+  padding: 2.6rem 2.2rem;
+  margin-bottom: 1.6rem;
+  background: linear-gradient(135deg, #0c1322 0%, #141d33 55%, #1a2440 100%);
+  border: 1px solid rgba(255,255,255,.07);
+  box-shadow: 0 22px 55px -34px rgba(2,6,23,.95);
+}
+/* A soft top-light, so the panel reads as lit rather than filled. z-index 1
+   keeps it under .ent-home-hero-content (2) — a positioned ::after with
+   z-index auto paints after its siblings, i.e. over the text. */
+.ent-home-hero::after{
+  content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,0) 45%);
 }
 .ent-home-hero-content{ position: relative; z-index: 2; }
 .ent-home-orb{
-  position: absolute; border-radius: 50%; filter: blur(6px);
-  background: radial-gradient(circle at 30% 30%, rgba(129,140,248,.55), rgba(129,140,248,0) 70%);
+  position: absolute; border-radius: 50%; filter: blur(30px);
+  background: radial-gradient(circle at 30% 30%, rgba(99,102,241,.30), rgba(99,102,241,0) 70%);
   z-index: 1; pointer-events: none;
 }
-.ent-home-orb-1{ width: 320px; height: 320px; top: -120px; right: -80px; }
-.ent-home-orb-2{ width: 240px; height: 240px; bottom: -140px; left: -60px;
-  background: radial-gradient(circle at 30% 30%, rgba(192,132,252,.45), rgba(192,132,252,0) 70%); }
+.ent-home-orb-1{ width: 380px; height: 380px; top: -160px; right: -110px; }
+.ent-home-orb-2{ width: 280px; height: 280px; bottom: -170px; left: -80px;
+  background: radial-gradient(circle at 30% 30%, rgba(129,140,248,.16), rgba(129,140,248,0) 70%); }
 .ent-home-eyebrow{
   display: inline-block; text-transform: uppercase; letter-spacing: .14em;
-  font-size: .72rem; font-weight: 700; color: rgba(199,210,254,.9);
-  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12);
+  font-size: .7rem; font-weight: 600; color: rgba(199,210,254,.85);
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.10);
   padding: .3rem .7rem; border-radius: 999px; margin-bottom: .9rem;
 }
 .ent-home-title{
-  margin: 0 0 .5rem; color: #fff; font-size: 2rem; font-weight: 800;
-  line-height: 1.15; letter-spacing: -.01em;
+  margin: 0 0 .5rem; color: #fff; font-size: 2rem; font-weight: 700;
+  line-height: 1.15; letter-spacing: -.02em;
 }
-.ent-home-sub{ margin: 0; color: rgba(226,232,240,.82); font-size: 1.02rem; max-width: 46ch; line-height: 1.6; }
+.ent-home-sub{ margin: 0; color: rgba(203,213,225,.78); font-size: 1rem; max-width: 52ch; line-height: 1.6; }
 
 /* The card grid */
 .ent-card-grid{
-  display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.1rem;
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem;
 }
 
 .ent-card{
+  /* Overridden per card below; the fallback is the brand hue. */
+  --card-accent: var(--primary);
+  --card-accent-soft: var(--primary-lt);
   position: relative; overflow: hidden;
-  display: flex; align-items: center; gap: 1.1rem; text-align: left;
-  width: 100%; padding: 1.4rem 1.5rem;
-  border: 1px solid rgba(255,255,255,.14); border-radius: 18px;
-  color: #fff; cursor: pointer; text-decoration: none;
-  box-shadow: 0 18px 40px -26px rgba(0,0,0,.85);
-  transition: transform .18s cubic-bezier(.4,0,.2,1), box-shadow .18s, filter .18s;
+  display: flex; align-items: center; gap: 1.05rem; text-align: left;
+  width: 100%; padding: 1.35rem 1.4rem;
+  border: 1px solid var(--line); border-radius: 16px;
+  background: var(--surface);
+  color: var(--ink); cursor: pointer; text-decoration: none;
+  box-shadow: var(--shadow-xs);
+  transition: transform .18s cubic-bezier(.4,0,.2,1), box-shadow .18s, border-color .18s;
   animation: entCardIn .45s cubic-bezier(.2,.7,.3,1) both;
 }
+/* The accent hairline — the card's identity, shown on approach instead of
+   shouted from a full-bleed fill. Logical inset, so RTL flips it for free. */
 .ent-card::after{
-  content: ""; position: absolute; inset: 0;
-  background: radial-gradient(120% 100% at 100% 0%, rgba(255,255,255,.22), rgba(255,255,255,0) 55%);
-  pointer-events: none;
+  content: ""; position: absolute; inset-inline-start: 0; inset-block: 0;
+  width: 3px; background: var(--card-accent);
+  opacity: 0; transition: opacity .18s; pointer-events: none;
 }
-.ent-card:hover{ transform: translateY(-4px); filter: brightness(1.06); box-shadow: 0 26px 55px -24px rgba(0,0,0,.9); }
+.ent-card:hover{
+  transform: translateY(-3px);
+  border-color: var(--card-accent);
+  box-shadow: var(--shadow-lg);
+}
+.ent-card:hover::after{ opacity: 1; }
 .ent-card:active{ transform: translateY(-1px); }
-.ent-card:focus-visible{ outline: 3px solid rgba(255,255,255,.7); outline-offset: 2px; }
+.ent-card:focus-visible{ outline: 2px solid var(--card-accent); outline-offset: 3px; }
 
 .ent-card-icon{
-  flex: 0 0 auto; width: 58px; height: 58px; border-radius: 15px;
+  flex: 0 0 auto; width: 52px; height: 52px; border-radius: 14px;
   display: inline-flex; align-items: center; justify-content: center;
-  background: rgba(255,255,255,.18);
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+  background: var(--card-accent-soft);
+  color: var(--card-accent);
+  transition: background .18s, color .18s;
 }
-.ent-card-icon svg{ width: 27px; height: 27px; display: block; }
-.ent-card-body{ display: flex; flex-direction: column; gap: .28rem; min-width: 0; flex: 1; }
-.ent-card-title{ font-size: 1.18rem; font-weight: 800; letter-spacing: -.01em; }
-.ent-card-desc{ font-size: .9rem; line-height: 1.45; color: rgba(255,255,255,.85); }
+/* White on a saturated accent fill is theme-safe — the house pattern. */
+.ent-card:hover .ent-card-icon{ background: var(--card-accent); color: #fff; }
+.ent-card-icon svg{ width: 25px; height: 25px; display: block; }
+.ent-card-body{ display: flex; flex-direction: column; gap: .3rem; min-width: 0; flex: 1; }
+.ent-card-title{ font-size: 1.06rem; font-weight: 700; letter-spacing: -.01em; color: var(--ink); }
+.ent-card-desc{ font-size: .875rem; line-height: 1.5; color: var(--ink-soft); }
 .ent-card-arrow{
-  flex: 0 0 auto; font-size: 1.3rem; opacity: .8;
-  transition: transform .18s;
+  flex: 0 0 auto; font-size: 1.15rem; color: var(--muted);
+  transition: transform .18s, color .18s;
 }
-.ent-card:hover .ent-card-arrow{ transform: translateX(4px); }
+.ent-card:hover .ent-card-arrow{ transform: translateX(4px); color: var(--card-accent); }
 html[dir="rtl"] .ent-card{ text-align: right; }
 html[dir="rtl"] .ent-card-arrow{ transform: scaleX(-1); }
 html[dir="rtl"] .ent-card:hover .ent-card-arrow{ transform: scaleX(-1) translateX(4px); }
 
-/* Per-card gradient identities (echoing the colourful tiles) */
-.ent-card-cars{        background: linear-gradient(135deg, #059669 0%, #10b981 100%); }
-.ent-card-clients{     background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%); }
-.ent-card-reservation{ background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%); }
-.ent-card-branch{      background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%); }
-.ent-card-key{         background: linear-gradient(135deg, #e11d48 0%, #f43f5e 100%); }
-.ent-card-docs{        background: linear-gradient(135deg, #0d9488 0%, #14b8a6 100%); }
+/* Per-card accent identities. Mid-tones — chosen to read on the light theme's
+   white card; the dark block below lifts each one. */
+.ent-card-cars{        --card-accent: #059669; --card-accent-soft: rgba(5,150,105,.10); }
+.ent-card-clients{     --card-accent: #d97706; --card-accent-soft: rgba(217,119,6,.10); }
+.ent-card-reservation{ --card-accent: #7c3aed; --card-accent-soft: rgba(124,58,237,.10); }
+.ent-card-branch{      --card-accent: #2563eb; --card-accent-soft: rgba(37,99,235,.10); }
+.ent-card-key{         --card-accent: #e11d48; --card-accent-soft: rgba(225,29,72,.10); }
+.ent-card-docs{        --card-accent: #0d9488; --card-accent-soft: rgba(13,148,136,.10); }
 
 /* Staggered entrance */
 .ent-card:nth-child(1){ animation-delay: .04s; }
@@ -1147,18 +1443,28 @@ html[dir="rtl"] .ent-back:hover{ transform: translateX(3px); }
   .ent-card:hover{ transform: none; }
 }
 
-/* Extra home-card colour for the special-companies (B2B) tile */
-.ent-card-special{ background: linear-gradient(135deg, #0f766e 0%, #0ea5a4 55%, #22d3ee 100%); }
-/* Cars rented by individuals — warm orange so it's visible in light mode too */
-.ent-card-individual{ background: linear-gradient(135deg, #ea580c 0%, #f97316 100%); }
+/* Admin home-card accents. The B2B, individuals and GPS tiles were dropped when
+   those three became tabs inside the Cars panel — their colours went with them. */
+.ent-card-dashboard{ --card-accent: #4f46e5; --card-accent-soft: rgba(79,70,229,.10); }
+.ent-card-companies{ --card-accent: #1d4ed8; --card-accent-soft: rgba(29,78,216,.10); }
+.ent-card-report{    --card-accent: #475569; --card-accent-soft: rgba(71,85,105,.10); }
+.ent-card-register{  --card-accent: #be185d; --card-accent-soft: rgba(190,24,93,.10); }
+.ent-card-support{   --card-accent: #0f766e; --card-accent-soft: rgba(15,118,110,.10); }
 
-/* Admin home-card colours */
-.ent-card-dashboard{ background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%); }
-.ent-card-companies{ background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 100%); }
-.ent-card-gps{       background: linear-gradient(135deg, #0369a1 0%, #0ea5e9 100%); }
-.ent-card-report{    background: linear-gradient(135deg, #475569 0%, #64748b 100%); }
-.ent-card-register{  background: linear-gradient(135deg, #be185d 0%, #ec4899 100%); }
-.ent-card-support{   background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%); }
+/* Dark theme (the default for both signed-in roles): the mid-tones above go
+   muddy on a #141c2f card, so each lifts to its lighter twin. Gated, like every
+   other dark rule — ungated they'd leak onto the light theme's white card. */
+body:is(.role-company, .role-admin):not(.theme-light) .ent-card-cars{        --card-accent: #34d399; --card-accent-soft: rgba(52,211,153,.13); }
+body:is(.role-company, .role-admin):not(.theme-light) .ent-card-clients{     --card-accent: #fbbf24; --card-accent-soft: rgba(251,191,36,.13); }
+body:is(.role-company, .role-admin):not(.theme-light) .ent-card-reservation{ --card-accent: #a78bfa; --card-accent-soft: rgba(167,139,250,.13); }
+body:is(.role-company, .role-admin):not(.theme-light) .ent-card-branch{      --card-accent: #60a5fa; --card-accent-soft: rgba(96,165,250,.13); }
+body:is(.role-company, .role-admin):not(.theme-light) .ent-card-key{         --card-accent: #fb7185; --card-accent-soft: rgba(251,113,133,.13); }
+body:is(.role-company, .role-admin):not(.theme-light) .ent-card-docs{        --card-accent: #2dd4bf; --card-accent-soft: rgba(45,212,191,.13); }
+body:is(.role-company, .role-admin):not(.theme-light) .ent-card-dashboard{   --card-accent: #818cf8; --card-accent-soft: rgba(129,140,248,.13); }
+body:is(.role-company, .role-admin):not(.theme-light) .ent-card-companies{   --card-accent: #60a5fa; --card-accent-soft: rgba(96,165,250,.13); }
+body:is(.role-company, .role-admin):not(.theme-light) .ent-card-report{      --card-accent: #94a3b8; --card-accent-soft: rgba(148,163,184,.13); }
+body:is(.role-company, .role-admin):not(.theme-light) .ent-card-register{    --card-accent: #f472b6; --card-accent-soft: rgba(244,114,182,.13); }
+body:is(.role-company, .role-admin):not(.theme-light) .ent-card-support{     --card-accent: #2dd4bf; --card-accent-soft: rgba(45,212,191,.13); }
 
 /* Special-company panel: repeatable branch/car rows + recorded-companies table */
 .special-repeat-list{ display: flex; flex-direction: column; gap: .4rem; margin-bottom: .5rem; }
@@ -1271,6 +1577,17 @@ html[dir="rtl"] .vin-serial-input{
 }
 
 /* VIN picker: searchable dropdown + a "not listed" escape hatch. */
+/* The VIN field swaps between four mutually-exclusive modes (pick / full /
+   split / locked) by toggling `hidden`. Each wrap sets its own display, which
+   outranks the UA's `[hidden]{display:none}` — so opt each one back out
+   explicitly, or every mode stacks up at once. Same for the edit-only Cancel
+   buttons, which are `.btn` (display:inline-flex) + hidden. */
+.vin-picker-wrap[hidden],
+.vin-input-wrap[hidden],
+.vin-split-wrap[hidden],
+.vin-locked-wrap[hidden],
+.btn[hidden]{ display: none; }
+
 .vin-picker-wrap{ display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
 .vin-picker-wrap .ss-wrapper{ flex: 1; min-width: 220px; }
 .vin-custom-btn{
@@ -1300,15 +1617,13 @@ html[dir="rtl"] .vin-serial-input{
   margin-top: .25rem; font-size: .78rem; color: var(--danger); font-weight: 500;
 }
 .field-error[hidden]{ display: none; }
-.field:has(.field-error:not([hidden])) input,
-.field:has(.field-error:not([hidden])) select,
-.field:has(.field-error:not([hidden])) .ss-trigger{ border-color: var(--danger); }
-#form-add-car .field:has(.field-error:not([hidden])) input,
-#form-add-car .field:has(.field-error:not([hidden])) select,
-#form-add-car .field:has(.field-error:not([hidden])) .ss-trigger,
-#form-add-client .field:has(.field-error:not([hidden])) input,
-#form-add-client .field:has(.field-error:not([hidden])) select,
-#form-add-client .field:has(.field-error:not([hidden])) .ss-trigger{ border-color: var(--line); }
+/* Red-outline the field only while its error actually says something. The
+   markup ships these divs empty and WITHOUT `hidden` (JS adds it on the first
+   clear), so keying on `[hidden]` alone outlined every such field from the
+   first paint — `:not(:empty)` is what "has an error" really means here. */
+.field:has(.field-error:not([hidden]):not(:empty)) input,
+.field:has(.field-error:not([hidden]):not(:empty)) select,
+.field:has(.field-error:not([hidden]):not(:empty)) .ss-trigger{ border-color: var(--danger); }
 
 .upload-rejected-banner{ display: none; }
 .upload-results.rejected .upload-rejected-banner{
@@ -1639,14 +1954,6 @@ html[dir="rtl"] .fleet-br.is-open > .fleet-br-head .fleet-chevron{ transform: ro
   border-radius: var(--radius-xs); padding: .5rem .7rem; font-size: .88rem;
 }
 
-/* Create-rental panel */
-.create-rental-panel{
-  background: var(--surface-2); border: 1px solid var(--line);
-  border-radius: 14px; padding: 1.4rem 1.5rem 1.5rem; margin-bottom: 1.4rem;
-}
-.create-rental-panel .card-head{ margin-bottom: 1rem; }
-.create-rental-panel .card-head p{ margin: 0; color: var(--ink-soft); font-size: .85rem; }
-
 /* ===== Company data-entry form panels =====
    Wraps the main entry forms (Add car, Add client, B2B, Create rental) in a
    padded surface panel so the fields read as one grouped card instead of
@@ -1670,8 +1977,131 @@ html[dir="rtl"] .fleet-br.is-open > .fleet-br-head .fleet-chevron{ transform: ro
 .entry-form-actions .btn{ min-width: 132px; }
 @media (max-width: 640px){
   .entry-form-panel{ padding: 1.15rem 1.15rem 1.25rem; }
-  .create-rental-panel{ padding: 1.15rem 1.15rem 1.25rem; }
   .entry-form-actions .btn{ flex: 1 1 100%; }
+}
+
+/* ======================= CARS HUB (both roles) =======================
+   Views share one section, swapped by .hub-tab: the fleet, the two "who is this
+   car out with?" tables, and — admin only — the live GPS map. The company panel
+   (#company-cars) leads with its tables and raises data entry in modals; the
+   admin panel (#cars) keeps its inline add-car form on the fleet view.
+   Everything here is token-driven and role-agnostic, so both roles get the same
+   segmented control, and a tab may omit .hub-tab-count (the map does). */
+.hub-head{ align-items: flex-start; gap: 1rem; }
+.hub-actions{ display: flex; flex-wrap: wrap; gap: .6rem; flex: 0 0 auto; }
+.hub-action{
+  display: inline-flex; align-items: center; gap: .5rem;
+  white-space: nowrap;
+}
+.hub-action-ico{ display: inline-flex; flex: 0 0 auto; }
+.hub-action-ico svg{ width: 17px; height: 17px; display: block; }
+
+/* View switcher — a segmented control above the tables. */
+.hub-tabs{
+  display: flex; flex-wrap: wrap; gap: .35rem;
+  padding: .35rem; margin: 0 0 1.3rem;
+  background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 13px;
+}
+.hub-tab{
+  flex: 1 1 auto;
+  display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+  padding: .62rem .9rem;
+  background: none; border: 0; border-radius: 9px;
+  color: var(--ink-soft); font: inherit; font-size: .9rem; font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+  transition: background .15s, color .15s, box-shadow .15s;
+}
+.hub-tab:hover{ background: var(--surface); color: var(--ink); }
+.hub-tab:focus-visible{ outline: 2px solid var(--primary); outline-offset: -2px; }
+.hub-tab.active{
+  background: var(--surface); color: var(--ink);
+  box-shadow: 0 2px 10px -4px rgba(0,0,0,.5), inset 0 0 0 1px var(--line);
+}
+/* Line icons inherit the tab's colour, so they dim/brighten with it. */
+.hub-tab-ico{ display: inline-flex; flex: 0 0 auto; opacity: .75; transition: opacity .15s; }
+.hub-tab-ico svg{ width: 17px; height: 17px; display: block; }
+.hub-tab:hover .hub-tab-ico,
+.hub-tab.active .hub-tab-ico{ opacity: 1; }
+.hub-tab-count{
+  min-width: 1.55em; padding: .1rem .42rem;
+  background: var(--line); color: var(--ink-soft);
+  border-radius: 999px; font-size: .76rem; font-weight: 700;
+}
+.hub-tab.active .hub-tab-count{ background: var(--primary); color: #fff; }
+.hub-view[hidden]{ display: none; }
+.hub-view{ animation: hubViewIn .22s cubic-bezier(.2,.7,.3,1) both; }
+@keyframes hubViewIn{
+  from{ opacity: 0; transform: translateY(6px); }
+  to  { opacity: 1; transform: translateY(0); }
+}
+@media (max-width: 720px){
+  .hub-head{ flex-direction: column; }
+  .hub-actions{ width: 100%; }
+  .hub-actions .hub-action{ flex: 1 1 0; justify-content: center; }
+  .hub-tabs{ flex-direction: column; }
+  .hub-tab{ justify-content: flex-start; }
+}
+
+/* ---- "Who is renting?" chooser modal ---- */
+.choose-card{ width: min(560px, 95vw); }
+.choose-body{ padding: 1.1rem 1.2rem 1.4rem; overflow-y: auto; }
+.choose-hint{ margin: 0 0 1rem; color: var(--muted); font-size: .88rem; }
+.choose-grid{ display: grid; gap: .7rem; }
+.choose-opt{
+  display: flex; align-items: center; gap: .95rem; text-align: left;
+  width: 100%; padding: 1.05rem 1.1rem;
+  background: var(--surface-2); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 14px;
+  font: inherit; cursor: pointer;
+  transition: transform .15s cubic-bezier(.4,0,.2,1), border-color .15s, box-shadow .15s;
+}
+.choose-opt:hover{
+  transform: translateY(-2px);
+  border-color: var(--primary);
+  box-shadow: 0 14px 30px -20px rgba(0,0,0,.9);
+}
+.choose-opt:focus-visible{ outline: 2px solid var(--primary); outline-offset: 2px; }
+.choose-ico{
+  flex: 0 0 auto; width: 46px; height: 46px; border-radius: 12px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff;
+}
+.choose-ico svg{ width: 24px; height: 24px; display: block; }
+.choose-ico-ind{ background: linear-gradient(135deg, #6366f1, #4338ca); }
+.choose-ico-co { background: linear-gradient(135deg, #0ea5e9, #0369a1); }
+.choose-opt-body{ display: flex; flex-direction: column; gap: .2rem; min-width: 0; flex: 1; }
+.choose-opt-title{ font-size: 1rem; font-weight: 700; }
+.choose-opt-desc{ font-size: .84rem; color: var(--muted); }
+.choose-opt-arrow{ flex: 0 0 auto; color: var(--muted); font-size: 1.1rem; transition: transform .15s, color .15s; }
+.choose-opt:hover .choose-opt-arrow{ color: var(--primary); transform: translateX(3px); }
+html[dir="rtl"] .choose-opt-arrow{ transform: scaleX(-1); }
+html[dir="rtl"] .choose-opt:hover .choose-opt-arrow{ transform: scaleX(-1) translateX(3px); }
+
+/* ---- Data-entry forms hosted in a modal ----
+   .modal-card clips its children, so the form body owns the scroll. The
+   entry panel loses its own frame here — the modal already is the frame. */
+.form-modal-card{ width: min(760px, 96vw); }
+.modal-form-body{
+  flex: 1 1 auto; overflow-y: auto;
+  /* No bottom padding — the sticky action bar below supplies it, so the last
+     field can scroll fully clear of the buttons. */
+  padding: 1.1rem 1.25rem 0;
+}
+.modal-form-hint{ margin: 0 0 .9rem; color: var(--muted); font-size: .88rem; }
+.modal-form-body .entry-form-panel{
+  background: none; border: 0; padding: 0; margin-bottom: 0;
+}
+/* Save/Cancel ride along at the foot of a long form instead of hiding below
+   the fold. Content scrolls under an opaque bar, so it reads as chrome. */
+.modal-form-body .entry-form-actions{
+  position: sticky; bottom: 0; z-index: 2;
+  margin-top: .9rem; padding: .95rem 0;
+  background: var(--surface);
+  box-shadow: 0 -12px 18px -14px rgba(0,0,0,.85);
+}
+@media (max-width: 640px){
+  .modal-form-body{ padding: 1rem 1rem 0; }
 }
 
 /* Report company header */
@@ -1832,6 +2262,33 @@ html[dir="rtl"] .branch-toggle.is-open .branch-chevron{ transform: rotate(90deg)
 }
 .branch-tag .branch-ico{ width: 15px; height: 15px; color: var(--primary); flex: 0 0 auto; }
 html[dir="rtl"] .branch-tag .branch-ico{ transform: scaleX(-1); }
+.branch-tag .branch-name{ white-space: nowrap; }
+/* The branch that IS the head office reads as the primary one, not a sibling. */
+.branch-tag-head{
+  background: var(--success-lt); border-color: transparent; color: var(--ink);
+}
+
+/* ---- "Head office" pill ------------------------------------------------
+   This shipped with a class but NO rules at all, so it rendered as bare
+   "★ Head office" text run straight into whatever sat beside it — which is
+   what made the companies table look messy. It's a pill now, matching the
+   .rd-badge one the branch detail modal already used for the same fact, so
+   the two places name the head office the same way.
+   Same trap as .rd-badge above: the dark half must be gated, or this pale
+   ink lands on the light theme's white row and disappears. */
+.branch-head-badge{
+  display: inline-flex; align-items: center; gap: .2rem;
+  padding: .1rem .45rem; border-radius: 999px;
+  background: var(--success-lt); color: #059669;
+  font-size: .66rem; font-weight: 800; letter-spacing: .01em;
+  white-space: nowrap; flex: 0 0 auto;
+}
+body:is(.role-admin,.role-company):not(.theme-light) .branch-head-badge{
+  background: rgba(16,185,129,.18); color: #a7f3d0;
+}
+body:is(.role-admin,.role-company):not(.theme-light) .branch-tag-head{
+  background: rgba(16,185,129,.12); color: var(--ink);
+}
 
 .color-swatch{
   display: inline-block; width: 13px; height: 13px; border-radius: 50%;
@@ -1871,7 +2328,10 @@ html[dir="rtl"] .branch-tag .branch-ico{ transform: scaleX(-1); }
 .file-picker-btn:hover{
   border-color: var(--primary); color: var(--primary); background: var(--primary-lt);
 }
+/* Emoji in most panels, an inline SVG in the Cars hub — size both. */
 .file-picker-icon{ font-size: 1rem; }
+.file-picker-icon:has(svg){ display: inline-flex; align-items: center; }
+.file-picker-icon svg{ width: 16px; height: 16px; display: block; }
 .upload-file-field{ grid-column: 1 / -1; }
 
 .file-chips{ display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .5rem; }
@@ -2377,7 +2837,11 @@ html[dir="rtl"] .dash-panel.collapsed .dash-toggle-icon{
   background: var(--success-lt); color: #059669;
   font-size: .68rem; font-weight: 800;
 }
-body:is(.role-admin,.role-company) .rd-badge{ background: rgba(16,185,129,.18); color: #a7f3d0; }
+/* Gated :not(.theme-light) — both signed-in roles are dark by default, but this
+   pale ink was leaking onto the light theme's white card and vanishing. */
+body:is(.role-admin,.role-company):not(.theme-light) .rd-badge{
+  background: rgba(16,185,129,.18); color: #a7f3d0;
+}
 
 .dash-panel-badge{
   background: var(--primary); color: #fff;
@@ -2613,18 +3077,95 @@ html[dir="rtl"] .dash-search-input{
   background: rgba(239,68,68,.06);
 }
 
-/* Return badges + overdue row, tuned for the dark company theme */
-body.role-company .return-badge.overdue{  background: rgba(239,68,68,.20);  color: #fecaca; }
-body.role-company .return-badge.today{    background: rgba(245,158,11,.20); color: #fde68a; }
-body.role-company .return-badge.upcoming{ background: rgba(16,185,129,.18); color: #a7f3d0; }
-body.role-company #tbl-returns tr.returns-row:has(.return-badge.overdue) td{
+/* Return badges + overdue row, tuned for the dark company theme. Gated on
+   :not(.theme-light) like every other shared dark rule — these pale inks
+   (#fecaca, #fde68a…) are picked to sit on a dark card and all but vanish if
+   they leak onto the light theme's white one. */
+body.role-company:not(.theme-light) .return-badge.overdue{  background: rgba(239,68,68,.20);  color: #fecaca; }
+body.role-company:not(.theme-light) .return-badge.today{    background: rgba(245,158,11,.20); color: #fde68a; }
+body.role-company:not(.theme-light) .return-badge.upcoming{ background: rgba(16,185,129,.18); color: #a7f3d0; }
+body.role-company:not(.theme-light) #tbl-returns tr.returns-row:has(.return-badge.overdue) td{
   background: rgba(239,68,68,.10);
 }
 /* "Returned" status (B2B records handed back) — muted, neutral. */
 .return-badge.returned{ background: #e2e8f0; color: #475569; }
-body.role-company .return-badge.returned{ background: rgba(148,163,184,.18); color: #cbd5e1; }
+body.role-company:not(.theme-light) .return-badge.returned{ background: rgba(148,163,184,.18); color: #cbd5e1; }
 /* A returned B2B row is history — dim it so active rows stand out. */
 tr.special-returned-row td{ opacity: .58; }
+
+/* =================== BOOKING STATUS (migration 040) ===================
+   A booking's own state — pending / active / cancelled — in the status column
+   of the two "rented by" tables. It's a PICKER, not a read-out: the pill IS the
+   <select>, so moving a booking is one pick and costs the table no extra column
+   of buttons. Same pill shape as .return-badge (the date-derived Overdue / Due
+   today badge it sits with) so the column stays one visual language — the caret
+   is the only tell. The wrapper carries the colour and the caret; the select on
+   top is transparent and holds the text, which is what keeps the pill hugging
+   its label instead of stretching to some browser default width. */
+/* A cancelled booking is kept for the record but isn't live — dim it. */
+tr.booking-cancelled-row td{ opacity: .55; }
+
+.status-cell{
+  display: inline-flex; flex-direction: column;
+  align-items: flex-start; gap: .25rem; max-width: 100%;
+}
+.status-pick{
+  position: relative; display: inline-flex; align-items: center;
+  border-radius: 999px; max-width: 100%;
+  transition: filter .15s;
+}
+.status-pick:hover{ filter: brightness(.96); }
+.status-pick::after{
+  content: "▾"; position: absolute; inset-inline-end: .45rem;
+  font-size: .62rem; line-height: 1; opacity: .75; pointer-events: none;
+}
+.status-pick-sel{
+  appearance: none; -webkit-appearance: none;
+  margin: 0; border: 0; background: transparent; color: inherit;
+  font: inherit; font-size: .72rem; font-weight: 700; line-height: 1.35;
+  padding-block: .2rem; padding-inline: .55rem 1.25rem;
+  border-radius: 999px; white-space: nowrap; cursor: pointer;
+  max-width: 100%; text-overflow: ellipsis;
+}
+.status-pick-sel:focus-visible{ outline: 2px solid var(--primary); outline-offset: 1px; }
+/* The dropped-open menu is painted by the OS, not by the pill, and would
+   otherwise inherit the pill's colours. The shared `select option` pair near the
+   SearchSelect rules already dresses it for both themes — nothing to add here. */
+
+/* Light theme. The badge tints elsewhere sit at 8% alpha, which is enough for a
+   read-out but leaves a control looking like unstyled text — so the picker fills
+   harder and carries a hairline ring, and the ink is a rung darker than the
+   badge palette (#059669 green on a near-white pill is ~3:1, under the 4.5:1
+   small-text floor; #047857 clears it). */
+.status-pick{ box-shadow: inset 0 0 0 1px rgba(15,23,42,.10); }
+.status-pick.pending{   background: rgba(245,158,11,.16); color: #92400e; }
+.status-pick.active{    background: rgba(16,185,129,.16); color: #047857; }
+.status-pick.cancelled{ background: #e2e8f0;              color: #475569; }
+
+/* Dark theme — gated :not(.theme-light) like every other shared dark rule, or
+   these pale inks leak onto the light theme's white card and become the
+   washed-out pills this replaces. The ring goes light-on-dark instead of
+   dark-on-light.
+   Both roles, though only the company renders a .status-pick today — the admin
+   reads the .status-tag twin instead. Kept symmetric with that twin, which
+   genuinely needs both roles: admin is dark by default too, and a
+   .role-company-only rule put the admin's tags on the LIGHT palette — dark
+   amber ink (#92400e) on a dark card — which is the same class of bug as an
+   ungated dark rule, just pointing the other way. */
+body:is(.role-company, .role-admin):not(.theme-light) .status-pick{ box-shadow: inset 0 0 0 1px rgba(226,232,240,.14); }
+body:is(.role-company, .role-admin):not(.theme-light) .status-pick.pending{   background: rgba(245,158,11,.20); color: #fde68a; }
+body:is(.role-company, .role-admin):not(.theme-light) .status-pick.active{    background: rgba(16,185,129,.20); color: #a7f3d0; }
+body:is(.role-company, .role-admin):not(.theme-light) .status-pick.cancelled{ background: rgba(148,163,184,.18); color: #cbd5e1; }
+/* A cancelled row is dimmed whole (above) — don't also strike the picker's
+   label, which would fight the caret and hurt the one thing that must stay
+   legible: what the row's status currently is. */
+
+/* Both card modes (stacked ≤720, bento 721–1024) put the column label on the
+   left and the value on the right. The picker is the value, so end-align it and
+   its badge with the rest of the card. */
+@media (max-width: 1024px){
+  .status-cell{ align-items: flex-end; }
+}
 
 /* =================== NOTIFICATION BELL (company header) =================== */
 .notif-bell{ display: none; }
@@ -4279,15 +4820,15 @@ body.role-admin #tbl-admin-reservations tr.rv-row-today td{
 /* -----------------------------------------------------
    "Cars Rented to Companies" (B2B) list renders as a real,
    dense data-table (not bento cards) so it stays scannable as
-   the record count grows. A few per-column touches keep the
-   multi-line contact block and car list tidy, and the Delete
-   column hugs its button on the right.
+   the record count grows.
+
+   Every per-column rule that used to live here is gone. Four of them styled
+   columns this table no longer has (company / phone / view) or a button that
+   doesn't exist (.special-view — the only near-match is `admin-special-view`,
+   a different class on the admin's table); the fifth, the GPS centring, is
+   covered by the shared merged-cell widths near the top of this file, which
+   now name all four "rented by …" tables.
 ----------------------------------------------------- */
-#tbl-special tbody td[data-col="company"] strong{ font-weight: 700; }
-#tbl-special tbody td[data-col="phone"]{ white-space: nowrap; }
-#tbl-special tbody td[data-col="gps"]{ text-align: center; }
-#tbl-special tbody td[data-col="view"]{ width: 1%; white-space: nowrap; text-align: center; }
-#tbl-special .special-view{ font-size: 1rem; line-height: 1; padding: .35rem .6rem; }
 
 /* -----------------------------------------------------
    Admin Clients: a dense, scannable data-table (not bento cards) so it
@@ -5280,7 +5821,25 @@ body:is(.role-company,.role-admin) .reservation-status-badge.inactive{ color: #9
 }
 .rvd-notes{ margin: 0; color: var(--ink-soft); font-size: .9rem; white-space: pre-wrap; }
 
-/* ---- Map-pin inside the company detail modal (location + each branch) ---- */
+/* ---- The one location control in the company / branch detail modal ----
+   Replaces the old "Location" (name + small pin) + "Map location" (link out to
+   Google Maps) pair, which named one place twice. The whole row is the button;
+   it opens the in-app map full-page. Sized to fill its <dd> so it reads as a
+   field value you can press, not a chip floating in the grid. */
+.rd-loc-view{
+  display: inline-flex; align-items: center; gap: .45rem;
+  max-width: 100%; padding: .32rem .6rem;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--primary-lt); color: var(--primary);
+  font: inherit; font-weight: 600; text-align: start;
+  cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+}
+.rd-loc-view svg{ width: 15px; height: 15px; flex: 0 0 auto; display: block; }
+.rd-loc-view-text{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rd-loc-view:hover{ background: var(--primary); color: #fff; border-color: var(--primary); }
+.rd-loc-view:focus-visible{ outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* ---- Map-pin inside the company detail modal (each branch in the list) ---- */
 .rd-loc-pin{
   flex: 0 0 auto; vertical-align: middle;
   display: inline-flex; align-items: center; justify-content: center;
@@ -5296,6 +5855,13 @@ body:is(.role-company,.role-admin) .reservation-status-badge.inactive{ color: #9
 /* ---- Location cell in the Companies table: clickable pin + place name ----
    The whole cell is a button — click it to open the location on the map. */
 .company-loc-td{ white-space: nowrap; }
+/* When this location is also the head office, the pill goes UNDER the link
+   rather than running into it — .company-loc-link is a nowrap flex button, so
+   a badge appended beside it was what made the row look crowded. */
+.company-loc-stack{
+  display: inline-flex; flex-direction: column;
+  align-items: flex-start; gap: .25rem; min-width: 0; max-width: 100%;
+}
 .company-loc-link{
   display: inline-flex; align-items: center; gap: .4rem;
   max-width: 100%; padding: .28rem .55rem;

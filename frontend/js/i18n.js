@@ -5,6 +5,23 @@
 
 const I18N = {
   en: {
+
+    /* Booking status (migration 040) — replaces the reservations feature. */
+    "status.label":            "Status",
+    "status.active":           "Active",
+    "status.pending":          "Pending",
+    "status.cancelled":        "Cancelled",
+    "status.active.co":        "Active",
+    "status.pending.co":       "Pending",
+    "status.hint.rental":      "Active = out with the client now. Pending = booked for later. Both hold the car for these dates; Cancelled frees it.",
+    "status.hint.co":          "Active = the company has the car now. Pending = agreed for later. Active records still show Due today / Overdue / Returned from their dates.",
+    "status.active.short":     "Active",
+    "status.pending.short":    "Pending",
+    "status.cancelled.short":  "Cancelled",
+    "status.moved":            "Booking set to {status}.",
+    "rental.create.saved.active":    "Rental created — the car is out with the client.",
+    "rental.create.saved.pending":   "Booking saved as pending — the car is held for those dates.",
+    "rental.create.saved.cancelled": "Booking saved as cancelled.",
     "app.title": "Car Rental | Lebanon",
     "brand": "Car Rental",
 
@@ -17,6 +34,10 @@ const I18N = {
     "nav.rent":        "Rent",
     "nav.upload":      "Upload",
     "nav.report":      "Report",
+    // The company's own name for the same tab: it lists that company's CLIENTS,
+    // each opening to their rental history. Admin keeps "Report" — theirs is
+    // still a flat, everyone's-rentals grid.
+    "nav.clientsHistory": "Clients History",
     "nav.companyInfo": "Company info",
     "nav.addCar":      "Add car",
     "nav.addClient":   "Add client",
@@ -25,12 +46,11 @@ const I18N = {
     "ent.home.title":    "Car Rental System",
     "ent.home.subtitle": "Everything you need to run your fleet — pick a section to get started.",
     "ent.back":          "Back to home",
-    "ent.card.cars.title":        "Add Cars",
-    "ent.card.cars.desc":         "Register vehicles into your fleet — one by one or via CSV.",
-    "ent.card.clients.title":     "Add Clients",
-    "ent.card.clients.desc":      "Add customers with photos, documents and contact details.",
-    "ent.card.reservation.title": "Add Reservation",
-    "ent.card.reservation.desc":  "Book a car for a client and manage reservations.",
+    "ent.card.cars.title":        "Cars & Rentals",
+    "ent.card.cars.desc":         "Add vehicles to your fleet and record who's renting them — individuals or companies.",
+    // One card for one set of people: the register and their history with you.
+    "ent.card.clients.title":     "Add Client & See History",
+    "ent.card.clients.desc":      "Register your clients with photos and documents, and see every car each one has rented from you.",
     "ent.card.branch.title":      "Branches",
     "ent.card.branch.desc":       "Manage your enterprise details and branch offices.",
     "ent.card.key.title":         "API key",
@@ -39,8 +59,64 @@ const I18N = {
     "ent.card.docs.desc":         "Open the interactive technical API reference.",
     "ent.card.special.title":     "Cars Rented by Companies",
     "ent.card.special.desc":      "Record a company you rent your cars to and track which cars they hold.",
-    "ent.card.report.title":      "Cars Rented by Individuals",
-    "ent.card.report.desc":       "Create client rentals and see your recent rental report.",
+    // The Clients History home card, its sidebar entry and its header-nav link
+    // are all gone — it's a tab inside Add Client now, and these three keys are
+    // dead with them. Kept, not deleted: the strings are the right ones if the
+    // history ever needs a door of its own again, and `t()` falling back to the
+    // literal key is a silent failure, so a re-add that forgot them would ship a
+    // raw "ent.card.report.title" on the home page. The LIVE keys for that view
+    // are `coClientsHub.tab.history` (the tab) and `report.clientsTitle` (its
+    // heading).
+    "ent.card.report.title":      "Clients History",
+    "ent.card.report.desc":       "Every client you've rented to, with their full history. Open a client to see the cars they took.",
+
+    /* Add Client & See History — the company's two-view clients hub. */
+    "coClients.title":            "Add Client & See History",
+    "coClients.subtitle":         "Register your clients, then open the history tab to see everything each one has rented from you.",
+    "coClientsHub.tab.add":       "Add client",
+    "coClientsHub.tab.history":   "Clients history",
+
+    /* Cars hub — the panel that hosts the fleet, individual rentals and B2B. */
+    "carsHub.title":              "Cars & Rentals",
+    "carsHub.subtitle":           "Your fleet and every rental it's out on. Add a car, or record who's renting one.",
+    "carsHub.addCar":             "Add car",
+    "carsHub.carRented":          "Car rented",
+    "carsHub.tab.fleet":          "My cars",
+    // Admin sees every company's fleet, not "my cars" — same tab, different owner.
+    "carsHub.tab.allCars":        "All cars",
+    "carsHub.tab.individual":     "Rented by individuals",
+    "carsHub.tab.company":        "Rented by companies",
+    // The sidebar said "Car GPS"; as a tab beside three car lists, what it shows
+    // is the point, not the hardware.
+    "carsHub.tab.gps":            "Live map",
+    // Admin only: the rental report was its own panel until it became the fifth
+    // view here. Keeps the name the sidebar entry had (nav.report) so the tab
+    // reads as the thing that moved, not as something new.
+    "carsHub.tab.report":         "Report",
+    // Clients hub — the register, plus the two histories that read ACROSS
+    // companies (the Cars hub's tables read across records).
+    "clientsHub.tab.list":        "Clients",
+    "clientsHub.tab.history":     "Client history",
+    "clientsHub.tab.cohistory":   "Company history",
+    "clientHistory.th.companies": "Companies",
+    "clientHistory.empty":        "No rentals match these filters.",
+    "clientHistory.rentedFrom":   "from",
+    "coHistory.th.renter":        "Company",
+    "coHistory.th.from":          "Rented from",
+    "coHistory.empty":            "No company rentals match these filters.",
+    "coHistory.companiesOne":     "1 company",
+    "coHistory.companiesMany":    "{n} companies",
+    "carsHub.choose.title":       "Who is renting the car?",
+    "carsHub.choose.hint":        "Pick the kind of renter — we'll open the right form and show its records.",
+    "carsHub.choose.ind.title":   "An individual",
+    "carsHub.choose.ind.desc":    "A private client renting one of your cars.",
+    "carsHub.choose.co.title":    "A company",
+    "carsHub.choose.co.desc":     "Another business renting your cars (B2B).",
+    "carsHub.ind.title":          "Cars rented by individuals",
+    "carsHub.ind.hint":           "Every car you've handed to a private client. Use \"New rental\" to record another one.",
+    "carsHub.ind.new":            "New rental",
+    "carsHub.ind.empty":          "No rentals to individuals yet — use \"New rental\" to record one.",
+    "carsHub.co.new":             "New record",
 
     "theme.light": "Light",
     "theme.dark":  "Dark",
@@ -50,19 +126,23 @@ const I18N = {
     "admin.home.subtitle": "Oversee companies, fleet and clients — pick a section to get started.",
     "admin.card.dashboard.desc":    "Live stats, activity feed and inactive-company alerts.",
     "admin.card.companies.desc":    "Browse every company and its branches.",
-    "admin.card.cars.desc":         "View the whole fleet across all companies.",
-    "admin.card.gps.desc":          "Locate any car on the live map.",
-    "admin.card.clients.desc":      "All clients and the companies they rent from.",
-    "admin.card.reservations.desc": "Every reservation across all companies.",
+    // This card is now the only door to the fleet, both "rented by" tables and
+    // the map, so it promises all four rather than just the fleet.
+    // Both cards are named for what their hub HOLDS, not for one of its tabs —
+    // "Cars" and "Clients" said nothing about the map, the report or the two
+    // history views behind them. The section <h2>s use these same keys, so the
+    // card you click and the panel you land on agree. `cars.title` /
+    // `clients.title` stay singular: EntityDetail titles one record with them.
+    "admin.card.cars.title":        "Fleet & Rentals",
+    "admin.card.cars.desc":         "The whole fleet, who each car is out with, the live map and the rental report.",
+    "admin.card.clients.title":     "Clients & History",
+    "admin.card.clients.desc":      "The client register, each client's history across every company, and the B2B renters'.",
     "admin.card.report.desc":       "Rental report with full search and filters.",
-    "admin.card.special":           "Cars Rented by Companies",
-    "admin.card.special.desc":      "Cars companies rent out to other companies (B2B).",
-    "admin.card.individual":        "Cars Rented by Individuals",
-    "admin.card.individual.desc":   "Cars currently rented out to individual clients.",
     "admin.card.register.desc":     "Create a new company account.",
     "admin.card.support.desc":      "Get help and contact information.",
 
     "special.title":          "Cars Rented to Companies",
+    "special.editTitle":      "Edit Company Record",
     "special.subtitle":       "Record a company you rent your own cars to — its details, branches and phones, and which of your cars it currently holds.",
     "special.f.company":      "Company name",
     "special.f.company.ph":   "e.g. Cedars Transport",
@@ -122,6 +202,11 @@ const I18N = {
     "adminIndividual.search":   "Client, car, plate…",
     "adminIndividual.th.client": "Client",
     "adminSpecial.th.fromCompany": "Rented from",
+    // Merged columns: "Rented by" carries company · owner · phones, "Vehicle"
+    // carries model · plate · colour. Named for the question the cell answers,
+    // not for the fields inside it.
+    "adminSpecial.th.rentedBy":    "Rented by",
+    "adminSpecial.th.vehicle":     "Vehicle",
     "special.saved":          "Record saved.",
     "special.deleted":        "Record deleted.",
     "special.confirmDelete":  "Delete this record?",
@@ -160,6 +245,7 @@ const I18N = {
 
     "addCar.title":              "Add a Car",
     "addCar.subtitle":           "Each car you add belongs to your company.",
+    "addCar.editTitle":          "Edit Car",
     "addCar.action":             "Save car",
     "addCar.update":             "Update car",
     "addCar.updated":            "Car updated.",
@@ -203,8 +289,11 @@ const I18N = {
     "addClient.parentsRequired":        "Nothing was saved: father name and mother name are required for Lebanese clients.",
     "addClient.myClients":              "Clients you added",
     "addClient.myClients.hint":         "Review the info below. Edit a client any time to fix something — every change is recorded.",
-    "addClient.editsLeft":              "Edits",
-    "addClient.noEditsLeft":            "No edits left",
+    // `addClient.editsLeft` ("Edits"), `addClient.noEditsLeft` ("No edits left")
+    // and `special.th.edits` are all gone: company edits were capped at 2, and
+    // the counter columns, the refusal message and their keys died with the cap.
+    // NO company table counts edits now — the hint above carries what's left of
+    // the idea: every change is recorded, and the admin audits it live.
     "addClient.noClients":              "You haven't added any clients yet.",
     "addClient.nationality":            "Nationality",
     "addClient.nationality.placeholder":"— Choose nationality —",
@@ -337,6 +426,7 @@ const I18N = {
     "map.hint":    "Click anywhere on the map to drop a pin.",
     "map.coords":  "Selected coordinates:",
     "map.cancel":  "Cancel",
+    "map.close":   "Close",
     "map.confirm": "Add coordinates",
     "map.no.pick": "Click somewhere on the map first.",
 
@@ -428,8 +518,9 @@ const I18N = {
     "upload.empty":       "CSV is empty.",
 
     "report.title":    "Rental Report",
+    "report.clientsTitle": "Clients History",
     "report.subtitle": "Every client linked to their rented cars and the company that owns each car (incl. GPS status).",
-    "report.companySubtitle": "Your company's rentals from the last month.",
+    "report.companySubtitle": "Your clients and the cars each has rented from you. Open a client to see their full history.",
     "report.search":   "Search by company name",
     "report.search.placeholder": "Type a company name…",
     "report.search.client": "Search by client name",
@@ -465,7 +556,20 @@ const I18N = {
     "report.contact":  "Contact & ID",
     "report.vehicle":  "Vehicle",
     "report.details":  "Details",
-    "nav.carGps":      "Car GPS",
+    // The admin report's row modal. Its groups reuse report.company / .vehicle
+    // / .client / .period as headings; these are the fields the row itself
+    // already shows as a drill link and the modal has to name in full.
+    "report.rowTitle":   "Rental details",
+    "report.cname":      "Company name",
+    "report.cliName":    "Client name",
+    "report.openCompany":"Company details",
+    "report.openClient": "Client details",
+    "report.openVehicle":"Vehicle details",
+    // Company report — master (client) row columns and its history panel.
+    "report.rentals":  "Rentals",
+    "report.carsCount":"Cars",
+    "report.latest":   "Latest rental",
+    "report.history":  "Rental history",
     "carGps.title":    "Car GPS & Map",
     "carGps.subtitle": "Pick a GPS-equipped car — from any company — to locate it on the map and review its full details.",
     "carGps.select":   "Select a car",
@@ -548,7 +652,6 @@ const I18N = {
     "filter.gpsYes":    "With GPS",
     "filter.gpsNo":     "Without GPS",
     "filter.vinHint":   "Pick a company first…",
-    "reservations.bookedOn": "Booked on",
 
     "register.f.owner":  "Owner name",
 
@@ -561,30 +664,7 @@ const I18N = {
     "resetPw.success":   "Password changed successfully. Welcome!",
 
     "nav.reservations":         "Reservations",
-    "reservations.title":       "Reservations",
-    "reservations.subtitle":    "Manage car reservations. Activate when the client picks up, or cancel if they decline.",
-    "reservations.adminSubtitle": "All reservations across companies.",
-    "reservations.action":      "Create Reservation",
-    "reservations.notes":       "Notes",
-    "reservations.status":      "Status",
-    "reservations.activate":    "Activate",
-    "reservations.cancel":      "Cancel",
-    "reservations.pending":     "Pending",
-    "reservations.active":      "Active",
-    "reservations.inactive":    "Cancelled",
-    "reservations.today":       "Today's Reservations",
-    "reservations.filterToday": "Today",
-    "reservations.filterAll":   "All",
-    "reservations.filterDate":  "Search by date",
-    "reservations.filterStatus":"Status",
-    "reservations.carUnavailable": "That car isn't available for the selected dates.",
-    "reservations.saved":       "Reservation created.",
-    "reservations.activated":   "Reservation activated — rental created.",
-    "reservations.converted":   "Reservation activated — car now rented by client (moved to Returns).",
-    "reservations.cancelled":   "Reservation cancelled.",
-    "reservations.viewCalendar": "Calendar",
-    "reservations.viewList":     "List",
-    "reservations.noRange":      "No reservations this month.",
+    "returns.filterToday": "Today",
 
     "nav.returns":            "Returns Due",
     "returns.title":          "Returns Due",
@@ -624,9 +704,15 @@ const I18N = {
     "returnDue.rel.overdueN": "Overdue by {n} days",
 
     "special.th.status":      "Status",
-    "special.th.edits":       "Edits",
+    // The two merged headers on #tbl-special. The per-field keys above
+    // (company / owner / phone / model / color / plate / from / to) are still
+    // live — they label the B2B DETAIL modal, which is where those fields went
+    // when the table folded eleven columns into six.
+    "special.th.rentedBy":    "Rented by",
+    "special.th.vehicle":     "Vehicle",
+    // `special.th.edits` is gone with the last edit counter the company role
+    // had — see the note by addClient.noClients.
     "special.status.returned":"Returned",
-    "special.status.out":     "Out",
 
     "extend.action":          "Extend",
     "extend.title":           "Extend rental period",
@@ -685,6 +771,7 @@ const I18N = {
     "dash.chip.rentals":      "rentals",
     "dash.chip.reservations": "reservations",
     "dash.chip.idle":         "idle",
+    "dash.search":            "Search",
     "dash.search.placeholder":"Search company, phone, location...",
     "dash.search.none":       "No matching companies.",
     "dash.search.allCompanies":"— All companies —",
@@ -757,6 +844,23 @@ const I18N = {
   },
 
   ar: {
+
+    /* حالة الحجز */
+    "status.label":            "الحالة",
+    "status.active":           "نشط",
+    "status.pending":          "قيد الانتظار",
+    "status.cancelled":        "ملغى",
+    "status.active.co":        "نشط",
+    "status.pending.co":       "قيد الانتظار",
+    "status.hint.rental":      "«نشط» = مع العميل الآن. «قيد الانتظار» = محجوزة لاحقاً. كلاهما يحجز السيارة لهذه التواريخ، و«ملغى» يحرّرها.",
+    "status.hint.co":          "«نشط» = الشركة تحتفظ بالسيارة الآن. «قيد الانتظار» = متفق عليه لاحقاً. السجلات النشطة تعرض «مستحق اليوم» و«متأخر» و«أُعيدت» حسب تواريخها.",
+    "status.active.short":     "نشط",
+    "status.pending.short":    "قيد الانتظار",
+    "status.cancelled.short":  "ملغى",
+    "status.moved":            "تم ضبط الحجز على {status}.",
+    "rental.create.saved.active":    "تم إنشاء التأجير — السيارة مع العميل.",
+    "rental.create.saved.pending":   "تم حفظ الحجز كقيد الانتظار — السيارة محجوزة لتلك التواريخ.",
+    "rental.create.saved.cancelled": "تم حفظ الحجز كملغى.",
     "app.title": "تأجير السيارات | لبنان",
     "brand": "تأجير السيارات",
 
@@ -766,6 +870,7 @@ const I18N = {
     "nav.rent":      "استئجار",
     "nav.upload":    "رفع",
     "nav.report":    "التقارير",
+    "nav.clientsHistory": "سجلّ العملاء",
 
     "nav.dashboard": "لوحة التحكم",
     "nav.register":  "تسجيل",
@@ -778,12 +883,10 @@ const I18N = {
     "ent.home.title":    "نظام تأجير السيارات",
     "ent.home.subtitle": "كل ما تحتاجه لإدارة أسطولك — اختر قسماً للبدء.",
     "ent.back":          "العودة للرئيسية",
-    "ent.card.cars.title":        "إضافة سيارات",
-    "ent.card.cars.desc":         "أضف المركبات إلى أسطولك فردياً أو عبر ملف CSV.",
-    "ent.card.clients.title":     "إضافة عملاء",
-    "ent.card.clients.desc":      "أضف العملاء مع الصور والمستندات وبيانات التواصل.",
-    "ent.card.reservation.title": "إضافة حجز",
-    "ent.card.reservation.desc":  "احجز سيارة لعميل وأدر الحجوزات.",
+    "ent.card.cars.title":        "السيارات والتأجير",
+    "ent.card.cars.desc":         "أضف المركبات إلى أسطولك وسجّل من يستأجرها — أفراد أو شركات.",
+    "ent.card.clients.title":     "إضافة عميل وعرض السجلّ",
+    "ent.card.clients.desc":      "سجّل عملاءك مع الصور والمستندات، واعرض كل سيارة استأجرها كلّ منهم منك.",
     "ent.card.branch.title":      "الفروع",
     "ent.card.branch.desc":       "إدارة بيانات مؤسستك وفروعها.",
     "ent.card.key.title":         "مفتاح API",
@@ -792,8 +895,48 @@ const I18N = {
     "ent.card.docs.desc":         "افتح المرجع التقني التفاعلي للـ API.",
     "ent.card.special.title":     "سيارات مؤجَّرة لشركات",
     "ent.card.special.desc":      "سجّل شركة تؤجّرها سياراتك وتتبّع أي سيارات بحوزتها.",
-    "ent.card.report.title":      "سيارات مؤجَّرة لأفراد",
-    "ent.card.report.desc":       "أنشئ تأجيرات للعملاء واعرض تقرير التأجير الأخير.",
+    "ent.card.report.title":      "سجلّ العملاء",
+    "ent.card.report.desc":       "كلّ عميل أجّرت له، مع سجلّه الكامل. افتح عميلاً لعرض السيارات التي استأجرها.",
+
+    /* إضافة عميل وعرض السجلّ — لوحة العملاء بعرضَين. */
+    "coClients.title":            "إضافة عميل وعرض السجلّ",
+    "coClients.subtitle":         "سجّل عملاءك، ثم افتح تبويب السجلّ لعرض كل ما استأجره كلّ منهم منك.",
+    "coClientsHub.tab.add":       "إضافة عميل",
+    "coClientsHub.tab.history":   "سجلّ العملاء",
+
+    /* Cars hub */
+    "carsHub.title":              "السيارات والتأجير",
+    "carsHub.subtitle":           "أسطولك وكل تأجير خرجت به سياراتك. أضف سيارة أو سجّل من يستأجرها.",
+    "carsHub.addCar":             "إضافة سيارة",
+    "carsHub.carRented":          "سيارة مؤجَّرة",
+    "carsHub.tab.fleet":          "سياراتي",
+    "carsHub.tab.allCars":        "كل السيارات",
+    "carsHub.tab.individual":     "مؤجَّرة لأفراد",
+    "carsHub.tab.company":        "مؤجَّرة لشركات",
+    "carsHub.tab.gps":            "الخريطة المباشرة",
+    "carsHub.tab.report":         "التقرير",
+    "clientsHub.tab.list":        "العملاء",
+    "clientsHub.tab.history":     "سجل العملاء",
+    "clientsHub.tab.cohistory":   "سجل الشركات",
+    "clientHistory.th.companies": "الشركات",
+    "clientHistory.empty":        "لا توجد إيجارات تطابق هذه الفلاتر.",
+    "clientHistory.rentedFrom":   "من",
+    "coHistory.th.renter":        "الشركة",
+    "coHistory.th.from":          "مستأجرة من",
+    "coHistory.empty":            "لا توجد إيجارات شركات تطابق هذه الفلاتر.",
+    "coHistory.companiesOne":     "شركة واحدة",
+    "coHistory.companiesMany":    "{n} شركات",
+    "carsHub.choose.title":       "من يستأجر السيارة؟",
+    "carsHub.choose.hint":        "اختر نوع المستأجر — سنفتح النموذج المناسب ونعرض سجلاته.",
+    "carsHub.choose.ind.title":   "فرد",
+    "carsHub.choose.ind.desc":    "عميل خاص يستأجر إحدى سياراتك.",
+    "carsHub.choose.co.title":    "شركة",
+    "carsHub.choose.co.desc":     "شركة أخرى تستأجر سياراتك.",
+    "carsHub.ind.title":          "سيارات مؤجَّرة لأفراد",
+    "carsHub.ind.hint":           "كل سيارة سلّمتها لعميل خاص. استخدم «تأجير جديد» لتسجيل تأجير آخر.",
+    "carsHub.ind.new":            "تأجير جديد",
+    "carsHub.ind.empty":          "لا توجد تأجيرات لأفراد بعد — استخدم «تأجير جديد» لتسجيل واحد.",
+    "carsHub.co.new":             "سجل جديد",
 
     "theme.light": "فاتح",
     "theme.dark":  "داكن",
@@ -803,19 +946,16 @@ const I18N = {
     "admin.home.subtitle": "أدر الشركات والأسطول والعملاء — اختر قسماً للبدء.",
     "admin.card.dashboard.desc":    "إحصاءات حية وسجل نشاط وتنبيهات الشركات غير النشطة.",
     "admin.card.companies.desc":    "تصفّح كل الشركات وفروعها.",
-    "admin.card.cars.desc":         "عرض كامل الأسطول لجميع الشركات.",
-    "admin.card.gps.desc":          "حدّد موقع أي سيارة على الخريطة الحية.",
-    "admin.card.clients.desc":      "كل العملاء والشركات التي يستأجرون منها.",
-    "admin.card.reservations.desc": "كل الحجوزات عبر جميع الشركات.",
+    "admin.card.cars.title":        "الأسطول والإيجارات",
+    "admin.card.cars.desc":         "كامل الأسطول، ومع مَن كل سيارة، والخريطة المباشرة، وتقرير الإيجارات.",
+    "admin.card.clients.title":     "العملاء والسجلّ",
+    "admin.card.clients.desc":      "سجلّ العملاء، وسجلّ كل عميل عبر جميع الشركات، وسجلّ الشركات المستأجِرة.",
     "admin.card.report.desc":       "تقرير الإيجارات مع بحث وفلاتر كاملة.",
-    "admin.card.special":           "سيارات مؤجَّرة من الشركات",
-    "admin.card.special.desc":      "سيارات تؤجّرها الشركات لشركات أخرى (B2B).",
-    "admin.card.individual":        "سيارات مؤجَّرة للأفراد",
-    "admin.card.individual.desc":   "سيارات مؤجَّرة حاليًا لعملاء أفراد.",
     "admin.card.register.desc":     "إنشاء حساب شركة جديد.",
     "admin.card.support.desc":      "احصل على المساعدة ومعلومات التواصل.",
 
     "special.title":          "سيارات مؤجَّرة لشركات",
+    "special.editTitle":      "تعديل سجل الشركة",
     "special.subtitle":       "سجّل شركة تؤجّرها سياراتك — بياناتها وفروعها وأرقامها، وأي سيارات من سياراتك بحوزتها حالياً.",
     "special.f.company":      "اسم الشركة",
     "special.f.company.ph":   "مثال: شركة الأرز للنقل",
@@ -875,6 +1015,8 @@ const I18N = {
     "adminIndividual.search":   "العميل، السيارة، اللوحة…",
     "adminIndividual.th.client": "العميل",
     "adminSpecial.th.fromCompany": "مؤجَّرة من",
+    "adminSpecial.th.rentedBy":    "مؤجَّرة إلى",
+    "adminSpecial.th.vehicle":     "المركبة",
     "special.saved":          "تم حفظ السجل.",
     "special.deleted":        "تم حذف السجل.",
     "special.confirmDelete":  "حذف هذا السجل؟",
@@ -913,6 +1055,7 @@ const I18N = {
 
     "addCar.title":              "إضافة سيارة",
     "addCar.subtitle":           "كل سيارة تضيفها تابعة لشركتك.",
+    "addCar.editTitle":          "تعديل السيارة",
     "addCar.action":             "حفظ السيارة",
     "addCar.update":             "تحديث السيارة",
     "addCar.updated":            "تم تحديث السيارة.",
@@ -956,8 +1099,6 @@ const I18N = {
     "addClient.parentsRequired":        "لم يتم الحفظ: اسم الأب واسم الأم مطلوبان للعملاء اللبنانيين.",
     "addClient.myClients":              "العملاء الذين أضفتهم",
     "addClient.myClients.hint":         "راجع المعلومات أدناه. يمكنك تعديل أي عميل في أي وقت لتصحيح معلومة — كل تعديل يُسجَّل.",
-    "addClient.editsLeft":              "التعديلات",
-    "addClient.noEditsLeft":            "لا تعديلات متبقية",
     "addClient.noClients":              "لم تُضِف أي عملاء بعد.",
     "addClient.nationality":            "الجنسية",
     "addClient.nationality.placeholder":"— اختر الجنسية —",
@@ -1034,6 +1175,7 @@ const I18N = {
     "action.save":   "حفظ التعديلات",
     "action.saveShort": "حفظ",
     "action.cancel": "إلغاء",
+    "action.clear":  "مسح",
     "action.close":  "إغلاق",
     "action.open":   "عرض",
     "actions":       "إجراءات",
@@ -1089,6 +1231,7 @@ const I18N = {
     "map.hint":    "انقر في أيّ مكان على الخريطة لوضع علامة.",
     "map.coords":  "الإحداثيات المختارة:",
     "map.cancel":  "إلغاء",
+    "map.close":   "إغلاق",
     "map.confirm": "إضافة الإحداثيات",
     "map.no.pick": "انقر على الخريطة أولاً.",
 
@@ -1180,8 +1323,9 @@ const I18N = {
     "upload.empty":       "الملف فارغ.",
 
     "report.title":    "تقرير الإيجار",
+    "report.clientsTitle": "سجلّ العملاء",
     "report.subtitle": "كلّ عميل مع السيارات التي استأجرها والشركة المالكة لكلّ سيارة (مع حالة الـ GPS).",
-    "report.companySubtitle": "إيجارات شركتك خلال الشهر الأخير.",
+    "report.companySubtitle": "عملاؤك والسيارات التي استأجرها كلّ منهم منك. افتح عميلاً لعرض سجلّه الكامل.",
     "report.search":   "البحث باسم الشركة",
     "report.search.placeholder": "اكتب اسم الشركة…",
     "report.search.client": "البحث باسم العميل",
@@ -1217,7 +1361,18 @@ const I18N = {
     "report.contact":  "التواصل والهوية",
     "report.vehicle":  "المركبة",
     "report.details":  "التفاصيل",
-    "nav.carGps":      "تتبّع السيارات",
+    // نافذة تفاصيل صف تقرير المشرف.
+    "report.rowTitle":   "تفاصيل الإيجار",
+    "report.cname":      "اسم الشركة",
+    "report.cliName":    "اسم العميل",
+    "report.openCompany":"تفاصيل الشركة",
+    "report.openClient": "تفاصيل العميل",
+    "report.openVehicle":"تفاصيل المركبة",
+    // تقرير الشركة — أعمدة صف العميل ولوحة سجلّه.
+    "report.rentals":  "الإيجارات",
+    "report.carsCount":"السيارات",
+    "report.latest":   "آخر إيجار",
+    "report.history":  "سجلّ الإيجارات",
     "carGps.title":    "تتبّع السيارات والخريطة",
     "carGps.subtitle": "اختر سيارة مزوّدة بنظام تتبّع — من أي شركة — لتحديد موقعها على الخريطة ومراجعة تفاصيلها الكاملة.",
     "carGps.select":   "اختر سيارة",
@@ -1299,7 +1454,6 @@ const I18N = {
     "filter.gpsAll":    "الكل",
     "filter.gpsYes":    "مع GPS",
     "filter.gpsNo":     "بدون GPS",
-    "reservations.bookedOn": "تاريخ الحجز",
     "filter.vinHint":   "اختر الشركة أولاً…",
 
     "register.f.owner":  "اسم المالك",
@@ -1313,30 +1467,7 @@ const I18N = {
     "resetPw.success":   "تم تغيير كلمة المرور بنجاح. مرحبًا!",
 
     "nav.reservations":         "الحجوزات",
-    "reservations.title":       "الحجوزات",
-    "reservations.subtitle":    "إدارة حجوزات السيارات. فعّل عند استلام العميل، أو ألغِ إذا رفض.",
-    "reservations.adminSubtitle": "جميع الحجوزات من مختلف الشركات.",
-    "reservations.action":      "إنشاء حجز",
-    "reservations.notes":       "ملاحظات",
-    "reservations.status":      "الحالة",
-    "reservations.activate":    "تفعيل",
-    "reservations.cancel":      "إلغاء",
-    "reservations.pending":     "معلّق",
-    "reservations.active":      "مفعّل",
-    "reservations.inactive":    "ملغى",
-    "reservations.today":       "حجوزات اليوم",
-    "reservations.filterToday": "اليوم",
-    "reservations.filterAll":   "الكل",
-    "reservations.filterDate":  "بحث حسب التاريخ",
-    "reservations.filterStatus":"الحالة",
-    "reservations.carUnavailable": "هذه السيارة غير متاحة في التواريخ المختارة.",
-    "reservations.saved":       "تم إنشاء الحجز.",
-    "reservations.activated":   "تم تفعيل الحجز — تمّ إنشاء الإيجار.",
-    "reservations.converted":   "تم تفعيل الحجز — السيارة الآن مؤجّرة للعميل (انتقلت إلى الإرجاعات).",
-    "reservations.cancelled":   "تم إلغاء الحجز.",
-    "reservations.viewCalendar": "تقويم",
-    "reservations.viewList":     "قائمة",
-    "reservations.noRange":      "لا توجد حجوزات هذا الشهر.",
+    "returns.filterToday": "اليوم",
 
     "nav.returns":            "السيارات المستحقة الإرجاع",
     "returns.title":          "السيارات المستحقة الإرجاع",
@@ -1376,9 +1507,9 @@ const I18N = {
     "returnDue.rel.overdueN": "متأخرة {n} يوم",
 
     "special.th.status":      "الحالة",
-    "special.th.edits":       "التعديلات",
+    "special.th.rentedBy":    "مستأجِرة من قِبل",
+    "special.th.vehicle":     "المركبة",
     "special.status.returned":"مُرجَعة",
-    "special.status.out":     "خارج المكتب",
 
     "extend.action":          "تمديد",
     "extend.title":           "تمديد مدة الإيجار",
@@ -1437,6 +1568,7 @@ const I18N = {
     "dash.chip.rentals":      "إيجار",
     "dash.chip.reservations": "حجز",
     "dash.chip.idle":         "خامل",
+    "dash.search":            "بحث",
     "dash.search.placeholder":"ابحث عن شركة، هاتف، موقع...",
     "dash.search.none":       "لا توجد شركات مطابقة.",
     "dash.search.allCompanies":"— كل الشركات —",
