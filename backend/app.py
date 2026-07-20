@@ -1013,15 +1013,15 @@ def cars_summary():
 @app.put("/api/cars/<int:car_id>")
 def update_car(car_id):
     data = request.get_json(force=True)
-    miss = _required(data, "type", "model", "color", "platenumber", "company_id")
+    miss = _required(data, "type", "model", "color", "company_id")
     if miss:
         return jsonify({"error": f"Missing: {miss}"}), 400
 
     # Only the car's owning company (or admin) may edit it. The VIN is never
-    # touched here — it's the car's identity; edits are limited to the plate
-    # number and the descriptive fields.
+    # touched here — it's the car's identity; edits are limited to the
+    # descriptive fields (the plate is a company-pool concern now, not per-car).
     car = query(
-        """SELECT company_id, edit_count, type, model, color, platenumber,
+        """SELECT vin, company_id, edit_count, type, model, color, platenumber,
                   has_gps, branch_id
              FROM cars WHERE id = %s AND is_active = TRUE""",
         (car_id,), one=True)
@@ -1029,6 +1029,20 @@ def update_car(car_id):
         return jsonify({"error": "Not found"}), 404
     if not _can_edit_company(int(car["company_id"])):
         return jsonify({"error": "Not authorized"}), 403
+
+    # The in-app form sends no plate, so the car keeps whatever platenumber it
+    # already had (NULL for in-app cars, a value for API/seed cars). Only the
+    # external API can change it by sending `platenumber`; validate uniqueness.
+    plate_val = car.get("platenumber")
+    if "platenumber" in data:
+        np = (data.get("platenumber") or "").strip() or None
+        if np and np != car.get("platenumber"):
+            clash = query("SELECT 1 FROM cars WHERE platenumber = %s AND id <> %s",
+                          (np, car_id), one=True)
+            if clash:
+                return jsonify({"error": "Validation failed",
+                                "errors": {"plate_number": f"Plate '{np}' is already registered"}}), 409
+        plate_val = np
 
     # Company car edits are unlimited — accountability comes from the audit log
     # (every change is recorded below and visible to the admin), not a hard cap.
@@ -1049,22 +1063,22 @@ def update_car(car_id):
                 WHERE id = %s AND is_active = TRUE
             RETURNING *""",
             (
-                data["type"], data["model"], data["color"], data["platenumber"],
+                data["type"], data["model"], data["color"], plate_val,
                 bool(data.get("has_gps", False)), data["company_id"], branch_id,
                 1 if is_company else 0, car_id,
             ),
             returning=True,
         )
     except Exception as e:
-        # A plate edited to one another car already uses trips UNIQUE(platenumber);
-        # return a clean 409 instead of a 500.
         msg = str(e).lower()
         if "plate" in msg:
             return jsonify({"error": "Validation failed",
-                            "errors": {"plate_number": f"Plate '{data['platenumber']}' is already registered"}}), 409
+                            "errors": {"plate_number": f"Plate '{plate_val}' is already registered"}}), 409
         return jsonify({"error": "Could not update car"}), 409
     if not row:
         return jsonify({"error": "Not found"}), 404
+    if plate_val:
+        _ensure_company_plate(int(row["company_id"]), plate_val)
     # Audit: record exactly which fields changed (plate, branch, colour, …).
     diff = _diff_fields(
         {**car, "branch_id": _branch_label(car.get("branch_id"))},
@@ -1137,7 +1151,7 @@ def soft_delete_car(car_id):
 
 def _validate_car_inputs(vin, type_, model, color, icon, plate, company_id,
                          existing_vin_id=None, enforce_check_digit=True,
-                         check_db_uniqueness=True):
+                         check_db_uniqueness=True, require_plate=True):
     """Run the full validation gauntlet on a single car. Returns
     {ok: bool, errors: dict[field -> message]} so the frontend can show
     each error next to its field.
@@ -1159,8 +1173,8 @@ def _validate_car_inputs(vin, type_, model, color, icon, plate, company_id,
     if not type_:  errs["type"]         = "Type is required"
     if not model:  errs["model"]        = "Model is required"
     if not color:  errs["color"]        = "Color is required"
-    if not icon:   errs["plate_icon"]   = "Plate icon is required"
-    if not plate:  errs["plate_number"] = "Plate number is required"
+    if require_plate and not icon:   errs["plate_icon"]   = "Plate icon is required"
+    if require_plate and not plate:  errs["plate_number"] = "Plate number is required"
 
     # Color must be one of the curated list (case-insensitive)
     if color and "color" not in errs:
@@ -1238,20 +1252,18 @@ def _validate_car_inputs(vin, type_, model, color, icon, plate, company_id,
 @app.post("/api/cars")
 def create_car():
     data = request.get_json(force=True)
-    miss = _required(data, "vin", "type", "model", "platenumber", "company_id")
+    # In-app the car carries no plate (plates are a company pool now). A
+    # platenumber is OPTIONAL and only the external batch API / seeds send one;
+    # when present it's validated as before AND added to the company's pool.
+    miss = _required(data, "vin", "type", "model", "company_id")
     if miss:
         return jsonify({"error": f"Missing: {miss}"}), 400
     if not _can_edit_company(int(data["company_id"])):
         return jsonify({"error": "Not authorized"}), 403
 
-    # Split the platenumber back into icon + number so we can run the same
-    # field-level validation as the CSV path. Format expected: "<icon> <digits>".
     raw_plate = (data.get("platenumber") or "").strip()
-    parts = raw_plate.split(maxsplit=1)
-    if len(parts) == 2:
-        icon, plate = parts[0], parts[1]
-    else:
-        icon, plate = "", raw_plate
+    has_plate = bool(raw_plate)
+    p_icon, p_num = _split_plate(raw_plate) if has_plate else ("", "")
 
     vin = data["vin"].strip().upper()
     result = _validate_car_inputs(
@@ -1259,13 +1271,14 @@ def create_car():
         type_=data["type"].strip(),
         model=data["model"].strip(),
         color=(data.get("color") or "").strip(),
-        icon=icon,
-        plate=plate,
+        icon=p_icon,
+        plate=p_num,
         company_id=int(data["company_id"]),
         # The user may edit the last 6 chars of a catalog VIN to match their
         # actual car, which changes the check digit — accept that, but still
         # require a structurally valid VIN and reject duplicates below.
         enforce_check_digit=False,
+        require_plate=has_plate,
     )
     if not result["ok"]:
         return jsonify({"error": "Validation failed", "errors": result["errors"]}), 400
@@ -1279,7 +1292,7 @@ def create_car():
             (
                 vin, data["type"].strip(), data["model"].strip(),
                 result["color"],
-                result["platenumber"],
+                result["platenumber"],   # None when no plate was supplied
                 bool(data.get("has_gps", False)),
                 int(data["company_id"]),
                 branch_id,
@@ -1291,19 +1304,96 @@ def create_car():
         # catch any duplicate that slipped past the checks above (e.g. a race
         # between two concurrent adds) — return a clean 409, not a 500.
         msg = str(e).lower()
-        if "vin" in msg:
-            return jsonify({"error": "Validation failed",
-                            "errors": {"vin": f"VIN '{vin}' is already registered"}}), 409
         if "platenumber" in msg or "plate" in msg:
             return jsonify({"error": "Validation failed",
                             "errors": {"plate_number": f"Plate '{result['platenumber']}' is already registered"}}), 409
+        if "vin" in msg:
+            return jsonify({"error": "Validation failed",
+                            "errors": {"vin": f"VIN '{vin}' is already registered"}}), 409
         return jsonify({"error": "Could not save car"}), 409
+
+    # A pushed plate also joins the company's pool so it's pickable at rental.
+    if has_plate and result["platenumber"]:
+        _ensure_company_plate(int(data["company_id"]), result["platenumber"])
 
     _log_activity(int(data["company_id"]), "create", "car",
                   " · ".join(x for x in (row.get("model"), row.get("platenumber"),
                                          row.get("color")) if x),
                   ref=(f'car:{row.get("vin")}' if row.get("vin") else None))
     return jsonify(_clean(row)), 201
+
+
+# ----------------------- Company plate pool endpoints -----------------
+# The company manages all of its plate numbers here, independent of cars. A
+# rental / B2B record then picks WHICH pool plate the car is on.
+
+@app.get("/api/plates")
+def list_company_plates():
+    u, err = _require_company_user()
+    if err:
+        return err
+    rows = query(
+        "SELECT id, platenumber, created_at FROM company_plates "
+        "WHERE company_id = %s ORDER BY platenumber",
+        (u["company_id"],),
+    )
+    out = []
+    for r in rows:
+        icon, num = _split_plate(r["platenumber"])
+        out.append({"id": r["id"], "plate": r["platenumber"],
+                    "icon": icon, "number": num, "created_at": r["created_at"]})
+    return jsonify(_clean(out))
+
+
+@app.post("/api/plates")
+def add_company_plate():
+    u, err = _require_company_user()
+    if err:
+        return err
+    data = request.get_json(force=True) or {}
+    combined, icon, num = _normalize_plate_input(data)
+    if not combined:
+        return jsonify({"error": "Plate is required",
+                        "errors": {"plate_number": "Plate is required"}}), 400
+    ok, msg = _validate_lebanese_plate(icon, num)
+    if not ok:
+        field = "plate_icon" if "icon" in msg.lower() else "plate_number"
+        return jsonify({"error": msg, "errors": {field: msg}}), 400
+    existing = query("SELECT company_id FROM company_plates WHERE platenumber = %s",
+                     (combined,), one=True)
+    if existing:
+        m = ("You already added this plate."
+             if int(existing["company_id"]) == int(u["company_id"])
+             else f"Plate '{combined}' is already registered.")
+        return jsonify({"error": m, "errors": {"plate_number": m}}), 409
+    try:
+        row = execute(
+            "INSERT INTO company_plates (company_id, platenumber) "
+            "VALUES (%s,%s) RETURNING id, platenumber",
+            (u["company_id"], combined), returning=True,
+        )
+    except Exception:
+        m = f"Plate '{combined}' is already registered."
+        return jsonify({"error": m, "errors": {"plate_number": m}}), 409
+    _log_activity(u["company_id"], "create", "plate", combined)
+    return jsonify({"id": row["id"], "plate": row["platenumber"],
+                    "icon": icon, "number": num}), 201
+
+
+@app.delete("/api/plates/<int:plate_id>")
+def delete_company_plate(plate_id):
+    u, err = _require_company_user()
+    if err:
+        return err
+    rec = query("SELECT company_id, platenumber FROM company_plates WHERE id = %s",
+                (plate_id,), one=True)
+    if not rec:
+        return jsonify({"error": "Not found"}), 404
+    if int(rec["company_id"]) != int(u["company_id"]):
+        return jsonify({"error": "Not authorized"}), 403
+    execute("DELETE FROM company_plates WHERE id = %s", (plate_id,))
+    _log_activity(u["company_id"], "delete", "plate", rec["platenumber"])
+    return ("", 204)
 
 
 # ----------------------- KNOWN VIN registry --------------------------
@@ -1479,6 +1569,76 @@ def _validate_lebanese_plate(icon: str, plate: str):
     if not _LEB_PLATE_NUMBER_RE.match(plate_s):
         return False, f"Plate number '{plate}' must be 1-7 digits"
     return True, ""
+
+
+# ----------------------- Company plate pool ---------------------------
+# A company owns a POOL of plate numbers (company_plates), independent of its
+# cars. Each plate is combined "<code> <number>" (e.g. "M 123456") and globally
+# UNIQUE. A booking (rental / B2B record) records WHICH pool plate the car is on
+# via its own `plate` column; a car itself no longer carries a plate in-app
+# (cars.platenumber is nullable and only the external API / seeds still set it).
+
+def _split_plate(combined):
+    """'M 123456' -> ('M', '123456'). Tolerates a missing space (icon '')."""
+    raw = (combined or "").strip()
+    parts = raw.split(maxsplit=1)
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return "", raw
+
+
+def _normalize_plate_input(p):
+    """Accept a plate as a dict ({icon|code|plate_icon, number|plate|
+    plate_number}) or a combined string. Returns (combined, icon, number);
+    combined is None when nothing was supplied. Icon is upper-cased."""
+    if isinstance(p, dict):
+        icon = (p.get("icon") or p.get("code") or p.get("plate_icon") or "")
+        num = (p.get("number") or p.get("plate") or p.get("plate_number") or "")
+    else:
+        icon, num = _split_plate(p)
+    icon = str(icon).strip().upper()
+    num = str(num).strip()
+    if not icon and not num:
+        return None, "", ""
+    return f"{icon} {num}".strip(), icon, num
+
+
+def _company_plate_set(company_id):
+    """The set of plate strings in a company's pool (for validating a booking's
+    chosen plate)."""
+    rows = query(
+        "SELECT platenumber FROM company_plates WHERE company_id = %s",
+        (company_id,),
+    )
+    return {r["platenumber"] for r in rows}
+
+
+def _ensure_company_plate(company_id, combined):
+    """Add a plate to a company's pool if it isn't there yet (best-effort — the
+    external car-batch/create path calls this so a pushed platenumber also lands
+    in the pool). Silently ignores a plate already registered anywhere."""
+    if not combined:
+        return
+    try:
+        execute(
+            "INSERT INTO company_plates (company_id, platenumber) "
+            "VALUES (%s, %s) ON CONFLICT (platenumber) DO NOTHING",
+            (company_id, combined),
+        )
+    except Exception:
+        pass
+
+
+def _resolve_booking_plate(company_id, plate):
+    """Resolve the plate a booking is for. A supplied plate must be one in the
+    company's pool; blank/omitted stays NULL (the report falls back to the car's
+    own platenumber via COALESCE). Returns (plate_or_None, error_message)."""
+    plate = (plate or "").strip()
+    if not plate:
+        return None, None
+    if plate not in _company_plate_set(company_id):
+        return None, f"Plate '{plate}' is not in your plates. Add it under Plates first."
+    return plate, None
 
 
 # A VIN never contains the letters I, O, or Q (to avoid 1/0 confusion).
@@ -2418,7 +2578,9 @@ def admin_list_special_rentals():
     if u.get("role") != "admin":
         return jsonify({"error": "Only admins can do this"}), 403
     rows = query(
-        """SELECT s.*, c.model, c.color, c.platenumber, c.has_gps, c.type
+        """SELECT s.*, c.model, c.color,
+                  COALESCE(s.plate, c.platenumber) AS platenumber,
+                  c.has_gps, c.type
              FROM special_company_rentals s
              LEFT JOIN cars c
                ON c.vin = s.car_vin AND c.company_id = s.company_id
@@ -2451,12 +2613,18 @@ def create_special_rental():
     # One record now holds a single car (car_vin) plus its rental period.
     # car_vins is still written (= car_vin) so legacy readers keep working.
     car_vin = _none_if_blank(data.get("car_vin"))
+    # Which of the car's plates this record is on (only when a car is set).
+    plate = None
+    if car_vin:
+        plate, plate_err = _resolve_booking_plate(u["company_id"], data.get("plate"))
+        if plate_err:
+            return jsonify({"error": plate_err, "errors": {"plate": plate_err}}), 400
     row = execute(
         """INSERT INTO special_company_rentals
              (company_id, company_name, owner_name, location, x, y,
               phones, branches, car_vin, car_vins, start_date, end_date, notes,
-              status)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+              status, plate)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
         (
             u["company_id"], data["company_name"],
             _none_if_blank(data.get("owner_name")),
@@ -2468,7 +2636,7 @@ def create_special_rental():
             _none_if_blank(data.get("start_date")),
             _none_if_blank(data.get("end_date")),
             _none_if_blank(data.get("notes")),
-            status,
+            status, plate,
         ),
         returning=True,
     )
@@ -2619,6 +2787,11 @@ def update_special_rental(rental_id):
         return jsonify({"error": status_err, "errors": {"status": status_err}}), 400
 
     car_vin = _none_if_blank(data.get("car_vin"))
+    plate = None
+    if car_vin:
+        plate, plate_err = _resolve_booking_plate(u["company_id"], data.get("plate"))
+        if plate_err:
+            return jsonify({"error": plate_err, "errors": {"plate": plate_err}}), 400
     row = execute(
         """UPDATE special_company_rentals
               SET company_name = %s, owner_name = %s, location = %s,
@@ -2626,6 +2799,7 @@ def update_special_rental(rental_id):
                   car_vin = %s, car_vins = %s,
                   start_date = %s, end_date = %s, notes = %s,
                   status = COALESCE(%s, status),
+                  plate = %s,
                   edit_count = edit_count + 1
             WHERE id = %s AND company_id = %s
         RETURNING *""",
@@ -2640,7 +2814,7 @@ def update_special_rental(rental_id):
             _none_if_blank(data.get("start_date")),
             _none_if_blank(data.get("end_date")),
             _none_if_blank(data.get("notes")),
-            status,
+            status, plate,
             rental_id, u["company_id"],
         ),
         returning=True,
@@ -2822,7 +2996,8 @@ def company_alerts():
     # owning company's car so model/plate travel with the row.
     b2b = query(
         """SELECT s.id, 'company' AS kind, s.company_name AS who,
-                  c.model AS car_model, c.platenumber AS car_plate,
+                  c.model AS car_model,
+                  COALESCE(s.plate, c.platenumber) AS car_plate,
                   s.car_vin, s.end_date,
                   (s.end_date < %s) AS overdue
              FROM special_company_rentals s
@@ -2843,7 +3018,8 @@ def company_alerts():
     # comes from the car.
     res_today = query(
         """SELECT r.id, c.name AS client_name, c.phonenumber AS client_phone,
-                  ca.model AS car_model, ca.platenumber AS car_plate,
+                  ca.model AS car_model,
+                  COALESCE(r.plate, ca.platenumber) AS car_plate,
                   r.start_date, r.end_date,
                   (r.start_date < %s) AS late
              FROM rentals r
@@ -3498,6 +3674,12 @@ def create_rental():
     if status_err:
         return jsonify({"error": status_err, "errors": {"status": status_err}}), 400
 
+    # Which pool plate this booking is on. Omitted → NULL (report falls back to
+    # the car's own platenumber). A supplied plate must be in the company's pool.
+    plate, plate_err = _resolve_booking_plate(int(car["company_id"]), data.get("plate"))
+    if plate_err:
+        return jsonify({"error": plate_err, "errors": {"plate": plate_err}}), 400
+
     from db import get_conn
     from psycopg2.extras import RealDictCursor
     with get_conn() as conn:
@@ -3511,10 +3693,10 @@ def create_rental():
                     return jsonify({"error": overlap}), 409
             cur.execute(
                 """INSERT INTO rentals
-                     (client_id, car_vin, start_date, end_date, status)
-                   VALUES (%s,%s,%s,%s,%s) RETURNING *""",
+                     (client_id, car_vin, start_date, end_date, status, plate)
+                   VALUES (%s,%s,%s,%s,%s,%s) RETURNING *""",
                 (data["client_id"], data["car_vin"],
-                 data["start_date"], data["end_date"], status),
+                 data["start_date"], data["end_date"], status, plate),
             )
             row = cur.fetchone()
     _log_activity(int(car["company_id"]), "create", "rental",
@@ -4245,7 +4427,8 @@ def reservations_report():
         """SELECT r.id, r.car_vin, r.client_id, r.start_date, r.end_date,
                   r.status, r.notes, r.created_at,
                   c.name  AS client_name, c.phonenumber AS client_phone,
-                  ca.model AS car_model, ca.platenumber AS car_plate,
+                  ca.model AS car_model,
+                  COALESCE(r.plate, ca.platenumber) AS car_plate,
                   ca.branch_id AS car_branch_id,
                   COALESCE(b.branchname, 'Main') AS car_branch_name
              FROM rentals r
@@ -4308,7 +4491,7 @@ def company_rentals_report():
                   s.car_vin, s.returned_at, s.return_branch_id,
                   rb.branchname AS return_branch_name,
                   c.model AS car_model, c.type AS car_type, c.color AS car_color,
-                  c.platenumber AS car_plate, c.has_gps AS car_has_gps,
+                  COALESCE(s.plate, c.platenumber) AS car_plate, c.has_gps AS car_has_gps,
                   c.branch_id AS car_branch_id,
                   COALESCE(cb.branchname, 'Main') AS car_branch_name
              FROM special_company_rentals s
