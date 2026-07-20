@@ -4814,6 +4814,17 @@ body.role-admin #tbl-admin-reservations tr.rv-row-today td{
     letter-spacing: .05em; color: var(--ink-soft); word-break: break-word;
   }
   body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody td[data-label="#"]{ display: none; }
+  body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody td:empty{ display: none; }
+  /* Branch-cell tree rail → card label (see the ≤720 block for the reasoning). */
+  #tbl-companies .company-branch-row .branch-cell{ padding-inline-start: 0; }
+  #tbl-companies .company-branch-row .branch-cell::before{
+    content: attr(data-label); position: static; inset: auto;
+    width: auto; height: auto; background: none;
+    flex: 0 0 42%; text-align: start;
+    font-size: .66rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--ink-soft);
+  }
+  #tbl-companies .company-branch-row .branch-cell::after{ display: none; }
   body:is(.role-admin, .role-company) .table-wrap:not(.bento-table) tbody td:not([data-label]){
     justify-content: flex-end;
   }
@@ -5275,6 +5286,22 @@ body.nav-open .mobile-nav-backdrop{ opacity: 1; pointer-events: auto; }
   }
   /* Drop the row-number column in card view — it's just visual noise here. */
   .table-wrap tbody td[data-label="#"]{ display: none; }
+  /* Placeholder alignment cells (e.g. the empty <td>s a company branch row
+     keeps for the columns it doesn't fill) would otherwise render as blank
+     labelled lines. In card view a genuinely empty cell carries no value. */
+  .table-wrap tbody td:empty{ display: none; }
+  /* Company branch rows: the branch cell's ::before draws the desktop tree
+     rail, which would win over the card-mode data-label ::before. Drop the
+     rail + indent here and let the cell carry its column label like the rest. */
+  #tbl-companies .company-branch-row .branch-cell{ padding-inline-start: 0; }
+  #tbl-companies .company-branch-row .branch-cell::before{
+    content: attr(data-label); position: static; inset: auto;
+    width: auto; height: auto; background: none;
+    flex: 0 0 40%; text-align: start;
+    font-size: .68rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--ink-soft);
+  }
+  #tbl-companies .company-branch-row .branch-cell::after{ display: none; }
   /* Cells with no label just right-align their value (no blank label gap). */
   .table-wrap tbody td:not([data-label]){ justify-content: flex-end; }
   .table-wrap tbody td:not([data-label])::before{ display: none; }

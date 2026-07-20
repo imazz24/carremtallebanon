@@ -515,15 +515,15 @@ function renderCompanies(){
       : "";
     html.push(`
       <tr class="company-main-row${hasBranches ? " company-has-branches" : ""}${expanded ? " is-expanded" : ""}">
-        <td>${(info.page - 1) * info.size + i + 1}</td>
-        <td>${logo}</td>
-        <td><span class="company-name-cell"><span class="company-name-text">${escape(c.companyname)}</span>${branchToggle}</span></td>
-        <td>${owner}</td>
-        <td class="company-loc-td">${mainHeadBadge
+        <td data-label="#">${(info.page - 1) * info.size + i + 1}</td>
+        <td data-label="${escape(t("companies.f.logo"))}">${logo}</td>
+        <td data-label="${escape(t("companies.f.name"))}"><span class="company-name-cell"><span class="company-name-text">${escape(c.companyname)}</span>${branchToggle}</span></td>
+        <td data-label="${escape(t("register.f.owner"))}">${owner}</td>
+        <td class="company-loc-td" data-label="${escape(t("companies.f.loc"))}">${mainHeadBadge
           ? `<span class="company-loc-stack">${locCell(c.location, c.x, c.y)}${mainHeadBadge}</span>`
           : locCell(c.location, c.x, c.y)}</td>
-        <td>${escape(c.companyid)}</td>
-        <td>${phone}</td>
+        <td data-label="${escape(t("companies.f.cid"))}">${escape(c.companyid)}</td>
+        <td data-label="${escape(t("companies.f.phone"))}">${phone}</td>
       </tr>`);
 
     branches.forEach((b, bi) => {
@@ -532,7 +532,7 @@ function renderCompanies(){
         <tr class="company-branch-row${last ? " company-branch-last" : ""}" data-branch-of="${c.id}"${expanded ? "" : " hidden"}>
           <td></td>
           <td></td>
-          <td class="branch-cell">
+          <td class="branch-cell" data-label="${escape(t("companies.f.name"))}">
             <span class="branch-tag${b.is_head_office ? " branch-tag-head" : ""}">
               <svg class="branch-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4v10a3 3 0 0 0 3 3h6"/><circle cx="6" cy="4" r="1.6"/><circle cx="18" cy="17" r="1.6"/></svg>
               <span class="branch-name">${escape(t("companies.branch"))} ${bi + 1}</span>
@@ -540,9 +540,9 @@ function renderCompanies(){
             </span>
           </td>
           <td></td>
-          <td class="company-loc-td">${locCell(b.location, b.x, b.y)}</td>
+          <td class="company-loc-td" data-label="${escape(t("companies.f.loc"))}">${locCell(b.location, b.x, b.y)}</td>
           <td></td>
-          <td>${formatPhonesCell(b.phonenumber)}</td>
+          <td data-label="${escape(t("companies.f.phone"))}">${formatPhonesCell(b.phonenumber)}</td>
         </tr>`);
     });
   });
@@ -1261,15 +1261,15 @@ function renderClients(){
     : `<span class="client-photo-thumb client-photo-thumb-empty" style="background:${_avatarColor(name)}">${escape(_initials(name))}</span>`;
   tbl.tBodies[0].innerHTML = info.rows.map((c,i) => `
     <tr>
-      <td>${(info.page - 1) * info.size + i + 1}</td>
-      <td data-col="photo">${photo(c.photo, [c.firstname, c.lastname].filter(Boolean).join(" ") || c.name)}</td>
-      <td>${cell(c.personid)}</td>
-      <td>${cell(c.firstname)}</td>
-      <td>${cell(c.lastname)}</td>
-      <td>${cell(c.nationality)}</td>
-      <td>${cell(c.phonenumber)}</td>
-      <td>${cell(c.licenseid)}</td>
-      <td>${cell(c.enddatelicense)}</td>
+      <td data-label="#">${(info.page - 1) * info.size + i + 1}</td>
+      <td data-col="photo" data-label="${escape(t("addClient.photo"))}">${photo(c.photo, [c.firstname, c.lastname].filter(Boolean).join(" ") || c.name)}</td>
+      <td data-label="${escape(t("clients.f.pid"))}">${cell(c.personid)}</td>
+      <td data-label="${escape(t("clients.f.firstname"))}">${cell(c.firstname)}</td>
+      <td data-label="${escape(t("clients.f.lastname"))}">${cell(c.lastname)}</td>
+      <td data-label="${escape(t("addClient.nationality"))}">${cell(c.nationality)}</td>
+      <td data-label="${escape(t("clients.f.phone"))}">${cell(c.phonenumber)}</td>
+      <td data-label="${escape(t("clients.f.lic"))}">${cell(c.licenseid)}</td>
+      <td data-label="${escape(t("clients.f.licend"))}">${cell(c.enddatelicense)}</td>
       <td data-col="view">
         <button type="button" class="row-btn client-view" data-id="${c.id}"
                 title="${escape(t("action.view"))}" aria-label="${escape(t("action.view"))}">${ROW_MORE_ICO}</button>
@@ -2320,13 +2320,13 @@ const Returns = (() => {
       const idx = (info.page - 1) * info.size + i;
       return `
       <tr data-row="${idx}" class="returns-row">
-        <td>${idx + 1}</td>
-        <td><strong>${escape(r.client_name)}</strong></td>
-        <td>${escape(r.client_phone)}</td>
-        <td>${escape(r.car_model)} <span style="color:#94a3b8">(${escape(r.car_type)})</span></td>
-        <td>${escape(r.car_plate)}</td>
-        <td>${escape(r.end_date)}</td>
-        <td>${_statusHtml(r.end_date, today)}</td>
+        <td data-label="#">${idx + 1}</td>
+        <td data-label="${escape(t("report.client"))}"><strong>${escape(r.client_name)}</strong></td>
+        <td data-label="${escape(t("report.phone"))}">${escape(r.client_phone)}</td>
+        <td data-label="${escape(t("report.car"))}">${escape(r.car_model)} <span style="color:#94a3b8">(${escape(r.car_type)})</span></td>
+        <td data-label="${escape(t("report.plate"))}">${escape(r.car_plate)}</td>
+        <td data-label="${escape(t("returns.returnDate"))}">${escape(r.end_date)}</td>
+        <td data-label="${escape(t("returns.status"))}">${_statusHtml(r.end_date, today)}</td>
         <td>
           <div class="row-actions">
             <button type="button" class="row-btn pdf" data-detail="${idx}">${escape(t("action.open"))}</button>
@@ -4163,13 +4163,13 @@ function setupAddCarForm(){
         : `<span class="badge no">${escape(t("no"))}</span>`;
       const action = `<button type="button" class="row-btn my-car-edit" data-id="${c.id}">✎ ${escape(t("action.edit"))}</button>`;
       return `<tr>
-        <td class="ltr">${cell(c.vin)}</td>
-        <td>${cell(c.type)}</td>
-        <td>${cell(c.model)}</td>
-        <td>${cell(c.color)}</td>
-        <td>${branchCell(c.branchname)}</td>
-        <td class="ltr">${cell(c.platenumber)}</td>
-        <td>${gps}</td>
+        <td class="ltr" data-label="${escape(t("cars.f.vin"))}">${cell(c.vin)}</td>
+        <td data-label="${escape(t("cars.f.type"))}">${cell(c.type)}</td>
+        <td data-label="${escape(t("cars.f.model"))}">${cell(c.model)}</td>
+        <td data-label="${escape(t("cars.f.color"))}">${cell(c.color)}</td>
+        <td data-label="${escape(t("cars.f.branch"))}">${branchCell(c.branchname)}</td>
+        <td class="ltr" data-label="${escape(t("cars.f.plate"))}">${cell(c.platenumber)}</td>
+        <td data-label="${escape(t("cars.f.gps"))}">${gps}</td>
         <td class="my-car-action">${action}</td>
       </tr>`;
     }).join("");
@@ -4800,11 +4800,11 @@ function setupAddClientForm(){
     tb.innerHTML = _myClients.map(c => {
       const action = `<button type="button" class="row-btn my-client-edit" data-id="${c.id}">✎ ${escape(t("action.edit"))}</button>`;
       return `<tr>
-        <td>${cell(c.name)}</td>
-        <td class="ltr">${cell(c.personid)}</td>
-        <td>${cell(c.nationality)}</td>
-        <td class="ltr">${cell(c.phonenumber)}</td>
-        <td class="ltr">${cell(c.licenseid)}</td>
+        <td data-label="${escape(t("clients.f.name"))}">${cell(c.name)}</td>
+        <td class="ltr" data-label="${escape(t("clients.f.pid"))}">${cell(c.personid)}</td>
+        <td data-label="${escape(t("addClient.nationality"))}">${cell(c.nationality)}</td>
+        <td class="ltr" data-label="${escape(t("clients.f.phone"))}">${cell(c.phonenumber)}</td>
+        <td class="ltr" data-label="${escape(t("clients.f.lic"))}">${cell(c.licenseid)}</td>
         <td class="my-client-action">${action}</td>
       </tr>`;
     }).join("");
