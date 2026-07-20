@@ -1496,6 +1496,28 @@ body:is(.role-company, .role-admin):not(.theme-light) .ent-card-support{     --c
 html[dir="rtl"] .special-cars-held{ padding-left: 0; padding-right: 1.1rem; }
 .muted-cell{ color: var(--muted); font-size: .85rem; }
 
+/* Multi-plate entry (Add-Car modal) + the add-plate sub-modal. All token-
+   driven, so both themes are correct without a :not(.theme-light) gate — the
+   tokens themselves flip. */
+.plate-chip-list{ display: flex; flex-wrap: wrap; gap: .45rem; margin-bottom: .5rem; }
+.plate-chip-empty{ color: var(--muted); font-size: .88rem; }
+.plate-chip{
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .3rem .32rem .3rem .7rem;
+  border: 1.5px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--ink);
+  font-size: .9rem; font-weight: 600;
+}
+.plate-chip-x{
+  width: 22px; height: 22px; flex: 0 0 auto;
+  display: inline-grid; place-items: center;
+  border: none; border-radius: 50%; cursor: pointer;
+  background: transparent; color: var(--muted);
+  font-size: 1.05rem; line-height: 1; transition: color .12s, background .12s;
+}
+.plate-chip-x:hover{ color: var(--danger); background: var(--primary-lt); }
+.plate-modal-card{ max-width: 460px; }
+
 /* Header light/dark toggle — shown for both signed-in roles, hidden on the
    public/login page. */
 .theme-toggle{ display: none; }

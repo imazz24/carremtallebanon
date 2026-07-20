@@ -26,6 +26,10 @@ const API = (() => {
     listClients:   () => fetch(url("/api/clients"), { headers: authHeaders() }).then(json),
     addClient:     (b) => fetch(url("/api/clients"),   { method:"POST", headers:{ "Content-Type":"application/json"}, body: JSON.stringify(b)}).then(json),
 
+    listPlates:    () => fetch(url("/api/plates"), { headers: authHeaders() }).then(json),
+    addPlate:      (b) => fetch(url("/api/plates"), { method:"POST", headers:{ "Content-Type":"application/json", ...authHeaders() }, body: JSON.stringify(b)}).then(json),
+    delPlate:      (id) => fetch(url(`/api/plates/${id}`), { method:"DELETE", headers: authHeaders() }),
+
     listBranches:  () => fetch(url("/api/branches")).then(json),
     setHeadOffice: (id) => fetch(url(`/api/branches/${id}/head-office`), { method:"PUT", headers: authHeaders() }).then(json),
 
@@ -3606,11 +3610,11 @@ function setupAddCarForm(){
   let editingCarId = null;
   let _myCars = [];
 
-  // Fill the four static dropdowns up-front.
+  // Fill the static dropdowns up-front. Plates are a company pool now (managed
+  // in the Plates tab), so the car form no longer has any plate field.
   fillStaticSelect($("#add-car-type"),  CAR_TYPES);
   fillModelSelect($("#add-car-model"));
   fillStaticSelect($("#add-car-color"), CAR_COLORS);
-  fillStaticSelect($("#add-car-icon"),  PLATE_ICONS);
 
   // The "based at" branch dropdown = this company's own branches, plus a
   // leading "Main (head office)" option (value "") for cars not tied to a
@@ -3774,19 +3778,9 @@ function setupAddCarForm(){
     const typeSel  = $("#add-car-type");
     const modelSel = $("#add-car-model");
     const colorSel = $("#add-car-color");
-    const iconSel  = $("#add-car-icon");
     if (typeSel)  { typeSel.value  = c.type  || ""; if (typeSel._ss)  typeSel._ss.sync(); }
     if (modelSel) { modelSel.value = c.model || ""; if (modelSel._ss) modelSel._ss.sync(); }
     if (colorSel) { colorSel.value = c.color || ""; if (colorSel._ss) colorSel._ss.sync(); }
-
-    // Stored plate format: "<icon> <number>". Split on the first space.
-    const plate = (c.platenumber || "").toString();
-    const sp = plate.indexOf(" ");
-    const icon  = sp >= 0 ? plate.slice(0, sp) : "";
-    const num   = sp >= 0 ? plate.slice(sp + 1) : plate;
-    if (iconSel){ iconSel.value = icon; if (iconSel._ss) iconSel._ss.sync(); }
-    const plateInput = form.querySelector('input[name="plate_number"]');
-    if (plateInput) plateInput.value = num;
 
     const gpsCb = $("#add-car-gps");
     if (gpsCb) gpsCb.checked = !!c.has_gps;
@@ -3927,7 +3921,7 @@ function setupAddCarForm(){
     setTimeout(() => {
       [
         $("#add-car-type"), $("#add-car-model"),
-        $("#add-car-color"), $("#add-car-icon"),
+        $("#add-car-color"),
       ].forEach(sel => {
         if (!sel) return;
         sel.value = "";
@@ -3998,9 +3992,10 @@ function setupAddCarForm(){
 
     // The VIN is only validated when creating — in edit mode it's locked and
     // never sent (the backend ignores it), so skip the VIN checks entirely.
+    // The car carries no plate: plates are a company pool (the Plates tab).
     const requiredFields = editing
-      ? ["type", "model", "color", "plate_icon", "plate_number"]
-      : ["vin", "type", "model", "color", "plate_icon", "plate_number"];
+      ? ["type", "model", "color"]
+      : ["vin", "type", "model", "color"];
     if (!validateRequiredFields(form, requiredFields)){
       toast(t("toast.fillAll"), "error");
       return;
@@ -4017,17 +4012,14 @@ function setupAddCarForm(){
     const type     = (fd.get("type")         || "").toString().trim();
     const model    = (fd.get("model")        || "").toString().trim();
     const color    = (fd.get("color")        || "").toString().trim();
-    const icon     = (fd.get("plate_icon")   || "").toString().trim();
-    const plateRaw = (fd.get("plate_number") || "").toString().trim();
     const has_gps  = fd.get("has_gps") === "on";
-    const platenumber = `${icon} ${plateRaw}`.trim();
     // "" (Main) → null; the backend re-validates it belongs to this company.
     const branch_id = (fd.get("branch_id") || "").toString().trim() || null;
 
     try {
       const body = editing
-        ? { type, model, color, platenumber, company_id: u.company_id, has_gps, branch_id }
-        : { vin, type, model, color, platenumber, company_id: u.company_id, has_gps, branch_id };
+        ? { type, model, color, company_id: u.company_id, has_gps, branch_id }
+        : { vin, type, model, color, company_id: u.company_id, has_gps, branch_id };
       const r = await fetch(
         editing ? API.url(`/api/cars/${editingCarId}`) : API.url("/api/cars"),
         {
@@ -4051,9 +4043,10 @@ function setupAddCarForm(){
         return;
       }
       // Success: clear everything for the next car, keep no field state behind.
+      // form.reset() also wipes the plate chips (its reset handler).
       exitCarEditMode();
       form.reset();
-      [$("#add-car-type"), $("#add-car-model"), $("#add-car-color"), $("#add-car-icon")].forEach(sel => {
+      [$("#add-car-type"), $("#add-car-model"), $("#add-car-color")].forEach(sel => {
         if (!sel) return;
         sel.value = "";
         if (sel._ss) sel._ss.sync();
@@ -4136,7 +4129,7 @@ function setupAddCarForm(){
     exitCarEditMode();
     form.reset();
     clearAllFieldErrors(form);
-    [$("#add-car-type"), $("#add-car-model"), $("#add-car-color"), $("#add-car-icon"), $("#add-car-branch")].forEach(sel => {
+    [$("#add-car-type"), $("#add-car-model"), $("#add-car-color"), $("#add-car-branch")].forEach(sel => {
       if (!sel) return;
       sel.value = "";
       if (sel._ss) sel._ss.sync();
@@ -4846,6 +4839,19 @@ function hideAddClientStatus(){
   el.textContent = "";
 }
 
+/* Fill a rental "which plate" <select> from the company's plate pool. A leading
+   placeholder means "not chosen"; `selected` re-selects a value on edit. */
+function fillPlateSelect(sel, plates, selected){
+  if (!sel) return;
+  const list = Array.isArray(plates) ? plates : [];
+  const ph = `<option value="">${escape(t("rent.plate.ph"))}</option>`;
+  sel.innerHTML = ph + list.map(p =>
+    `<option value="${escape(p.plate)}">${escape(p.plate)}</option>`
+  ).join("");
+  sel.value = (selected && list.some(p => p.plate === selected)) ? selected : "";
+  if (sel._ss) sel._ss.sync();
+}
+
 /* ============== CREATE RENTAL (company-user, on the Report tab) ====== */
 async function refreshRentalPickers(){
   const u = AUTH.user();
@@ -4858,6 +4864,10 @@ async function refreshRentalPickers(){
     cars = await fetch(API.url(`/api/cars?company_id=${u.company_id}`), { headers: authHeaders() }).then(r => r.json());
   } catch (e){ cars = []; }
 
+  // The company's plate pool — the rental picks which plate the car is on.
+  let plates = [];
+  try { plates = await API.listPlates(); } catch (e){ plates = []; }
+
   // The backend filters clients by company for company users, so this
   // automatically returns only the user's own clients.
   let clients = [];
@@ -4869,12 +4879,13 @@ async function refreshRentalPickers(){
   if (carSel){
     const placeholder = carSel.querySelector('option[disabled][hidden]')?.outerHTML || "";
     const opts = cars.map(c =>
-      `<option value="${escape(c.vin)}">${escape(`${c.model} — ${c.platenumber} (${c.vin})`)}</option>`
+      `<option value="${escape(c.vin)}">${escape(`${c.model}${c.platenumber ? " — " + c.platenumber : ""} (${c.vin})`)}</option>`
     ).join("");
     carSel.innerHTML = placeholder + opts;
     carSel.value = "";
     if (carSel._ss) carSel._ss.sync();
   }
+  fillPlateSelect($("#rental-plate-select"), plates);
   const clientSel = $("#rental-client-select");
   if (clientSel){
     const placeholder = clientSel.querySelector('option[disabled][hidden]')?.outerHTML || "";
@@ -4900,6 +4911,7 @@ function setupCreateRentalForm(){
         el.value = "";
         if (el._ss) el._ss.sync();
       });
+      const ps = $("#rental-plate-select"); if (ps){ ps.value = ""; if (ps._ss) ps._ss.sync(); }
       clearAllFieldErrors(form);
       hideCreateRentalStatus();
     }, 0);
@@ -4923,6 +4935,8 @@ function setupCreateRentalForm(){
       start_date: (fd.get("start_date") || "").toString().trim(),
       end_date:   (fd.get("end_date")   || "").toString().trim(),
       status:     (fd.get("status")     || "active").toString(),
+      // Blank → the backend uses the car's primary plate.
+      plate:      (fd.get("plate")      || "").toString().trim(),
     };
 
     // Light client-side checks before the round-trip
@@ -8363,8 +8377,107 @@ function statusTag(status, extra = ""){
    the table underneath to match. The B2B table/filters and the create-rental
    form used to live in their own panels; only their host moved, so the
    SpecialRentals / create-rental wiring still finds them by id. */
+/* ============== COMPANY PLATES POOL (Fleet & Rentals ▸ Plates tab) ====
+   The company's own plate numbers, managed independently of its cars. A
+   rental / B2B record picks WHICH of these plates the car is on. */
+const CompanyPlates = (() => {
+  let _plates = [];   // the company's plate pool: {id, plate, icon, number}
+
+  function getPlates(){ return _plates; }
+  function count(){ return _plates.length; }
+
+  const setStatus = (msg, kind) => {
+    const el = $("#add-plate-status");
+    if (!el) return;
+    if (!msg){ el.hidden = true; el.textContent = ""; return; }
+    el.hidden = false;
+    el.className = "company-info-status" + (kind ? " " + kind : "");
+    el.textContent = msg;
+  };
+
+  function render(){
+    const cnt = $("#hub-count-plates");
+    if (cnt) cnt.textContent = _plates.length;
+    const tb = $("#company-plates-rows");
+    if (!tb) return;
+    if (!_plates.length){
+      tb.innerHTML = `<tr class="empty-row"><td colspan="3">${escape(t("plates.empty"))}</td></tr>`;
+      return;
+    }
+    const lbl = (k) => escape(t(k));
+    tb.innerHTML = _plates.map(p => `<tr>
+        <td data-label="${lbl("plates.th.code")}"><span class="ltr">${escape(p.icon || "")}</span></td>
+        <td data-label="${lbl("plates.th.number")}"><span class="ltr">${escape(p.number || "")}</span></td>
+        <td data-col="view"><div class="row-actions">
+          <button type="button" class="row-btn plate-del" data-id="${p.id}"
+                  title="${escape(t("action.remove"))}" aria-label="${escape(t("action.remove"))}">✕</button>
+        </div></td>
+      </tr>`).join("");
+  }
+
+  async function refresh(){
+    const u = (typeof AUTH !== "undefined") ? AUTH.user() : null;
+    if (!u || u.role !== "company"){ _plates = []; render(); return; }
+    try { _plates = await API.listPlates(); } catch (e){ _plates = []; }
+    if (!Array.isArray(_plates)) _plates = [];
+    render();
+  }
+
+  async function addFromForm(e){
+    e.preventDefault();
+    const form = e.target;
+    clearAllFieldErrors(form);
+    setStatus("");
+    const icon = ($("#plate-code")?.value || "").trim().toUpperCase();
+    const num  = ($("#plate-number")?.value || "").trim();
+    let bad = false;
+    if (!icon){ setFieldError(form, "plate_icon", t("field.required")); bad = true; }
+    if (!num){ setFieldError(form, "plate_number", t("field.required")); bad = true; }
+    else if (!/^[0-9]{1,7}$/.test(num)){ setFieldError(form, "plate_number", t("plateModal.numFormat")); bad = true; }
+    if (bad) return;
+    try {
+      await API.addPlate({ icon, number: num });
+      form.reset();
+      const cs = $("#plate-code"); if (cs){ cs.value = ""; if (cs._ss) cs._ss.sync(); }
+      toast(t("plates.added"), "success");
+      await refresh();
+      refreshRentalPickers?.();   // the rental plate dropdowns read the pool
+    } catch (err){
+      const msg = err.message || t("toast.error");
+      setFieldError(form, "plate_number", msg);
+      setStatus(msg, "error");
+    }
+  }
+
+  async function del(id){
+    if (!id) return;
+    try {
+      const r = await API.delPlate(id);
+      if (r && !r.ok && r.status !== 204){
+        const d = await r.json().catch(() => ({}));
+        toast(d.error || t("toast.error"), "error"); return;
+      }
+      toast(t("plates.removed"), "success");
+      await refresh();
+      refreshRentalPickers?.();
+    } catch (err){ toast(err.message || t("toast.error"), "error"); }
+  }
+
+  function setup(){
+    if (!$("#company-cars")) return;
+    fillStaticSelect($("#plate-code"), PLATE_ICONS);
+    $("#form-add-plate")?.addEventListener("submit", addFromForm);
+    $("#company-plates-rows")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".plate-del");
+      if (btn) del(btn.dataset.id);
+    });
+  }
+
+  return { setup, refresh, render, count, getPlates };
+})();
+
 const CarsHub = (() => {
-  const VIEWS = ["fleet", "individual", "company"];
+  const VIEWS = ["fleet", "individual", "company", "plates"];
   let _view = "fleet";
 
   /* ---- The individuals table: this company's client rentals ---- */
@@ -8488,6 +8601,7 @@ const CarsHub = (() => {
     const fleetRows = $$("#my-cars-rows tr").filter(tr => !tr.querySelector(".empty-cell"));
     setCount("#hub-count-fleet", fleetRows.length);
     setCount("#hub-count-company", SpecialRentals.count());
+    setCount("#hub-count-plates", CompanyPlates.count());
   }
 
   /* ---- View switching ---- */
@@ -8506,6 +8620,8 @@ const CarsHub = (() => {
     if (view === "individual") renderIndividuals();
     // The B2B list is only fetched on demand — recount once it lands.
     if (view === "company") Promise.resolve(SpecialRentals.refresh()).then(syncCounts);
+    // The plates pool is loaded on demand too.
+    if (view === "plates") Promise.resolve(CompanyPlates.refresh()).then(syncCounts);
   }
 
   // Called when the panel opens: pull whatever each table needs, then repaint
@@ -8516,6 +8632,7 @@ const CarsHub = (() => {
     await Promise.all([
       (async () => { try { await refreshReport(); } catch (e){} })(),
       (async () => { try { await SpecialRentals.refresh(); } catch (e){} })(),
+      (async () => { try { await CompanyPlates.refresh(); } catch (e){} })(),
     ]);
     renderIndividuals();
     show(_view);
@@ -8553,6 +8670,9 @@ const CarsHub = (() => {
     $$("#company-cars .hub-tab").forEach(b => {
       b.addEventListener("click", () => show(b.dataset.carview));
     });
+
+    // The Plates tab's own form + table wiring.
+    CompanyPlates.setup();
 
     // Individuals toolbar — re-renders the loaded rows, no re-fetch. The two
     // pickers only ever fire `change` (SearchSelect dispatches it on choose);
@@ -8713,6 +8833,15 @@ const SpecialRentals = (() => {
     const sel = $("#special-car-select");
     return sel && sel.value ? sel.value : "";
   }
+
+  /* ---- Plate: which of the COMPANY'S pool plates this record is on ---- */
+  function populatePlateSelect(selectedPlate = ""){
+    fillPlateSelect($("#special-plate-select"), CompanyPlates.getPlates(), selectedPlate);
+  }
+  function getPlate(){
+    const sel = $("#special-plate-select");
+    return sel && sel.value ? sel.value : "";
+  }
   function updateNoCarsHint(){
     const hint = $("#special-no-cars");
     const sel = $("#special-car-select");
@@ -8836,9 +8965,12 @@ const SpecialRentals = (() => {
           ${sub ? `<span class="sr-sub">${sub}</span>` : ""}
         </div>`;
 
-      // WHAT they took: model leads, plate + colour identify which one.
+      // WHAT they took: model leads, plate + colour identify which one. The
+      // record's own plate (the one this booking is on) wins over the car's
+      // primary; falls back to it for older rows.
+      const shownPlate = r.plate || c.platenumber;
       const vSub = [
-        c.platenumber ? `<span class="sr-plate ltr">${escape(c.platenumber)}</span>` : "",
+        shownPlate ? `<span class="sr-plate ltr">${escape(shownPlate)}</span>` : "",
         c.color ? formatColorCell(c.color) : "",
       ].filter(Boolean).join(`<span class="sr-dot">·</span>`);
       const vehicleCell = c.model || c.platenumber
@@ -8960,6 +9092,7 @@ const SpecialRentals = (() => {
     setBranches("");
     setStatusField("active");
     populateCarSelect("");
+    populatePlateSelect("");
     $("#special-x").value = "";
     $("#special-y").value = "";
     const ms = $("#special-map-loc-status");
@@ -8982,6 +9115,7 @@ const SpecialRentals = (() => {
     setBranches(rec.branches || "");
     setStatusField(rec.status);
     populateCarSelect(recordVin(rec));
+    populatePlateSelect(rec.plate || "");
     $("#special-x").value = rec.x != null ? rec.x : "";
     $("#special-y").value = rec.y != null ? rec.y : "";
     const ms = $("#special-map-loc-status");
@@ -9024,6 +9158,7 @@ const SpecialRentals = (() => {
     try { _records = await API.listSpecialRentals(); } catch (e){ _records = []; }
     // Refresh the car dropdown with the current car list, keeping the pick.
     populateCarSelect(getCarVin());
+    populatePlateSelect(getPlate());
     populateFilters();
     renderRecords();
   }
@@ -9051,6 +9186,7 @@ const SpecialRentals = (() => {
       y:          (fd.get("y") || "").toString().trim(),
       notes:      (fd.get("notes") || "").toString().trim(),
       car_vin:    getCarVin(),
+      plate:      getPlate(),
       start_date: (fd.get("start_date") || "").toString().trim(),
       end_date:   (fd.get("end_date") || "").toString().trim(),
       status:     (fd.get("status") || "active").toString(),
@@ -9101,6 +9237,8 @@ const SpecialRentals = (() => {
 
     // Car — one searchable dropdown (populated from the enterprise's cars).
     populateCarSelect("");
+    // Plate dropdown = the company's plate pool (independent of the car).
+    populatePlateSelect("");
 
     $("#btn-pick-special-map")?.addEventListener("click", () => {
       MapPicker.openPick({ xSel: "#special-x", ySel: "#special-y", statusSel: "#special-map-loc-status" });
